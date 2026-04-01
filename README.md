@@ -12,7 +12,7 @@
 | AdsAppsDB | Database / data layer |
 | AdsAppsMT | Middle-tier services |
 | AnB | Ads & Billing platform |
-| AdsAppsUI | Ads Apps UI shell |
+| AdsAppUI | Ads Apps UI shell |
 
 ---
 
@@ -117,7 +117,7 @@ Daily Report — 2026-03-31
 │   │   └── ...
 │   ├── AnB
 │   │   └── ...
-│   └── AdsAppsUI
+│   └── AdsAppUI
 │       └── ...
 └── Summary Statistics
     ├── Total commits: N
