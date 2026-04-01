@@ -61,6 +61,168 @@ async function fetchLatestCommits(repoConfig, top = 10) {
     return (result.value || []).map(formatCommit);
 }
 
+// ---------------------------------------------------------------------------
+// Release Tag APIs
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetch git refs (tags) matching a filter pattern.
+ *
+ * @param {object} repoConfig - Repository config
+ * @param {string} filter - Tag prefix filter (e.g. 'tags/release/')
+ * @param {number} top - Max results
+ * @returns {Promise<Array>} Array of { name, objectId, peeledObjectId }
+ */
+async function fetchRefs(repoConfig, filter = 'tags/', top = 100) {
+    const params = new URLSearchParams({
+        filter,
+        peelTags: 'true',
+        '$top': top,
+        'api-version': '7.1',
+    });
+    const url = `https://dev.azure.com/${ADO_ORG}/${repoConfig.project}/_apis/git/repositories/${repoConfig.name}/refs?${params}`;
+    const result = await adoGet(url);
+    return (result.value || []).map(ref => ({
+        name: ref.name,                     // e.g. "refs/tags/release/2026.03.31"
+        shortName: ref.name.replace('refs/tags/', ''),
+        objectId: ref.objectId,
+        peeledObjectId: ref.peeledObjectId, // actual commit SHA for annotated tags
+        commitId: ref.peeledObjectId || ref.objectId, // resolved commit SHA
+    }));
+}
+
+/**
+ * Resolve release tags for a repo based on its tag strategy.
+ *
+ * - 'dateSorted': Tags like "Prefix.YYYYMMDD.NN". Sorted by date+sequence desc.
+ * - 'rolling':    Named tags (e.g. MT_STAGING / MT_LKG). Uses repoConfig.releaseTags.
+ * - 'versioned':  Tags like "sha-versioned.329". Sorted by version number desc.
+ *
+ * @param {object} repoConfig - Repository config
+ * @returns {Promise<{ today: object|null, yesterday: object|null, allTags: Array }>}
+ */
+async function resolveReleaseTags(repoConfig) {
+    const filter = repoConfig.tagPattern || 'tags/';
+    const refs = await fetchRefs(repoConfig, filter, 200);
+
+    if (repoConfig.tagStrategy === 'rolling' && repoConfig.releaseTags) {
+        // Rolling tags: find specific named tags
+        const { current, previous } = repoConfig.releaseTags;
+        const todayTag = refs.find(r => r.shortName === current) || null;
+        const yesterdayTag = refs.find(r => r.shortName === previous) || null;
+        return { today: todayTag, yesterday: yesterdayTag, allTags: refs.slice(0, 10) };
+    }
+
+    if (repoConfig.tagStrategy === 'dateSorted') {
+        // Date-sorted tags: "Prefix.YYYYMMDD.NN" — sort by date then sequence desc
+        const withDate = refs.map(ref => {
+            const match = ref.shortName.match(/(\d{8})\.(\d+)$/);
+            return {
+                ...ref,
+                dateNum: match ? parseInt(match[1], 10) : 0,
+                seqNum: match ? parseInt(match[2], 10) : 0,
+            };
+        });
+        withDate.sort((a, b) => b.dateNum - a.dateNum || b.seqNum - a.seqNum);
+        return {
+            today: withDate[0] || null,
+            yesterday: withDate[1] || null,
+            allTags: withDate.slice(0, 10),
+        };
+    }
+
+    // Versioned tags: sort by numeric suffix descending
+    const withVersion = refs.map(ref => {
+        const match = ref.shortName.match(/\.(\d+)$/);
+        return { ...ref, versionNum: match ? parseInt(match[1], 10) : 0 };
+    });
+    withVersion.sort((a, b) => b.versionNum - a.versionNum);
+
+    return {
+        today: withVersion[0] || null,
+        yesterday: withVersion[1] || null,
+        allTags: withVersion.slice(0, 10),
+    };
+}
+
+/**
+ * Fetch all commits between two commit SHAs (tag-resolved or direct).
+ * Uses the compare API to get commits reachable from targetCommit but not from baseCommit.
+ *
+ * @param {object} repoConfig - Repository config
+ * @param {string} baseCommitId - Older commit SHA (exclusive)
+ * @param {string} targetCommitId - Newer commit SHA (inclusive)
+ * @returns {Promise<Array>} Array of formatted commit objects
+ */
+async function fetchCommitsBetweenTags(repoConfig, baseCommitId, targetCommitId) {
+    const branch = repoConfig.defaultBranch.replace('refs/heads/', '');
+    const params = new URLSearchParams({
+        'searchCriteria.itemVersion.version': branch,
+        'searchCriteria.compareVersion.versionType': 'commit',
+        'searchCriteria.compareVersion.version': baseCommitId,
+        'searchCriteria.itemVersion.versionType': 'commit',
+        'searchCriteria.itemVersion.version': targetCommitId,
+        'api-version': '7.1',
+    });
+    const url = `https://dev.azure.com/${ADO_ORG}/${repoConfig.project}/_apis/git/repositories/${repoConfig.name}/commits?${params}`;
+    const result = await adoGet(url);
+    return (result.value || []).map(formatCommit);
+}
+
+/**
+ * High-level: fetch commits between the two most recent release tags for a repo.
+ * Resolves tags to commit dates, then fetches commits in that date window.
+ *
+ * @param {object} repoConfig - Repository config
+ * @returns {Promise<{ fromTag, toTag, commits }>}
+ */
+async function fetchCommitsBetweenReleaseTags(repoConfig) {
+    const { today, yesterday } = await resolveReleaseTags(repoConfig);
+
+    if (!today || !yesterday) {
+        return {
+            fromTag: yesterday?.shortName ?? null,
+            toTag: today?.shortName ?? null,
+            commits: [],
+            error: 'Could not resolve two release tags. Found: ' +
+                   `today=${today?.shortName ?? 'none'}, yesterday=${yesterday?.shortName ?? 'none'}`,
+        };
+    }
+
+    // Use resolved commit SHA (handles both annotated and lightweight tags)
+    const baseCommit = yesterday.commitId;
+    const targetCommit = today.commitId;
+
+    // Get commit dates to use date-range query (more reliable than compare API)
+    const [baseInfo, targetInfo] = await Promise.all([
+        fetchCommitById(repoConfig, baseCommit),
+        fetchCommitById(repoConfig, targetCommit),
+    ]);
+
+    // Auto-swap if dates are inverted (e.g. LKG is newer than STAGING)
+    let fromDate = new Date(baseInfo.date);
+    let toDate = new Date(targetInfo.date);
+    if (fromDate > toDate) {
+        [fromDate, toDate] = [toDate, fromDate];
+    }
+
+    const commits = await fetchCommitsBetweenDates(repoConfig, fromDate, toDate);
+
+    // Exclude the base commit itself (we want commits after the previous tag)
+    const filtered = commits.filter(c => c.commitId !== baseCommit);
+
+    return {
+        fromTag: yesterday.shortName,
+        toTag: today.shortName,
+        fromCommit: baseCommit.substring(0, 8),
+        toCommit: targetCommit.substring(0, 8),
+        fromDate: baseInfo.date,
+        toDate: targetInfo.date,
+        commitCount: filtered.length,
+        commits: filtered,
+    };
+}
+
 /**
  * Fetch commits between two dates for a repository.
  *
@@ -80,6 +242,22 @@ async function fetchCommitsBetweenDates(repoConfig, fromDate, toDate) {
     const url = `https://dev.azure.com/${ADO_ORG}/${repoConfig.project}/_apis/git/repositories/${repoConfig.name}/commits?${params}`;
     const result = await adoGet(url);
     return (result.value || []).map(formatCommit);
+}
+
+/**
+ * Fetch a single commit's details by SHA.
+ *
+ * @param {object} repoConfig - Repository config
+ * @param {string} commitId - The commit SHA
+ * @returns {Promise<object>} Formatted commit object with parent info
+ */
+async function fetchCommitById(repoConfig, commitId) {
+    const url = `https://dev.azure.com/${ADO_ORG}/${repoConfig.project}/_apis/git/repositories/${repoConfig.name}/commits/${commitId}?api-version=7.1`;
+    const commit = await adoGet(url);
+    return {
+        ...formatCommit(commit),
+        parents: commit.parents || [],
+    };
 }
 
 /**
@@ -229,6 +407,11 @@ function formatCommit(commit) {
 
 export {
     fetchLatestCommits,
+    fetchRefs,
+    resolveReleaseTags,
+    fetchCommitsBetweenTags,
+    fetchCommitsBetweenReleaseTags,
+    fetchCommitById,
     fetchCommitsBetweenDates,
     fetchCommitChanges,
     fetchCommitDiff,
