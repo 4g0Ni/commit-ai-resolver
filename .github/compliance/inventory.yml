@@ -1,0 +1,5 @@
+inventory:
+- source: DirectOwners
+  items:
+  - id: yizhang6@microsoft.com
+  isProduction: false
