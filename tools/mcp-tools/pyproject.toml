@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "CampaignUIMCPToolsPython"
+version = "0.1.0"
+description = "Python setup for some of the MCP tools"
+authors = [{ name = "Your Name", email = "kalaksh@microsoft.com" }]
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.11"
+
+dependencies = [
+    "requests>=2.25",
+    "mcp[cli]>=1.9.1",
+    "httpx>=0.28.1",
+    "azure-devops>=7.1.0b4",
+    "msal>=1.32.3",
+    "azure-identity>=1.23.0",
+    "gitpython>=3.1.44",
+    "patch>=1.16",
+    "pandas>=2.2.3",
+    "openpyxl>=3.1.5",
+    "browser-use[memory]>0.2.4",
+    "langchain-openai>=0.3.11",
+    "openai>=1.84.0",
+    "numpy>=1.24.0,<2.0",
+    "scipy>=1.11.0,<1.12",
+    "python-dotenv>=1.1.0",
+    "playwright>=1.52.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "black"]

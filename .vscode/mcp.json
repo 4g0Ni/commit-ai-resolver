@@ -1,0 +1,13 @@
+{
+  "servers": {
+    "AzureDevOpsBasic": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "${workspaceFolder}\\tools\\mcp-tools",
+        "run",
+        "azure-devops-basic.py"
+      ]
+    }
+  }
+}
