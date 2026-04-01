@@ -215,7 +215,7 @@ A historical timeline view where each day is a row/card showing:
 
 | Work Item | Description | ADO |
 |---|---|---|
-| Git integration | Connect to each repo's Azure DevOps API. Fetch commits between release tags. | [10544142](https://msasg.visualstudio.com/Bing_Ads/_workitems/edit/10544142) |
+| Git integration | Connect to each repo's Azure DevOps API. Fetch commits between release tags. Reference: [DRIAgent ADO handlers](https://msasg.visualstudio.com/Bing_Ads/_git/B2BCrawler/pullrequest/5444356?path=/projects/DRIAgent/src/app/ado-handlers.js&_a=files) | [10544142](https://msasg.visualstudio.com/Bing_Ads/_workitems/edit/10544142) |
 | Release tag resolver | For each repo, determine today's release tag and yesterday's release tag. Map commits to release windows. | [10544144](https://msasg.visualstudio.com/Bing_Ads/_workitems/edit/10544144) |
 | Diff fetcher | Retrieve full diffs per commit. Apply noise filters (lock files, proxy files, configurable globs). | [10544145](https://msasg.visualstudio.com/Bing_Ads/_workitems/edit/10544145) |
 | Flag/config differ | Identify flag and dynamic config definition files per repo. Compute structured diffs (added / changed / removed). | [10544146](https://msasg.visualstudio.com/Bing_Ads/_workitems/edit/10544146) |
