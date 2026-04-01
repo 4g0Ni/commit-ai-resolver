@@ -19,7 +19,7 @@ import { summarizeCommits } from './services/commit-summarizer.js';
 
 function parseArgs() {
     const args = process.argv.slice(2);
-    const opts = { mode: 'release', repos: null, top: 10 };
+    const opts = { mode: 'release', repos: null, top: 10, maxSummarize: 5 };
 
     for (let i = 0; i < args.length; i++) {
         if (args[i] === '--latest') {
@@ -32,6 +32,10 @@ function parseArgs() {
             opts.mode = 'tags';
         } else if (args[i] === '--summarize') {
             opts.mode = 'summarize';
+            if (args[i + 1] && !args[i + 1].startsWith('--')) {
+                opts.maxSummarize = parseInt(args[i + 1], 10) || 5;
+                i++;
+            }
         } else if (args[i] === '--repos' && args[i + 1]) {
             opts.repos = args[i + 1].split(',').map(s => s.trim());
             i++;
@@ -135,7 +139,7 @@ async function modeTags(repos) {
 // ---------------------------------------------------------------------------
 const RISK_ICON = { HIGH: '🔴', MEDIUM: '🟡', LOW: '🟢' };
 
-async function modeSummarize(repos) {
+async function modeSummarize(repos, maxSummarize) {
     for (const repo of repos) {
         console.log(`\n${'='.repeat(60)}`);
         console.log(`Repository: ${repo.name}`);
@@ -149,11 +153,13 @@ async function modeSummarize(repos) {
                 continue;
             }
 
+            const commitsToSummarize = result.commits.slice(0, maxSummarize);
+
             console.log(`  Tags: ${result.fromTag} → ${result.toTag}`);
-            console.log(`  Commits: ${result.commitCount}\n`);
+            console.log(`  Commits: ${result.commitCount} total, summarizing ${commitsToSummarize.length}\n`);
             console.log(`  Generating LLM summaries...\n`);
 
-            const summarized = await summarizeCommits(repo, result.commits, (i, total, commit) => {
+            const summarized = await summarizeCommits(repo, commitsToSummarize, (i, total, commit) => {
                 console.log(`  [${i}/${total}] Summarizing ${commit.shortId}...`);
             });
 
@@ -202,7 +208,7 @@ async function main() {
         case 'release':   await modeRelease(repos); break;
         case 'latest':    await modeLatest(repos, opts.top); break;
         case 'tags':      await modeTags(repos); break;
-        case 'summarize': await modeSummarize(repos); break;
+        case 'summarize': await modeSummarize(repos, opts.maxSummarize); break;
     }
 }
 
