@@ -18,6 +18,8 @@ For each commit diff provided, produce a JSON response with these fields:
 - "riskLevel": One of "LOW", "MEDIUM", or "HIGH" based on the criteria below
 - "affectedAreas": Array of affected areas/components (e.g. ["Campaign Grid", "Budget API", "Pilot Config"])
 - "flags": Array of any pilot flags or feature flags mentioned in the diff
+- "changeType": One of "code", "config", or "mixed". Use "config" if the commit ONLY changes dynamic configs, pilot flags, feature flags, experiment definitions, ramp percentages, or configuration files (e.g. files with names containing 'config', 'pilot', 'flag', 'experiment', 'feature-gate', 'dynamic-config', '.json' config files, or XML config files). Use "mixed" if it changes both code and config. Use "code" for pure code changes.
+- "configChanges": Array of objects { "key": "config/flag name", "action": "added"|"modified"|"removed", "detail": "brief description" } — only populated when changeType is "config" or "mixed"
 
 Risk level criteria:
 - LOW: Documentation, tests, comments, lock file updates, version bumps, minor config
@@ -76,6 +78,8 @@ async function summarizeCommit(repoConfig, commit) {
                 riskLevel: 'MEDIUM',
                 affectedAreas: [],
                 flags: [],
+                changeType: 'code',
+                configChanges: [],
             };
         }
 
@@ -89,6 +93,8 @@ async function summarizeCommit(repoConfig, commit) {
                 riskLevel: 'MEDIUM',
                 affectedAreas: [],
                 flags: [],
+                changeType: 'code',
+                configChanges: [],
             },
         };
     }

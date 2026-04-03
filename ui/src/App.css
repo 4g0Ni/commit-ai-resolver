@@ -797,3 +797,119 @@
 .expand-icon.expanded {
   transform: rotate(90deg);
 }
+
+/* Timeline Toolbar */
+.timeline-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* Repo Filter */
+.repo-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 16px;
+}
+
+.repo-filter-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-weight: 500;
+  margin-right: 4px;
+}
+
+.repo-filter-btn {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 14px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.repo-filter-btn:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.repo-filter-btn.active {
+  background: rgba(88, 166, 255, 0.15);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.repo-filter-btn.all {
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+/* Change Type Badge */
+.change-type-badge {
+  font-size: 10px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.change-type-badge.config {
+  background: rgba(187, 128, 255, 0.18);
+  color: #bb80ff;
+  border: 1px solid rgba(187, 128, 255, 0.35);
+}
+
+.change-type-badge.mixed {
+  background: rgba(210, 153, 34, 0.15);
+  color: var(--risk-medium);
+  border: 1px solid rgba(210, 153, 34, 0.3);
+}
+
+/* Config Changes List */
+.config-changes {
+  margin-top: 8px;
+  padding: 6px 10px;
+  background: rgba(187, 128, 255, 0.06);
+  border: 1px solid rgba(187, 128, 255, 0.15);
+  border-radius: 6px;
+}
+
+.config-change-item {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  padding: 2px 0;
+}
+
+.config-key {
+  font-family: ui-monospace, Consolas, monospace;
+  color: #bb80ff;
+  font-weight: 500;
+}
+
+.config-action {
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.config-detail {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+/* Config metric card */
+.metric-card.config {
+  border-top: 3px solid #bb80ff;
+}
+
+.metric-card.config .metric-value {
+  color: #bb80ff;
+}

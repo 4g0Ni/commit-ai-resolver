@@ -68,7 +68,7 @@ function getWeekdayDates(days) {
 
 async function main() {
     const opts = parseArgs();
-    const repos = [REPOSITORIES.AdsAppsCampaignUI, REPOSITORIES.AdsAppsMT];
+    const repos = [REPOSITORIES.AdsAppsCampaignUI, REPOSITORIES.AdsAppsMT, REPOSITORIES.AdsAppUI];
 
     await mkdir(DATA_DIR, { recursive: true });
 
@@ -111,13 +111,18 @@ async function main() {
                     message: c.message,
                     title: c.title,
                     url: c.url,
-                    summary: c.llmSummary,
+                    summary: {
+                        ...c.llmSummary,
+                        changeType: c.llmSummary.changeType || 'code',
+                        configChanges: c.llmSummary.configChanges || [],
+                    },
                 })),
                 stats: {
                     total: summarized.length,
                     high: summarized.filter(c => c.llmSummary.riskLevel === 'HIGH').length,
                     medium: summarized.filter(c => c.llmSummary.riskLevel === 'MEDIUM').length,
                     low: summarized.filter(c => c.llmSummary.riskLevel === 'LOW').length,
+                    configChanges: summarized.filter(c => (c.llmSummary.changeType || 'code') !== 'code').length,
                 },
             };
         }
@@ -134,6 +139,7 @@ async function main() {
                 totalHigh: Object.values(allRepoData[date]).reduce((s, r) => s + r.stats.high, 0),
                 totalMedium: Object.values(allRepoData[date]).reduce((s, r) => s + r.stats.medium, 0),
                 totalLow: Object.values(allRepoData[date]).reduce((s, r) => s + r.stats.low, 0),
+                totalConfigChanges: Object.values(allRepoData[date]).reduce((s, r) => s + (r.stats.configChanges || 0), 0),
                 reposIncluded: Object.keys(allRepoData[date]),
             },
         };
