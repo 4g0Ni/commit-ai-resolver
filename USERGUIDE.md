@@ -103,6 +103,49 @@ Example output:
 
 ---
 
+## Dashboard UI
+
+The project includes a React-based dashboard for visualizing daily commit summaries and an LLM chat interface for investigating changes.
+
+### Generate Sample Data
+
+Before running the UI, generate daily summary JSON files by fetching real commits and summarizing them with the LLM:
+
+```bash
+cd src
+node scripts/generate-sample-data.js --days 5 --commits-per-day 5
+```
+
+This creates JSON files in `data/daily/` (one per day) plus an `index.json` listing available dates.
+
+### Start the Backend API
+
+```bash
+cd api
+npm install
+npm run dev
+```
+
+The API server runs on `http://localhost:3001` and serves:
+- `GET /api/days` — list available dates
+- `GET /api/days/:date` — get summary for a specific date
+- `GET /api/days?from=YYYY-MM-DD&to=YYYY-MM-DD` — date range query
+- `POST /api/chat` — LLM chat about commit summaries (sends `{ message, history }`)
+
+### Start the Frontend
+
+```bash
+cd ui
+npm install
+npm run dev
+```
+
+The React app runs on `http://localhost:5173` and shows:
+- **Timeline view** — expandable day cards showing commit summaries per repo with risk indicators
+- **Chat panel** — ask questions about changes, investigate incidents, correlate regressions with recent deploys
+
+---
+
 ## Project Structure
 
 ```
@@ -110,11 +153,30 @@ src/
 ├── index.js                        # CLI entry point
 ├── config/
 │   └── repositories.js             # Repo definitions and tag strategies
+├── scripts/
+│   └── generate-sample-data.js     # Generate daily summary JSONs from real commits
 ├── services/
 │   ├── ado-git-client.js           # Azure DevOps REST API client
 │   ├── llm-helper.js               # Azure OpenAI client wrapper
 │   └── commit-summarizer.js        # LLM-based commit summarization
 └── package.json
+api/
+├── server.js                       # Express backend API
+└── package.json
+ui/
+├── src/
+│   ├── App.jsx                     # Main app layout (timeline + chat)
+│   ├── api.js                      # API client helpers
+│   └── components/
+│       ├── Timeline.jsx            # Day card timeline view
+│       ├── DayCard.jsx             # Expandable per-day summary card
+│       ├── CommitList.jsx          # Commit list with risk indicators
+│       └── ChatBox.jsx             # LLM chat interface
+└── package.json
+data/
+└── daily/                          # Generated daily summary JSON files
+    ├── index.json                  # Available dates index
+    └── YYYY-MM-DD.json            # Per-day commit summaries
 ```
 
 ---
