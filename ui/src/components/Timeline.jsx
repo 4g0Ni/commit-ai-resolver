@@ -1,35 +1,27 @@
 import { useState } from 'react';
-import DayCard from './DayCard';
-
-const RISK_ICON = { HIGH: '\uD83D\uDD34', MEDIUM: '\uD83D\uDFE1', LOW: '\uD83D\uDFE2' };
+import TimelineChart from './TimelineChart';
+import DayDetail from './DayDetail';
 
 function Timeline({ dates, dayData }) {
-    const [expanded, setExpanded] = useState({});
-
-    const toggle = (date) => {
-        setExpanded(prev => ({ ...prev, [date]: !prev[date] }));
-    };
-
-    // Sort dates newest first
+    // Default to the most recent date
     const sortedDates = [...dates].sort().reverse();
+    const [selectedDate, setSelectedDate] = useState(sortedDates[0] || null);
+
+    const selectedData = selectedDate ? dayData[selectedDate] : null;
 
     return (
         <div className="timeline">
-            <h2 style={{ marginBottom: 8, fontSize: 16, color: 'var(--text-secondary)' }}>
-                {sortedDates.length} days of change data
-            </h2>
-            {sortedDates.map(date => {
-                const data = dayData[date];
-                if (!data) return null;
-                return (
-                    <DayCard
-                        key={date}
-                        data={data}
-                        expanded={!!expanded[date]}
-                        onToggle={() => toggle(date)}
-                    />
-                );
-            })}
+            <TimelineChart
+                dates={dates}
+                dayData={dayData}
+                selectedDate={selectedDate}
+                onSelect={setSelectedDate}
+            />
+            {selectedData ? (
+                <DayDetail data={selectedData} />
+            ) : (
+                <div className="no-selection">Select a day from the chart above to view details</div>
+            )}
         </div>
     );
 }
