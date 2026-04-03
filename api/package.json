@@ -1,0 +1,17 @@
+{
+  "name": "commit-ai-resolver-api",
+  "version": "1.0.0",
+  "description": "Backend API for Commit AI Resolver dashboard",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "@azure/identity": "^4.0.0",
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "openai": "^6.33.0"
+  }
+}
