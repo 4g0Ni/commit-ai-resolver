@@ -191,10 +191,10 @@ async function fetchFilteredDiffs(repoConfig, commitId, filteredChanges) {
  * @param {object} repoConfig - Repository config
  * @param {Array} commits - Array of formatted commit objects
  * @param {function} onProgress - Optional callback(index, total, commit) for progress
- * @param {number} concurrency - Max parallel LLM calls (default 20)
+ * @param {number} concurrency - Max parallel LLM calls (default 25)
  * @returns {Promise<Array>} Commits with llmSummary attached
  */
-async function summarizeCommits(repoConfig, commits, onProgress, concurrency = 20) {
+async function summarizeCommits(repoConfig, commits, onProgress, concurrency = 25) {
     const results = new Array(commits.length);
     let completed = 0;
 

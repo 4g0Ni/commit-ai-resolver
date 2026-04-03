@@ -97,22 +97,26 @@ function Timeline({ dates, dayData }) {
                     onChange={setSelectedRepos}
                 />
             </div>
-            <MetricsBoard dates={filteredDates} dayData={filteredDayData} />
             <TimelineChart
                 dates={filteredDates}
                 dayData={filteredDayData}
                 selectedDate={effectiveSelected}
                 onSelect={setSelectedDate}
             />
-            {selectedData ? (
-                <DayDetail data={selectedData} />
-            ) : (
-                <div className="no-selection">
-                    {filteredDates.length === 0
-                        ? 'No data available for the selected date range'
-                        : 'Select a day from the chart above to view details'}
+            <div className="timeline-body">
+                <MetricsBoard dates={filteredDates} dayData={filteredDayData} />
+                <div className="timeline-detail">
+                    {selectedData ? (
+                        <DayDetail data={selectedData} />
+                    ) : (
+                        <div className="no-selection">
+                            {filteredDates.length === 0
+                                ? 'No data available for the selected date range'
+                                : 'Select a day from the chart above to view details'}
+                        </div>
+                    )}
                 </div>
-            )}
+            </div>
         </div>
     );
 }
