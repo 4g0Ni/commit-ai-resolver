@@ -14,25 +14,39 @@ import { createPatch } from 'diff';
 const COMMIT_SUMMARY_PROMPT = `You are a senior software engineer analyzing code changes in a Microsoft Advertising codebase.
 Your job is to summarize each commit's changes for an on-call DRI investigating production incidents.
 
-For each commit diff provided, produce a JSON response with these fields:
-- "title": A concise one-line summary of what changed (max 120 chars)
-- "summary": A detailed paragraph explaining what changed, why it likely changed, and what components are affected
-- "riskLevel": One of "LOW", "MEDIUM", or "HIGH" based on the criteria below
-- "affectedAreas": Array of affected areas/components (e.g. ["Campaign Grid", "Budget API", "Pilot Config"])
-- "flags": Array of any pilot flags or feature flags mentioned in the diff
-- "changeType": One of "code", "config", or "mixed". Use "config" if the commit ONLY changes dynamic configs, pilot flags, feature flags, experiment definitions, ramp percentages, or configuration files (e.g. files with names containing 'config', 'pilot', 'flag', 'experiment', 'feature-gate', 'dynamic-config', '.json' config files, or XML config files). Use "mixed" if it changes both code and config. Use "code" for pure code changes.
-- "configChanges": Array of objects { "key": "config/flag name", "action": "added"|"modified"|"removed", "detail": "brief description" } — only populated when changeType is "config" or "mixed"
+For each commit diff provided, produce a JSON response with EXACTLY these fields:
 
-Risk level criteria:
-- LOW: Documentation, tests, comments, lock file updates, version bumps, minor config
-- MEDIUM: Business logic changes scoped to a single feature, new pilot-gated code, API parameter changes
-- HIGH: Shared utility/infrastructure changes, authentication/authorization changes, database schema changes, pilot ramp changes affecting broad traffic, removal of feature gates, error handling changes in critical paths
+{
+  "title": "Concise one-line summary, max 80 chars. Be specific about WHAT changed, not just where.",
+  "summary": "2-3 sentences max. Focus on behavioral impact: what changed, what it affects, and any risk. Skip obvious context.",
+  "riskLevel": "LOW | MEDIUM | HIGH",
+  "affectedAreas": ["Max 3-4 areas. Use the most specific component name, not generic paths."],
+  "flags": ["Only ACTUAL flag/pilot names found literally in the diff. Never guess or invent flag names."],
+  "changeType": "code | config | mixed",
+  "configChanges": [{"key": "flag name", "action": "added|modified|removed", "detail": "brief description"}],
+  "breakingChange": false
+}
 
-Important rules:
-- Be factual — only describe what you see in the diff, do not speculate
-- If the diff is a lock file or auto-generated code, just say so briefly and mark as LOW risk
-- Keep the summary concise but informative enough for incident investigation
-- Focus on behavioral changes, not just file-level descriptions
+FIELD RULES:
+- "title": Max 80 chars. Start with a verb. Bad: "Updates to campaign grid component". Good: "Add bulk edit drawer to campaign grid".
+- "summary": Max 3 sentences. Focus on WHAT behavior changed and WHO is affected. Skip listing files.
+- "riskLevel": See criteria below. When in doubt between MEDIUM and LOW, prefer LOW. When in doubt between MEDIUM and HIGH, prefer MEDIUM.
+- "affectedAreas": Max 4 items. Use feature names (e.g. "Campaign Grid", "Budget API"), not file paths.
+- "flags": ONLY include flag/pilot names that appear LITERALLY as string constants in the diff. If no flags exist, use empty array []. NEVER output "TBD", "unknown", or guessed names.
+- "changeType": "config" = ONLY config/pilot/flag files changed. "mixed" = both code + config. "code" = everything else.
+- "configChanges": Only when changeType is "config" or "mixed". Each entry must reference a real key name from the diff.
+- "breakingChange": true if the commit removes public APIs, changes function signatures used by other packages, alters DB schemas, removes feature gates without replacement, or changes shared contracts/interfaces. false otherwise.
+
+RISK LEVEL CRITERIA:
+- LOW: Tests only, documentation, comments, localization strings, version bumps, dependency updates, build/CI config, adding new code behind a feature flag (not yet enabled)
+- MEDIUM: Business logic in a single feature, new API parameters, UI behavior changes scoped to one page, pilot ramp changes < 50%
+- HIGH: Shared utility/infrastructure changes, auth/authz changes, DB schema, pilot ramp ≥ 50% or to 100%, removal of feature gates, error handling in critical paths, breaking contract changes
+
+IMPORTANT:
+- Be factual — ONLY describe what you see in the diff
+- If the diff is a lock file or auto-generated code, say so briefly and mark LOW
+- Do NOT speculate about intent or future plans
+- Do NOT invent flag names that don't appear in the code
 
 Respond with valid JSON only, no markdown fencing.`;
 
@@ -70,6 +84,7 @@ async function summarizeCommit(repoConfig, commit) {
                     flags: [],
                     changeType: 'code',
                     configChanges: [],
+                    breakingChange: false,
                     _autoClassified: true,
                 },
             };
@@ -128,6 +143,7 @@ async function summarizeCommit(repoConfig, commit) {
                 flags: [],
                 changeType: 'code',
                 configChanges: [],
+                breakingChange: false,
             };
         }
 
@@ -143,6 +159,7 @@ async function summarizeCommit(repoConfig, commit) {
                 flags: [],
                 changeType: 'code',
                 configChanges: [],
+                breakingChange: false,
                 _error: true,
             },
         };

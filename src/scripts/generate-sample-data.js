@@ -149,6 +149,7 @@ function buildRepoStats(summarized) {
         medium: summarized.filter(c => c.llmSummary.riskLevel === 'MEDIUM').length,
         low: summarized.filter(c => c.llmSummary.riskLevel === 'LOW').length,
         configChanges: summarized.filter(c => (c.llmSummary.changeType || 'code') !== 'code').length,
+        breakingChanges: summarized.filter(c => c.llmSummary.breakingChange === true).length,
     };
 }
 
