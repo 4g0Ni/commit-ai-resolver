@@ -1,15 +1,16 @@
 /**
  * Generate sample daily summary JSON files for UI development.
  *
- * Fetches real commits from ADO for AdsAppsCampaignUI and AdsAppsMT,
- * summarizes them with LLM, and writes per-day JSON files to data/daily/.
+ * Fetches real commits from ADO for AdsAppsCampaignUI and AdsAppsMT
+ * using date-range queries, summarizes them with LLM, and writes
+ * per-day JSON files to data/daily/.
  *
  * Usage:
- *   node scripts/generate-sample-data.js [--days 5] [--commits-per-day 5]
+ *   node scripts/generate-sample-data.js [--days 10] [--commits-per-day 5]
  */
 
 import { REPOSITORIES } from '../config/repositories.js';
-import { fetchLatestCommits } from '../services/ado-git-client.js';
+import { fetchCommitsBetweenDates } from '../services/ado-git-client.js';
 import { summarizeCommits } from '../services/commit-summarizer.js';
 import { writeFile, mkdir } from 'fs/promises';
 import { join, dirname } from 'path';
@@ -20,10 +21,10 @@ const DATA_DIR = join(__dirname, '..', '..', 'data', 'daily');
 
 function parseArgs() {
     const args = process.argv.slice(2);
-    const opts = { days: 5, commitsPerDay: 5 };
+    const opts = { days: 10, commitsPerDay: 5 };
     for (let i = 0; i < args.length; i++) {
         if (args[i] === '--days' && args[i + 1]) {
-            opts.days = parseInt(args[i + 1], 10) || 5;
+            opts.days = parseInt(args[i + 1], 10) || 10;
             i++;
         } else if (args[i] === '--commits-per-day' && args[i + 1]) {
             opts.commitsPerDay = parseInt(args[i + 1], 10) || 5;
@@ -46,37 +47,60 @@ function groupByDate(commits) {
     return groups;
 }
 
+/**
+ * Generate an array of weekday dates going back N days from today.
+ */
+function getWeekdayDates(days) {
+    const dates = [];
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    for (let i = 0; dates.length < days; i++) {
+        const d = new Date(today);
+        d.setDate(d.getDate() - i);
+        const dow = d.getDay();
+        if (dow !== 0 && dow !== 6) { // skip weekends
+            dates.push(d.toISOString().substring(0, 10));
+        }
+    }
+    return dates; // newest first
+}
+
 async function main() {
     const opts = parseArgs();
     const repos = [REPOSITORIES.AdsAppsCampaignUI, REPOSITORIES.AdsAppsMT];
-    const totalCommits = opts.days * opts.commitsPerDay;
 
     await mkdir(DATA_DIR, { recursive: true });
 
-    // Collect all commits per repo, grouped by date
+    // Determine target dates: N weekdays back from today (newest first)
+    const targetDates = getWeekdayDates(opts.days);
+    console.log(`Target dates (${targetDates.length}): ${targetDates.join(', ')}`);
+
+    // Fetch commits per day per repo
     const allRepoData = {};
 
-    for (const repo of repos) {
-        console.log(`\nFetching ${totalCommits} commits from ${repo.name}...`);
-        const commits = await fetchLatestCommits(repo, totalCommits + 10); // fetch extra to ensure enough days
-        const byDate = groupByDate(commits);
-        const dates = Object.keys(byDate).sort().reverse(); // newest first
+    for (const dateStr of targetDates) {
+        const dayStart = new Date(dateStr + 'T00:00:00Z');
+        const dayEnd = new Date(dateStr + 'T23:59:59Z');
 
-        console.log(`  Found commits across ${dates.length} dates`);
+        console.log(`\n--- ${dateStr} ---`);
 
-        // Take up to opts.days dates, each with up to opts.commitsPerDay commits
-        const selectedDates = dates.slice(0, opts.days);
+        for (const repo of repos) {
+            const commits = await fetchCommitsBetweenDates(repo, dayStart, dayEnd);
+            if (commits.length === 0) {
+                console.log(`  ${repo.name}: no commits`);
+                continue;
+            }
 
-        for (const date of selectedDates) {
-            const dayCommits = byDate[date].slice(0, opts.commitsPerDay);
-            console.log(`  ${date}: ${dayCommits.length} commits — summarizing...`);
+            const dayCommits = commits.slice(0, opts.commitsPerDay);
+            console.log(`  ${repo.name}: ${commits.length} total, summarizing ${dayCommits.length}...`);
 
             const summarized = await summarizeCommits(repo, dayCommits, (i, total, commit) => {
                 console.log(`    [${i}/${total}] ${commit.shortId}`);
             });
 
-            if (!allRepoData[date]) allRepoData[date] = {};
-            allRepoData[date][repo.name] = {
+            if (!allRepoData[dateStr]) allRepoData[dateStr] = {};
+            allRepoData[dateStr][repo.name] = {
                 repo: repo.name,
                 commits: summarized.map(c => ({
                     commitId: c.commitId,
@@ -99,7 +123,7 @@ async function main() {
         }
     }
 
-    // Write per-day JSON files
+    // Write per-day JSON files (only days that had commits)
     const dates = Object.keys(allRepoData).sort();
     for (const date of dates) {
         const dayReport = {

@@ -40,11 +40,13 @@ function TimelineChart({ dates, dayData, selectedDate, onSelect }) {
 
                     const dayOfWeek = new Date(date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short' });
                     const shortDate = date.substring(5); // MM-DD
+                    const dow = new Date(date + 'T00:00:00').getDay();
+                    const isWeekend = dow === 0 || dow === 6;
 
                     return (
                         <div
                             key={date}
-                            className={`chart-bar-wrapper ${isSelected ? 'selected' : ''}`}
+                            className={`chart-bar-wrapper ${isSelected ? 'selected' : ''} ${isWeekend ? 'weekend' : ''}`}
                             onClick={() => onSelect(date)}
                         >
                             <div className="chart-bar-count">{totalCommits}</div>

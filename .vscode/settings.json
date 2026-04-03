@@ -1,0 +1,7 @@
+{
+  "chat.editing.autoAcceptDelay": 5,
+  "terminal.integrated.shellIntegration.suggestedCommandConfirmation": "none",
+  "chat.tools.edits.autoApprove": {
+      "**/*": true
+  }
+}

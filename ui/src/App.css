@@ -54,9 +54,135 @@
 .timeline {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 16px;
   flex: 1;
   min-height: 0;
+}
+
+/* Date Range Picker */
+.date-range-picker {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 20px;
+  flex-shrink: 0;
+}
+
+.date-inputs {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.date-inputs label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.date-inputs input[type="date"] {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+  cursor: pointer;
+}
+
+.date-inputs input[type="date"]:focus {
+  border-color: var(--accent);
+}
+
+.date-inputs input[type="date"]::-webkit-calendar-picker-indicator {
+  filter: invert(0.7);
+  cursor: pointer;
+}
+
+.date-separator {
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.date-presets {
+  display: flex;
+  gap: 6px;
+}
+
+.preset-btn {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 14px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.preset-btn:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.preset-btn.active {
+  background: rgba(88, 166, 255, 0.15);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Metrics Board */
+.metrics-board {
+  display: flex;
+  gap: 10px;
+  flex-shrink: 0;
+  overflow-x: auto;
+}
+
+.metric-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 18px;
+  min-width: 100px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.metric-card.high { border-top: 3px solid var(--risk-high); }
+.metric-card.medium { border-top: 3px solid var(--risk-medium); }
+.metric-card.low { border-top: 3px solid var(--risk-low); }
+.metric-card.repo { border-top: 3px solid var(--accent); }
+
+.metric-value {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+
+.metric-card.high .metric-value { color: var(--risk-high); }
+.metric-card.medium .metric-value { color: var(--risk-medium); }
+.metric-card.low .metric-value { color: var(--risk-low); }
+
+.metric-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+  white-space: nowrap;
+}
+
+.metric-sub {
+  font-size: 10px;
+  color: var(--risk-high);
+  margin-top: 2px;
 }
 
 /* Chart */
@@ -203,6 +329,14 @@
 .chart-bar-wrapper.selected .chart-day,
 .chart-bar-wrapper.selected .chart-date {
   color: var(--accent);
+}
+
+.chart-bar-wrapper.weekend {
+  opacity: 0.6;
+}
+
+.chart-bar-wrapper.weekend .chart-day {
+  font-style: italic;
 }
 
 .no-selection {
