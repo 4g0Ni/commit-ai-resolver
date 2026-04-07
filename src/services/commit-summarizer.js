@@ -63,9 +63,12 @@ Respond with valid JSON only, no markdown fencing.`;
  * @returns {Promise<object>} Commit with LLM summary attached
  */
 async function summarizeCommit(repoConfig, commit) {
+    const t0 = Date.now();
     try {
         // Step 1: Get changed files list (cheap)
+        const t1 = Date.now();
         const { changes } = await fetchCommitChanges(repoConfig, commit.commitId);
+        const changesMs = Date.now() - t1;
 
         // Step 2: Classify
         const { needsDiff, autoSummary, ignored } = classifyChanges(changes, repoConfig.name);
@@ -100,7 +103,12 @@ async function summarizeCommit(repoConfig, commit) {
             ].join('\n');
         } else {
             // Fetch diffs only for files that need it
+            const tDiff = Date.now();
             const diffs = await fetchFilteredDiffs(repoConfig, commit.commitId, needsDiff);
+            const diffMs = Date.now() - tDiff;
+            if (diffMs > 5000) {
+                console.warn(`      ⏱ ${commit.shortId} diff fetch (${(diffMs/1000).toFixed(1)}s) ${needsDiff.length} files`);
+            }
             diffText = diffs.join('\n---\n');
         }
 
@@ -127,9 +135,15 @@ async function summarizeCommit(repoConfig, commit) {
             '--- DIFF END ---',
         ].join('\n');
 
+        const tLlm = Date.now();
         const response = await llmHelper(COMMIT_SUMMARY_PROMPT, [
             { role: 'user', content: userMessage },
         ]);
+        const llmMs = Date.now() - tLlm;
+        const totalMs = Date.now() - t0;
+        if (totalMs > 15000) {
+            console.warn(`      ⏱ ${commit.shortId} total=${(totalMs/1000).toFixed(1)}s changes=${changesMs}ms diff=${diffText.length > 0 ? (tLlm - t0 - changesMs) + 'ms' : 'skip'} llm=${(llmMs/1000).toFixed(1)}s`);
+        }
 
         let summary;
         try {
@@ -176,29 +190,36 @@ async function fetchFilteredDiffs(repoConfig, commitId, filteredChanges) {
     const commitInfo = await fetchCommitById(repoConfig, commitId);
     const parentCommitId = commitInfo.parents?.[0];
 
-    const diffs = await Promise.all(
-        filteredChanges.map(async (change) => {
-            let currentContent = null;
-            let parentContent = null;
+    // Process files in batches of 10 to balance speed vs ADO rate limits
+    const DIFF_CONCURRENCY = 10;
+    const diffs = [];
+    for (let i = 0; i < filteredChanges.length; i += DIFF_CONCURRENCY) {
+        const batch = filteredChanges.slice(i, i + DIFF_CONCURRENCY);
+        const batchResults = await Promise.all(
+            batch.map(async (change) => {
+                let currentContent = null;
+                let parentContent = null;
 
-            if (change.changeType !== 'delete') {
-                currentContent = await fetchFileContent(repoConfig, change.path, commitId);
-            }
-            if (change.changeType !== 'add' && parentCommitId) {
-                parentContent = await fetchFileContent(repoConfig, change.path, parentCommitId);
-            }
+                if (change.changeType !== 'delete') {
+                    currentContent = await fetchFileContent(repoConfig, change.path, commitId);
+                }
+                if (change.changeType !== 'add' && parentCommitId) {
+                    parentContent = await fetchFileContent(repoConfig, change.path, parentCommitId);
+                }
 
-            if (change.changeType === 'edit' && parentContent && currentContent) {
-                const patch = createPatch(change.path, parentContent, currentContent, 'Parent', 'Current');
-                return `${change.path} Modified:\n${patch}`;
-            } else if (change.changeType === 'add') {
-                return `Added: ${change.path}\n${currentContent ?? ''}`;
-            } else if (change.changeType === 'delete') {
-                return `Deleted: ${change.path}`;
-            }
-            return `${change.changeType}: ${change.path}`;
-        })
-    );
+                if (change.changeType === 'edit' && parentContent && currentContent) {
+                    const patch = createPatch(change.path, parentContent, currentContent, 'Parent', 'Current');
+                    return `${change.path} Modified:\n${patch}`;
+                } else if (change.changeType === 'add') {
+                    return `Added: ${change.path}\n${currentContent ?? ''}`;
+                } else if (change.changeType === 'delete') {
+                    return `Deleted: ${change.path}`;
+                }
+                return `${change.changeType}: ${change.path}`;
+            })
+        );
+        diffs.push(...batchResults);
+    }
     return diffs;
 }
 
@@ -214,17 +235,36 @@ async function fetchFilteredDiffs(repoConfig, commitId, filteredChanges) {
 async function summarizeCommits(repoConfig, commits, onProgress, concurrency = 25) {
     const results = new Array(commits.length);
     let completed = 0;
+    const PER_COMMIT_TIMEOUT = 180000; // 3 minutes max per commit
 
     // Process in batches of `concurrency`
     for (let batchStart = 0; batchStart < commits.length; batchStart += concurrency) {
         const batch = commits.slice(batchStart, batchStart + concurrency);
         const batchPromises = batch.map((commit, idx) => {
             const globalIdx = batchStart + idx;
-            return summarizeCommit(repoConfig, commit).then(result => {
-                completed++;
-                if (onProgress) onProgress(completed, commits.length, commit);
-                results[globalIdx] = result;
-            });
+            const timeoutPromise = new Promise((_, reject) =>
+                setTimeout(() => reject(new Error(`Commit ${commit.shortId} timed out after ${PER_COMMIT_TIMEOUT / 1000}s`)), PER_COMMIT_TIMEOUT)
+            );
+            return Promise.race([summarizeCommit(repoConfig, commit), timeoutPromise])
+                .catch(err => ({
+                    ...commit,
+                    llmSummary: {
+                        title: commit.title,
+                        summary: `Timed out: ${err.message}`,
+                        riskLevel: 'MEDIUM',
+                        affectedAreas: [],
+                        flags: [],
+                        changeType: 'code',
+                        configChanges: [],
+                        breakingChange: false,
+                        _error: true,
+                    },
+                }))
+                .then(result => {
+                    completed++;
+                    if (onProgress) onProgress(completed, commits.length, commit);
+                    results[globalIdx] = result;
+                });
         });
         await Promise.all(batchPromises);
     }

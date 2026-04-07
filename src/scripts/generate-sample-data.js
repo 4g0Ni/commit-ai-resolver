@@ -180,11 +180,12 @@ async function main() {
 
         const dayRepoData = {};
 
-        for (const repo of repos) {
+        // Process all repos in parallel for this day
+        const repoResults = await Promise.all(repos.map(async (repo) => {
             const commits = await fetchCommitsBetweenDates(repo, dayStart, dayEnd);
             if (commits.length === 0) {
                 console.log(`  ${repo.name}: no commits`);
-                continue;
+                return null;
             }
 
             // Split into cached vs new
@@ -200,25 +201,26 @@ async function main() {
 
             if (newCommits.length === 0) {
                 console.log(`  ${repo.name}: ${commits.length} commits (all cached, skipping)`);
-                // Rebuild from cache — need to create fake llmSummary wrapper
                 const allSummarized = commits.map(c => ({
                     ...c,
                     llmSummary: existingCache[c.commitId].summary,
                 }));
-                dayRepoData[repo.name] = {
-                    repo: repo.name,
-                    commits: allSummarized.map(formatCommitForOutput),
-                    stats: buildRepoStats(allSummarized),
+                return {
+                    repoName: repo.name,
+                    data: {
+                        repo: repo.name,
+                        commits: allSummarized.map(formatCommitForOutput),
+                        stats: buildRepoStats(allSummarized),
+                    },
                 };
-                continue;
             }
 
             console.log(`  ${repo.name}: ${commits.length} commits (${cachedCommits.length} cached, ${newCommits.length} new)`);
 
-            // Summarize only new commits with parallel batching
+            // Summarize only new commits with parallel batching (concurrency=15)
             const summarizedNew = await summarizeCommits(repo, newCommits, (i, total, commit) => {
-                console.log(`    [${i}/${total}] ${commit.shortId}`);
-            });
+                console.log(`    [${repo.name}] [${i}/${total}] ${commit.shortId}`);
+            }, 15);
 
             // Merge: cached (with summary wrapper) + newly summarized
             const allSummarized = commits.map(c => {
@@ -228,15 +230,19 @@ async function main() {
                 return summarizedNew.find(s => s.commitId === c.commitId) || c;
             });
 
-            dayRepoData[repo.name] = {
-                repo: repo.name,
-                commits: allSummarized.map(formatCommitForOutput),
-                stats: buildRepoStats(allSummarized),
+            return {
+                repoName: repo.name,
+                data: {
+                    repo: repo.name,
+                    commits: allSummarized.map(formatCommitForOutput),
+                    stats: buildRepoStats(allSummarized),
+                },
             };
+        }));
 
-            // Incremental write after each repo completes
-            const report = await writeDayReport(dateStr, dayRepoData);
-            console.log(`    → saved ${report.summary.totalCommits} commits to ${dateStr}.json`);
+        // Collect results
+        for (const result of repoResults) {
+            if (result) dayRepoData[result.repoName] = result.data;
         }
 
         if (Object.keys(dayRepoData).length === 0) {

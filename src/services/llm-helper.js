@@ -38,6 +38,12 @@ async function llmHelper(systemPrompt, messages, opts = {}) {
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
+            const timeoutMs = opts.timeout ?? 120000; // 2 min timeout
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+            const llmStart = Date.now();
+            const inputChars = messages.reduce((sum, m) => sum + (m.content?.length || 0), 0);
             const result = await client.chat.completions.create({
                 messages: [
                     { role: 'system', content: systemPrompt },
@@ -45,7 +51,14 @@ async function llmHelper(systemPrompt, messages, opts = {}) {
                 ],
                 temperature: opts.temperature ?? 0.2,
                 max_completion_tokens: opts.max_completion_tokens ?? opts.max_tokens ?? 128000,
-            });
+            }, { signal: controller.signal });
+
+            clearTimeout(timer);
+            const llmElapsed = Date.now() - llmStart;
+            const usage = result.usage;
+            if (llmElapsed > 10000) {
+                console.warn(`      ⏱ LLM slow (${(llmElapsed/1000).toFixed(1)}s) input=${(inputChars/1024).toFixed(0)}KB tokens=${usage?.prompt_tokens || '?'}/${usage?.completion_tokens || '?'}`);
+            }
             return result.choices?.[0]?.message?.content ?? '';
         } catch (err) {
             lastError = err;

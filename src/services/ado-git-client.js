@@ -11,30 +11,56 @@ import { ADO_ORG, ADO_PROJECT } from '../config/repositories.js';
 
 const ADO_SCOPE = '499b84ac-1321-427f-aa17-267ca6975798/.default';
 
+// Cached credential instance — reuse across calls to avoid contention
+const credential = new DefaultAzureCredential();
+let _cachedToken = null;
+let _tokenExpiry = 0;
+let _tokenPromise = null;
+
 /**
  * Get a Bearer token for Azure DevOps REST APIs.
- * Uses DefaultAzureCredential which supports:
- *   - Az CLI login (local dev)
- *   - Managed Identity (deployed)
+ * Caches the token and reuses until 5 min before expiry.
  */
 async function getCredentialToken() {
-    const credential = new DefaultAzureCredential();
-    const tokenResponse = await credential.getToken(ADO_SCOPE);
-    return tokenResponse.token;
+    const now = Date.now();
+    if (_cachedToken && now < _tokenExpiry - 300000) {
+        return _cachedToken;
+    }
+    // Dedup concurrent token requests
+    if (!_tokenPromise) {
+        _tokenPromise = credential.getToken(ADO_SCOPE).then(resp => {
+            _cachedToken = resp.token;
+            _tokenExpiry = resp.expiresOnTimestamp;
+            _tokenPromise = null;
+            return _cachedToken;
+        });
+    }
+    return _tokenPromise;
 }
 
 /**
  * Make an authenticated GET request to Azure DevOps REST API.
  */
 async function adoGet(url) {
+    const start = Date.now();
     const token = await getCredentialToken();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 60000); // 60s timeout
     const response = await fetch(url, {
         method: 'GET',
         headers: {
             Authorization: `Bearer ${token}`,
             'Content-Type': 'application/json',
         },
+        signal: controller.signal,
     });
+    clearTimeout(timer);
+    const elapsed = Date.now() - start;
+    if (elapsed > 5000) {
+        // Extract API name from URL for readable logs
+        const apiPath = url.replace(/.*_apis\//, '').split('?')[0];
+        console.warn(`      ⏱ ADO slow (${(elapsed/1000).toFixed(1)}s): ${apiPath}`);
+    }
     if (!response.ok) {
         const errorText = await response.text();
         throw new Error(`ADO API error ${response.status}: ${errorText}`);
@@ -303,10 +329,19 @@ async function fetchFileContent(repoConfig, filePath, commitId) {
     });
     const url = `https://dev.azure.com/${ADO_ORG}/${repoConfig.project}/_apis/git/repositories/${repoConfig.name}/items?${params}`;
 
+    const start = Date.now();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 60000);
     const response = await fetch(url, {
         method: 'GET',
         headers: { Authorization: `Bearer ${token}` },
+        signal: controller.signal,
     });
+    clearTimeout(timer);
+    const elapsed = Date.now() - start;
+    if (elapsed > 5000) {
+        console.warn(`      ⏱ ADO file slow (${(elapsed/1000).toFixed(1)}s): ${filePath}`);
+    }
 
     if (!response.ok) return null;
     const content = await response.text();
