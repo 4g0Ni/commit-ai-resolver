@@ -48,22 +48,42 @@ node scripts/generate-sample-data.js --days 5
 
 **Parallelism:** LLM calls run 10 at a time per batch. Each day's JSON is written to disk after each repo completes, so partial results survive failures.
 
-### 2. Start the Backend API
+### 2. Generate Embeddings
+
+Embeds all commit summaries into LanceDB for vector search. Required for the chat RAG pipeline.
+
+```bash
+cd src
+node scripts/generate-embeddings.js
+```
+
+**Options:**
+| Flag | Description |
+|---|---|
+| `--days N` | Only process last N days of data |
+| `--force` | Re-embed all commits (needed after schema changes) |
+
+Embeddings are stored in `data/lancedb/` (LanceDB embedded database). If you change the vector store schema, delete `data/lancedb/` and re-run with `--force`.
+
+### 3. Start the Backend API
 
 ```bash
 cd api
 node server.js
 ```
 
-Runs on `http://localhost:3001`:
+Runs on `http://localhost:3001` with request logging (method, URL, status, duration):
 | Endpoint | Description |
 |---|---|
 | `GET /api/days` | List available dates |
 | `GET /api/days/:date` | Summary for a specific date |
 | `GET /api/days?from=&to=` | Date range query |
-| `POST /api/chat` | LLM chat (body: `{ message, history }`) |
+| `POST /api/chat` | LLM chat with RAG vector search (body: `{ message, history }`) |
+| `GET /api/vectors/stats` | Vector store stats (commit count, repos, date range) |
 
-### 3. Start the Frontend
+Chat requests log: query text, extracted filters, embedding time, search results count, LLM time, and token usage.
+
+### 4. Start the Frontend
 
 ```bash
 cd ui
@@ -71,6 +91,71 @@ npx vite --host
 ```
 
 Runs on `http://localhost:5173` (or next available port).
+
+---
+
+## Vector Search & Smart Filters
+
+The chat uses a **RAG pipeline**: embed your question → search LanceDB for matching commits → send only relevant commits to the LLM.
+
+### Smart Query Filter Extraction
+
+The API automatically extracts structured filters from natural language:
+
+| Filter | What it detects | Examples |
+|---|---|---|
+| **Author** | First/last name matched against known commit authors | "what did Beina do", "show me Yi's changes" |
+| **Repo** | Repository names and aliases | "CampaignUI changes", "what's new in appui" |
+| **Date (explicit)** | ISO dates or "Month Day" format | "on March 30", "for 2026-04-02" |
+| **Date (relative)** | Natural language time references | "today", "yesterday", "last 3 days", "this week" |
+
+When any filter is active, the similarity threshold drops from 0.20 to 0.05, ensuring all matching commits are returned regardless of semantic relevance.
+
+**Repo aliases:**
+| Alias | Maps to |
+|---|---|
+| `campaignui`, `campaign ui`, `cmui` | AdsAppsCampaignUI |
+| `adsappsmt`, `middle tier` | AdsAppsMT |
+| `appui`, `ads app ui` | AdsAppUI |
+
+---
+
+## Testing
+
+### Run E2E Tests
+
+```bash
+cd src
+node tests/test-search-e2e.js
+```
+
+Requires LanceDB data (run `generate-embeddings.js` first) and API server on port 3001 for the full 13-suite test coverage:
+
+| Suite | Tests | What it covers |
+|---|---|---|
+| 1. LanceDB health | 5 | DB connectivity, commit count, author fields |
+| 2. Author filter | 3 | Returns ALL commits by a specific person |
+| 3. Author case insensitivity | 3 | Lowercase, first-name-only matching |
+| 4. Repo filter | 6 | Per-repo WHERE filtering |
+| 5. Date range filter | 4 | Single day, multi-day ranges |
+| 6. Combined filters | 2 | Author + repo together |
+| 7. Semantic relevance | 10 | Domain queries (flags, risk, bugs, grid) |
+| 8. Score ordering | 3 | Descending scores, valid range |
+| 9. minScore threshold | 3 | Threshold filtering behavior |
+| 10. Result shape | 12 | All fields present and typed correctly |
+| 11. Edge cases | 4 | Unrelated queries, non-existent filters |
+| 12. Chat API E2E | 6 | Full roundtrip chat queries |
+| 13. API endpoints | 5 | GET/POST endpoints, 404 handling |
+
+### Other Test Suites
+
+```bash
+# Unit tests for vector store (cosine similarity, dedup logic)
+node tests/test-vector-store.js
+
+# Integration tests with real embeddings
+node tests/test-vector-search-integration.js
+```
 
 ---
 
@@ -180,15 +265,22 @@ commit-ai-resolver/
 │   │   └── repositories.js           # Repo definitions and tag strategies
 │   ├── scripts/
 │   │   ├── generate-sample-data.js   # Generate daily summaries (cached, parallel)
+│   │   ├── generate-embeddings.js    # Embed commit summaries into LanceDB
 │   │   └── extend-sample-data.js     # Generate synthetic historical data
 │   ├── services/
 │   │   ├── ado-git-client.js         # Azure DevOps REST API client
 │   │   ├── llm-helper.js             # Azure OpenAI client (retry, auth)
 │   │   ├── commit-summarizer.js      # LLM summarization with diff filtering
-│   │   └── diff-filter.js            # File classification & skip rules
+│   │   ├── diff-filter.js            # File classification & skip rules
+│   │   ├── vector-store.js           # LanceDB vector database (search, upsert, stats)
+│   │   └── embedding-client.js       # Azure OpenAI text-embedding-3-large client
+│   ├── tests/
+│   │   ├── test-search-e2e.js        # E2E tests (74 tests, 13 suites)
+│   │   ├── test-vector-store.js      # Unit tests for vector store
+│   │   └── test-vector-search-integration.js  # Integration tests
 │   └── package.json
 ├── api/                              # Express backend API
-│   ├── server.js                     # REST endpoints + LLM chat
+│   ├── server.js                     # REST endpoints + LLM chat + smart filters
 │   └── package.json
 ├── ui/                               # React dashboard (Vite 5)
 │   ├── src/
@@ -206,9 +298,11 @@ commit-ai-resolver/
 │   │       └── ChatBox.jsx           # LLM chat with markdown rendering
 │   └── package.json
 ├── data/
-│   └── daily/                        # Generated daily JSON files
-│       ├── index.json                # Dates index
-│       └── YYYY-MM-DD.json           # Per-day commit summaries
+│   ├── daily/                        # Generated daily JSON files
+│   │   ├── index.json                # Dates index
+│   │   └── YYYY-MM-DD.json          # Per-day commit summaries
+│   ├── lancedb/                      # LanceDB vector database (auto-generated)
+│   └── diffs/                        # LLM input diffs (for inspection)
 ├── README.md                         # Product specification
 └── USERGUIDE.md                      # This file
 ```

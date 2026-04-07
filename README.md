@@ -13,7 +13,7 @@
 | Config/pilot change detection | ✅ Done | changeType + configChanges fields |
 | React dashboard | ✅ Done | Dark theme, chart, filters, metrics |
 | LLM chat interface | ✅ Done | Markdown rendering, context-aware |
-| Vector search (RAG) | ✅ Done | text-embedding-3-large, local JSON vector store |
+| Vector search (RAG) | ✅ Done | LanceDB embedded vector DB, text-embedding-3-large, author/repo/date pre-filtering |
 | Daily data generation (cached) | ✅ Done | Incremental, skip cached commits |
 | C2C Cosmos DB pilot tracker | ❌ Planned | DB-level pilot ramp tracking |
 | Queryable DB storage | ❌ Planned | Currently JSON files |
@@ -351,34 +351,50 @@ The chat interface uses a **Retrieval-Augmented Generation (RAG)** pipeline to a
 ```
 User Query
     │
-    ▼
+    ├──── Extract Filters ────┐
+    │     (author, repo,      │
+    │      date range)        │
+    ▼                         ▼
 ┌─────────────────┐     ┌───────────────────┐
-│  Embed Query    │────▶│  Vector Search     │
-│  (text-embed-   │     │  (cosine similarity│
-│   3-large)      │     │   top-K=20)        │
+│  Embed Query    │────▶│  LanceDB Search   │
+│  (text-embed-   │     │  (cosine + WHERE  │
+│   3-large)      │     │   pre-filters)    │
 └─────────────────┘     └───────────────────┘
                                 │
                                 ▼
                         ┌───────────────────┐
                         │  Build Context    │
-                        │  (top 20 commits) │
+                        │  (top 30 commits) │
                         └───────────────────┘
                                 │
                                 ▼
                         ┌───────────────────┐
                         │  LLM Chat         │
-                        │  (GPT-4.1)        │
+                        │  (GPT-5.4)        │
                         └───────────────────┘
 ```
+
+#### Smart Query Filter Extraction
+
+The chat API automatically extracts structured filters from natural language:
+
+| Filter | Extraction | Example |
+|---|---|---|
+| **Author** | Matches first/last names against known authors (case-insensitive) | "what did Beina do" → `author=Beina Zhang` |
+| **Repo** | Recognizes repo names and aliases | "CampaignUI changes" → `repo=AdsAppsCampaignUI` |
+| **Date (explicit)** | ISO dates or "Month Day" format | "on March 30" → `date=2026-03-30` |
+| **Date (relative)** | Natural language time references | "last 3 days", "yesterday", "this week" |
+
+When any filter is active, `minScore` is lowered to 0.05 so filtering dominates over semantic ranking.
 
 #### Components
 
 | Component | File | Description |
 |---|---|---|
 | Embedding client | `src/services/embedding-client.js` | Azure OpenAI `text-embedding-3-large` client (3072 dimensions), uses `DefaultAzureCredential`, same endpoint as the LLM |
-| Vector store | `src/services/vector-store.js` | JSON file-backed vector DB (`data/embeddings/vectors.json`). Brute-force cosine similarity — fast enough for ~1000 commits (<10ms search) |
+| Vector store | `src/services/vector-store.js` | LanceDB embedded vector DB (`data/lancedb/`). Cosine similarity search with SQL pre-filtering on author, repo, and date columns |
 | Embedding generator | `src/scripts/generate-embeddings.js` | Reads daily JSON files, builds searchable text per commit, generates embeddings in batches of 16, upserts into vector store. Incremental (skips already-embedded commits) |
-| Chat API (RAG) | `api/server.js` | Embeds user query → searches vector store for top-20 matches → sends only relevant commits as LLM context. Falls back to full-context if no vector store |
+| Chat API (RAG) | `api/server.js` | Extracts author, repo, and date filters from natural language → embeds query → searches LanceDB with pre-filters → sends relevant commits as LLM context. Falls back to full-context if no vector store |
 
 #### Embedding Model
 

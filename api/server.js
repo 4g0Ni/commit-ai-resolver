@@ -173,6 +173,58 @@ function extractAuthorFilter(query) {
     return null;
 }
 
+/** Extract date filters from natural language queries. */
+function extractDateFilters(query) {
+    const lower = query.toLowerCase();
+    const today = new Date();
+    const fmt = (d) => d.toISOString().slice(0, 10);
+    const daysAgo = (n) => { const d = new Date(today); d.setDate(d.getDate() - n); return fmt(d); };
+
+    // Explicit date "on March 30", "on 2026-03-30"
+    const explicitMatch = query.match(/(?:on|for|from)\s+(\d{4}-\d{2}-\d{2})/i);
+    if (explicitMatch) return { dateFrom: explicitMatch[1], dateTo: explicitMatch[1] };
+
+    // "on March 30" / "on April 2"
+    const monthMatch = query.match(/(?:on|for)\s+((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*)\s+(\d{1,2})/i);
+    if (monthMatch) {
+        const d = new Date(`${monthMatch[1]} ${monthMatch[2]}, ${today.getFullYear()}`);
+        if (!isNaN(d)) return { dateFrom: fmt(d), dateTo: fmt(d) };
+    }
+
+    // Relative: "today", "yesterday"
+    if (lower.includes('today')) return { dateFrom: fmt(today), dateTo: fmt(today) };
+    if (lower.includes('yesterday')) return { dateFrom: daysAgo(1), dateTo: daysAgo(1) };
+
+    // "last N days", "past N days"
+    const nDaysMatch = lower.match(/(?:last|past)\s+(\d+)\s+days?/);
+    if (nDaysMatch) return { dateFrom: daysAgo(parseInt(nDaysMatch[1])), dateTo: fmt(today) };
+
+    // "last week" (7 days), "this week" (since Monday)
+    if (lower.includes('last week')) return { dateFrom: daysAgo(7), dateTo: fmt(today) };
+    if (lower.includes('this week')) {
+        const monday = new Date(today);
+        monday.setDate(monday.getDate() - monday.getDay() + 1);
+        return { dateFrom: fmt(monday), dateTo: fmt(today) };
+    }
+
+    return {};
+}
+
+/** Extract a repo filter if the query mentions a specific repo. */
+function extractRepoFilter(query) {
+    const lower = query.toLowerCase();
+    const repoAliases = {
+        'campaignui': 'AdsAppsCampaignUI', 'campaign ui': 'AdsAppsCampaignUI',
+        'adsappscampaignui': 'AdsAppsCampaignUI', 'cmui': 'AdsAppsCampaignUI',
+        'adsappsmt': 'AdsAppsMT', 'middle tier': 'AdsAppsMT', 'mt': null, // too short, skip
+        'adsappui': 'AdsAppUI', 'ads app ui': 'AdsAppUI', 'appui': 'AdsAppUI',
+    };
+    for (const [alias, repo] of Object.entries(repoAliases)) {
+        if (repo && lower.includes(alias)) return repo;
+    }
+    return null;
+}
+
 // POST /api/chat — chat with LLM about summaries (RAG with vector search)
 app.post('/api/chat', async (req, res) => {
     try {
@@ -190,13 +242,22 @@ app.post('/api/chat', async (req, res) => {
             // --- RAG path: embed query → vector search → top-K context ---
             searchMethod = 'vector';
             const authorFilter = extractAuthorFilter(message);
+            const repoFilter = extractRepoFilter(message);
+            const dateFilters = extractDateFilters(message);
+            const hasFilters = authorFilter || repoFilter || dateFilters.dateFrom || dateFilters.dateTo;
             if (authorFilter) console.log(`  Author filter: "${authorFilter}"`);
+            if (repoFilter) console.log(`  Repo filter: "${repoFilter}"`);
+            if (dateFilters.dateFrom || dateFilters.dateTo) console.log(`  Date filter: ${dateFilters.dateFrom || '*'} → ${dateFilters.dateTo || '*'}`);
             const t0 = Date.now();
             const queryEmbedding = await embedQuery(message);
             console.log(`  Embedding: ${Date.now() - t0}ms`);
             const t1 = Date.now();
             const results = await searchVectors(queryEmbedding, {
-                topK: 20, minScore: 0.20, author: authorFilter || undefined,
+                topK: 30,
+                minScore: hasFilters ? 0.05 : 0.20,
+                author: authorFilter || undefined,
+                repo: repoFilter || undefined,
+                ...dateFilters,
             });
             console.log(`  Vector search: ${results.length} results in ${Date.now() - t1}ms`);
 
