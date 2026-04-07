@@ -68,7 +68,7 @@ app.use((req, res, next) => {
 });
 
 // --- Vector store ---
-import { searchVectors, loadVectorStore, getVectorStats } from '../src/services/vector-store.js';
+import { searchVectors, getVectorStats } from '../src/services/vector-store.js';
 
 /** Generate a query embedding using the embedding client. */
 async function embedQuery(text) {
@@ -81,19 +81,12 @@ async function embedQuery(text) {
 
 /** Check if vector store has data. */
 let _vectorStoreAvailable = null;
-let _knownAuthors = [];
 async function isVectorStoreAvailable() {
     if (_vectorStoreAvailable !== null) return _vectorStoreAvailable;
     try {
         const stats = await getVectorStats();
         _vectorStoreAvailable = stats.totalCommits > 0;
         console.log(`Vector store: ${stats.totalCommits} commits indexed`);
-        // Cache known authors for query extraction
-        if (_vectorStoreAvailable) {
-            const store = await loadVectorStore();
-            _knownAuthors = [...new Set(store.commits.map(c => c.author).filter(Boolean))];
-            console.log(`Known authors: ${_knownAuthors.length}`);
-        }
     } catch {
         _vectorStoreAvailable = false;
     }
@@ -162,67 +155,66 @@ app.get('/api/days/:date', async (req, res) => {
     }
 });
 
-/** Extract a known author name from the user's query. */
-function extractAuthorFilter(query) {
-    const lower = query.toLowerCase();
-    for (const author of _knownAuthors) {
-        // Match on first name, last name, or full name
-        const parts = author.toLowerCase().split(/\s+/);
-        if (parts.some(p => p.length > 2 && lower.includes(p))) return author;
+/**
+ * Use a lightweight LLM call to extract structured search filters from a natural language query.
+ * Returns: { author, repo, dateFrom, dateTo, searchQuery }
+ */
+async function extractQueryIntent(query) {
+    const today = new Date().toISOString().slice(0, 10);
+    const repoList = 'AdsAppsCampaignUI, AdsAppsMT, AdsAppUI';
+    const prompt = `Extract search filters from the user's question about code commits. Today is ${today}.
+
+Return ONLY a JSON object with these fields (use null for missing):
+- "author": full person name if the user is asking about a specific person's commits (null if not person-specific)
+- "repo": exact repo name from [${repoList}] if mentioned (null if not repo-specific)
+- "dateFrom": start date YYYY-MM-DD if a time range is mentioned (null if open-ended)
+- "dateTo": end date YYYY-MM-DD if a time range is mentioned (null if open-ended)
+- "searchQuery": a rewritten version of the query optimized for semantic search against commit summaries. Remove person names and date references, keep the technical intent. This should be what we embed for vector similarity search.
+
+Examples:
+User: "what did Beina Zhang change last week"
+{"author":"Beina Zhang","repo":null,"dateFrom":"${daysAgo(7, today)}","dateTo":"${today}","searchQuery":"code changes and modifications"}
+
+User: "any store page crashes in CampaignUI recently"
+{"author":null,"repo":"AdsAppsCampaignUI","dateFrom":null,"dateTo":null,"searchQuery":"store page crash error bug"}
+
+User: "what high risk changes were deployed yesterday"
+{"author":null,"repo":null,"dateFrom":"${daysAgo(1, today)}","dateTo":"${daysAgo(1, today)}","searchQuery":"high risk changes deployment"}
+
+User: "show pilot flag changes"
+{"author":null,"repo":null,"dateFrom":null,"dateTo":null,"searchQuery":"pilot flag feature gate config changes"}
+
+Now extract from:
+User: "${query.replace(/"/g, '\\"')}"`;
+
+    try {
+        const result = await openaiClient.chat.completions.create({
+            messages: [{ role: 'user', content: prompt }],
+            temperature: 0,
+            max_completion_tokens: 256,
+        });
+        const text = result.choices?.[0]?.message?.content?.trim() || '{}';
+        // Extract JSON from response (handle markdown code blocks)
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) return { searchQuery: query };
+        const parsed = JSON.parse(jsonMatch[0]);
+        return {
+            author: parsed.author || null,
+            repo: parsed.repo || null,
+            dateFrom: parsed.dateFrom || null,
+            dateTo: parsed.dateTo || null,
+            searchQuery: parsed.searchQuery || query,
+        };
+    } catch (err) {
+        console.error('  Intent extraction failed:', err.message);
+        return { searchQuery: query };
     }
-    return null;
 }
 
-/** Extract date filters from natural language queries. */
-function extractDateFilters(query) {
-    const lower = query.toLowerCase();
-    const today = new Date();
-    const fmt = (d) => d.toISOString().slice(0, 10);
-    const daysAgo = (n) => { const d = new Date(today); d.setDate(d.getDate() - n); return fmt(d); };
-
-    // Explicit date "on March 30", "on 2026-03-30"
-    const explicitMatch = query.match(/(?:on|for|from)\s+(\d{4}-\d{2}-\d{2})/i);
-    if (explicitMatch) return { dateFrom: explicitMatch[1], dateTo: explicitMatch[1] };
-
-    // "on March 30" / "on April 2"
-    const monthMatch = query.match(/(?:on|for)\s+((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*)\s+(\d{1,2})/i);
-    if (monthMatch) {
-        const d = new Date(`${monthMatch[1]} ${monthMatch[2]}, ${today.getFullYear()}`);
-        if (!isNaN(d)) return { dateFrom: fmt(d), dateTo: fmt(d) };
-    }
-
-    // Relative: "today", "yesterday"
-    if (lower.includes('today')) return { dateFrom: fmt(today), dateTo: fmt(today) };
-    if (lower.includes('yesterday')) return { dateFrom: daysAgo(1), dateTo: daysAgo(1) };
-
-    // "last N days", "past N days"
-    const nDaysMatch = lower.match(/(?:last|past)\s+(\d+)\s+days?/);
-    if (nDaysMatch) return { dateFrom: daysAgo(parseInt(nDaysMatch[1])), dateTo: fmt(today) };
-
-    // "last week" (7 days), "this week" (since Monday)
-    if (lower.includes('last week')) return { dateFrom: daysAgo(7), dateTo: fmt(today) };
-    if (lower.includes('this week')) {
-        const monday = new Date(today);
-        monday.setDate(monday.getDate() - monday.getDay() + 1);
-        return { dateFrom: fmt(monday), dateTo: fmt(today) };
-    }
-
-    return {};
-}
-
-/** Extract a repo filter if the query mentions a specific repo. */
-function extractRepoFilter(query) {
-    const lower = query.toLowerCase();
-    const repoAliases = {
-        'campaignui': 'AdsAppsCampaignUI', 'campaign ui': 'AdsAppsCampaignUI',
-        'adsappscampaignui': 'AdsAppsCampaignUI', 'cmui': 'AdsAppsCampaignUI',
-        'adsappsmt': 'AdsAppsMT', 'middle tier': 'AdsAppsMT', 'mt': null, // too short, skip
-        'adsappui': 'AdsAppUI', 'ads app ui': 'AdsAppUI', 'appui': 'AdsAppUI',
-    };
-    for (const [alias, repo] of Object.entries(repoAliases)) {
-        if (repo && lower.includes(alias)) return repo;
-    }
-    return null;
+function daysAgo(n, today) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - n);
+    return d.toISOString().slice(0, 10);
 }
 
 // POST /api/chat — chat with LLM about summaries (RAG with vector search)
@@ -239,25 +231,28 @@ app.post('/api/chat', async (req, res) => {
         console.log(`  Chat query: "${message.slice(0, 100)}${message.length > 100 ? '...' : ''}"`);
 
         if (useVectors) {
-            // --- RAG path: embed query → vector search → top-K context ---
+            // --- Step 1: LLM intent extraction ---
             searchMethod = 'vector';
-            const authorFilter = extractAuthorFilter(message);
-            const repoFilter = extractRepoFilter(message);
-            const dateFilters = extractDateFilters(message);
-            const hasFilters = authorFilter || repoFilter || dateFilters.dateFrom || dateFilters.dateTo;
-            if (authorFilter) console.log(`  Author filter: "${authorFilter}"`);
-            if (repoFilter) console.log(`  Repo filter: "${repoFilter}"`);
-            if (dateFilters.dateFrom || dateFilters.dateTo) console.log(`  Date filter: ${dateFilters.dateFrom || '*'} → ${dateFilters.dateTo || '*'}`);
+            const t_intent = Date.now();
+            const intent = await extractQueryIntent(message);
+            console.log(`  Intent (${Date.now() - t_intent}ms): ${JSON.stringify(intent)}`);
+
+            const hasFilters = intent.author || intent.repo || intent.dateFrom || intent.dateTo;
+
+            // --- Step 2: Embed the optimized search query ---
             const t0 = Date.now();
-            const queryEmbedding = await embedQuery(message);
+            const queryEmbedding = await embedQuery(intent.searchQuery);
             console.log(`  Embedding: ${Date.now() - t0}ms`);
+
+            // --- Step 3: Vector search with extracted filters ---
             const t1 = Date.now();
             const results = await searchVectors(queryEmbedding, {
                 topK: 30,
                 minScore: hasFilters ? 0.05 : 0.20,
-                author: authorFilter || undefined,
-                repo: repoFilter || undefined,
-                ...dateFilters,
+                author: intent.author || undefined,
+                repo: intent.repo || undefined,
+                dateFrom: intent.dateFrom || undefined,
+                dateTo: intent.dateTo || undefined,
             });
             console.log(`  Vector search: ${results.length} results in ${Date.now() - t1}ms`);
 
