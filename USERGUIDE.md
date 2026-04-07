@@ -42,7 +42,21 @@ node scripts/generate-sample-data.js --days 5
 | Flag | Description |
 |---|---|
 | `--days N` | Number of weekdays to generate (default: 10) |
+| `--from DATE` | Start date YYYY-MM-DD (use with `--to` for a specific range) |
+| `--to DATE` | End date YYYY-MM-DD |
 | `--force` | Regenerate all commits even if cached |
+
+**Examples:**
+```bash
+# Last 5 days
+node scripts/generate-sample-data.js --days 5
+
+# Force regenerate a specific date range
+node scripts/generate-sample-data.js --from 2026-03-25 --to 2026-03-31 --force
+
+# Just one day
+node scripts/generate-sample-data.js --from 2026-04-01 --to 2026-04-01 --force
+```
 
 **Caching:** Previously summarized commits (by commitId) are loaded from existing JSON files and skipped. Error summaries are always re-attempted. Use `--force` to override.
 
@@ -61,7 +75,21 @@ node scripts/generate-embeddings.js
 | Flag | Description |
 |---|---|
 | `--days N` | Only process last N days of data |
+| `--from DATE` | Start date YYYY-MM-DD (inclusive) |
+| `--to DATE` | End date YYYY-MM-DD (inclusive) |
 | `--force` | Re-embed all commits (needed after schema changes) |
+
+**Examples:**
+```bash
+# Incremental (only new commits)
+node scripts/generate-embeddings.js
+
+# Re-embed a specific date range
+node scripts/generate-embeddings.js --from 2026-04-01 --to 2026-04-03 --force
+
+# Force re-embed everything
+node scripts/generate-embeddings.js --force
+```
 
 Embeddings are stored in `data/lancedb/` (LanceDB embedded database). If you change the vector store schema, delete `data/lancedb/` and re-run with `--force`.
 
@@ -94,29 +122,34 @@ Runs on `http://localhost:5173` (or next available port).
 
 ---
 
-## Vector Search & Smart Filters
+## Vector Search & LLM Intent Extraction
 
 The chat uses a **RAG pipeline**: embed your question → search LanceDB for matching commits → send only relevant commits to the LLM.
 
+### LLM-Based Query Understanding
+
+The API uses a lightweight LLM pre-processing call to extract structured filters from your natural language query. This replaced the previous regex-based approach (which had false positives like "changes" matching author "Chang").
+
+The LLM extracts:
+- **author** — person name if asking about a specific person
+- **repo** — exact repo name (recognizes aliases like "campaignui", "cmui", "appui")
+- **dateFrom / dateTo** — date range (resolves "yesterday", "last week", "March 30", etc.)
+- **searchQuery** — a rewritten query optimized for embedding search (filter terms stripped)
+
+The rewritten `searchQuery` is embedded for vector similarity, while extracted filters become SQL WHERE clauses in LanceDB. When any filter is active, the similarity threshold drops to 0.05 to return all matching commits.
+
 ### Smart Query Filter Extraction
 
-The API automatically extracts structured filters from natural language:
+Examples of how the LLM extracts filters:
 
-| Filter | What it detects | Examples |
-|---|---|---|
-| **Author** | First/last name matched against known commit authors | "what did Beina do", "show me Yi's changes" |
-| **Repo** | Repository names and aliases | "CampaignUI changes", "what's new in appui" |
-| **Date (explicit)** | ISO dates or "Month Day" format | "on March 30", "for 2026-04-02" |
-| **Date (relative)** | Natural language time references | "today", "yesterday", "last 3 days", "this week" |
-
-When any filter is active, the similarity threshold drops from 0.20 to 0.05, ensuring all matching commits are returned regardless of semantic relevance.
-
-**Repo aliases:**
-| Alias | Maps to |
+| Query | Extracted Filters |
 |---|---|
-| `campaignui`, `campaign ui`, `cmui` | AdsAppsCampaignUI |
-| `adsappsmt`, `middle tier` | AdsAppsMT |
-| `appui`, `ads app ui` | AdsAppUI |
+| "what did Beina Zhang change last week" | `author=Beina Zhang`, `dateFrom=...`, `dateTo=...`, `searchQuery=code changes and modifications` |
+| "any store page crashes in CampaignUI" | `repo=AdsAppsCampaignUI`, `searchQuery=store page crash error bug` |
+| "what high risk changes were deployed yesterday" | `dateFrom=yesterday`, `dateTo=yesterday`, `searchQuery=high risk changes deployment` |
+| "show pilot flag changes" | `searchQuery=pilot flag feature gate config changes` |
+
+If intent extraction fails (LLM error), the system gracefully falls back to embedding the raw query with no filters.
 
 ---
 
@@ -192,7 +225,7 @@ The React dashboard has three main areas:
   - LLM-generated title and summary
   - Config changes list (key, action, detail)
   - Affected areas and feature flag tags
-- **Chat Panel** — Ask questions about changes, investigate incidents. Responses rendered as markdown.
+- **Chat Panel** — Ask questions about changes, investigate incidents. Responses rendered as markdown. **Resizable** — drag the left edge to adjust width (min 360px, max 1200px, default 560px). Width is persisted across page refreshes.
 
 ---
 

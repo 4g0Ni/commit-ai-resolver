@@ -13,8 +13,8 @@
 | Config/pilot change detection | ✅ Done | changeType + configChanges fields |
 | React dashboard | ✅ Done | Dark theme, chart, filters, metrics |
 | LLM chat interface | ✅ Done | Markdown rendering, context-aware |
-| Vector search (RAG) | ✅ Done | LanceDB embedded vector DB, text-embedding-3-large, author/repo/date pre-filtering |
-| Daily data generation (cached) | ✅ Done | Incremental, skip cached commits |
+| Vector search (RAG) | ✅ Done | LanceDB embedded vector DB, text-embedding-3-large, LLM-based query intent extraction |
+| Daily data generation (cached) | ✅ Done | Incremental, skip cached commits, --from/--to date range |
 | C2C Cosmos DB pilot tracker | ❌ Planned | DB-level pilot ramp tracking |
 | Queryable DB storage | ❌ Planned | Currently JSON files |
 
@@ -351,10 +351,11 @@ The chat interface uses a **Retrieval-Augmented Generation (RAG)** pipeline to a
 ```
 User Query
     │
-    ├──── Extract Filters ────┐
-    │     (author, repo,      │
-    │      date range)        │
-    ▼                         ▼
+    ├──── LLM Intent Extraction ──┐
+    │     (extract author, repo,  │
+    │      date range, rewritten  │
+    │      search query via LLM)  │
+    ▼                             ▼
 ┌─────────────────┐     ┌───────────────────┐
 │  Embed Query    │────▶│  LanceDB Search   │
 │  (text-embed-   │     │  (cosine + WHERE  │
@@ -374,16 +375,15 @@ User Query
                         └───────────────────┘
 ```
 
-#### Smart Query Filter Extraction
+#### LLM-Based Query Intent Extraction
 
-The chat API automatically extracts structured filters from natural language:
+The chat API uses a lightweight LLM pre-processing call to extract structured filters from natural language queries. This replaces the previous regex-based approach which was fragile (e.g., "changes" falsely matching author "Chang").
 
-| Filter | Extraction | Example |
-|---|---|---|
-| **Author** | Matches first/last names against known authors (case-insensitive) | "what did Beina do" → `author=Beina Zhang` |
-| **Repo** | Recognizes repo names and aliases | "CampaignUI changes" → `repo=AdsAppsCampaignUI` |
-| **Date (explicit)** | ISO dates or "Month Day" format | "on March 30" → `date=2026-03-30` |
-| **Date (relative)** | Natural language time references | "last 3 days", "yesterday", "this week" |
+The LLM extracts a JSON object with:
+- `author` — person name if the query is about a specific person's commits
+- `repo` — exact repo name if mentioned (recognizes aliases like "campaignui", "cmui")
+- `dateFrom` / `dateTo` — date range if time is mentioned (resolves relative dates like "last week", "yesterday")
+- `searchQuery` — a rewritten version optimized for embedding similarity search (stripped of filter terms)
 
 When any filter is active, `minScore` is lowered to 0.05 so filtering dominates over semantic ranking.
 
@@ -394,7 +394,7 @@ When any filter is active, `minScore` is lowered to 0.05 so filtering dominates 
 | Embedding client | `src/services/embedding-client.js` | Azure OpenAI `text-embedding-3-large` client (3072 dimensions), uses `DefaultAzureCredential`, same endpoint as the LLM |
 | Vector store | `src/services/vector-store.js` | LanceDB embedded vector DB (`data/lancedb/`). Cosine similarity search with SQL pre-filtering on author, repo, and date columns |
 | Embedding generator | `src/scripts/generate-embeddings.js` | Reads daily JSON files, builds searchable text per commit, generates embeddings in batches of 16, upserts into vector store. Incremental (skips already-embedded commits) |
-| Chat API (RAG) | `api/server.js` | Extracts author, repo, and date filters from natural language → embeds query → searches LanceDB with pre-filters → sends relevant commits as LLM context. Falls back to full-context if no vector store |
+| Chat API (RAG) | `api/server.js` | LLM intent extraction (author, repo, date, search query) → embeds optimized search query → searches LanceDB with pre-filters → sends relevant commits as LLM context. Falls back to full-context if no vector store |
 
 #### Embedding Model
 
@@ -419,6 +419,9 @@ cd src && node scripts/generate-embeddings.js
 
 # Re-embed last 7 days
 node scripts/generate-embeddings.js --days 7
+
+# Re-embed a specific date range
+node scripts/generate-embeddings.js --from 2026-03-25 --to 2026-03-31 --force
 
 # Force re-embed everything
 node scripts/generate-embeddings.js --force
