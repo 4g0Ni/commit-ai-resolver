@@ -5,11 +5,13 @@
  * generates embeddings via Azure OpenAI text-embedding-3-large, and stores in data/embeddings/vectors.json.
  *
  * Usage:
- *   node scripts/generate-embeddings.js [--days 7] [--force]
+ *   node scripts/generate-embeddings.js [--days 7] [--from 2026-03-25 --to 2026-03-31] [--force]
  *
  * Options:
- *   --days N   Number of days to process (default: all available)
- *   --force    Re-embed all commits even if already in the vector store
+ *   --days N       Number of days to process (default: all available)
+ *   --from DATE    Start date YYYY-MM-DD (inclusive)
+ *   --to DATE      End date YYYY-MM-DD (inclusive)
+ *   --force        Re-embed all commits even if already in the vector store
  */
 
 import { readdir, readFile } from 'fs/promises';
@@ -23,10 +25,16 @@ const DATA_DIR = join(__dirname, '..', '..', 'data', 'daily');
 
 function parseArgs() {
     const args = process.argv.slice(2);
-    const opts = { days: null, force: false };
+    const opts = { days: null, force: false, from: null, to: null };
     for (let i = 0; i < args.length; i++) {
         if (args[i] === '--days' && args[i + 1]) {
             opts.days = parseInt(args[i + 1], 10);
+            i++;
+        } else if (args[i] === '--from' && args[i + 1]) {
+            opts.from = args[i + 1];
+            i++;
+        } else if (args[i] === '--to' && args[i + 1]) {
+            opts.to = args[i + 1];
             i++;
         } else if (args[i] === '--force') {
             opts.force = true;
@@ -76,6 +84,16 @@ async function main() {
     } catch {
         console.error('No data directory found. Run generate-sample-data.js first.');
         process.exit(1);
+    }
+
+    // Filter by --from/--to date range
+    if (opts.from || opts.to) {
+        files = files.filter(f => {
+            const date = f.replace('.json', '');
+            if (opts.from && date < opts.from) return false;
+            if (opts.to && date > opts.to) return false;
+            return true;
+        });
     }
 
     if (opts.days) {
