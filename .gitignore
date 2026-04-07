@@ -35,6 +35,9 @@ lock
 /public/inc/bldver.*
 /public/inc/sources.ver
 /data
+
+# LLM input diffs (for local inspection)
+/data/diffs/
 *.projhash*
 *.slnhash*
 # quickbuild.exe
