@@ -69,13 +69,17 @@ function ChatBox() {
                 <div ref={messagesEndRef} />
             </div>
             <div className="chat-input-area">
-                <input
-                    type="text"
+                <textarea
                     value={input}
                     onChange={e => setInput(e.target.value)}
                     onKeyDown={handleKeyDown}
                     placeholder="Ask about recent changes..."
                     disabled={loading}
+                    rows={1}
+                    onInput={e => {
+                        e.target.style.height = 'auto';
+                        e.target.style.height = Math.min(e.target.scrollHeight, 150) + 'px';
+                    }}
                 />
                 <button onClick={handleSend} disabled={loading || !input.trim()}>
                     Send

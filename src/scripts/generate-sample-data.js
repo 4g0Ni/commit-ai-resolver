@@ -48,20 +48,20 @@ function groupByDate(commits) {
 }
 
 /**
- * Generate an array of weekday dates going back N days from today.
+ * Generate an array of dates going back N days from today.
  */
-function getWeekdayDates(days) {
+function getDates(days) {
     const dates = [];
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    for (let i = 0; dates.length < days; i++) {
+    for (let i = 0; i < days; i++) {
         const d = new Date(today);
         d.setDate(d.getDate() - i);
-        const dow = d.getDay();
-        if (dow !== 0 && dow !== 6) { // skip weekends
-            dates.push(d.toISOString().substring(0, 10));
-        }
+        const yyyy = d.getFullYear();
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+        dates.push(`${yyyy}-${mm}-${dd}`);
     }
     return dates; // newest first
 }
@@ -159,7 +159,7 @@ async function main() {
 
     await mkdir(DATA_DIR, { recursive: true });
 
-    const targetDates = getWeekdayDates(opts.days);
+    const targetDates = getDates(opts.days);
     console.log(`Target dates (${targetDates.length}): ${targetDates.join(', ')}`);
     if (opts.force) console.log('  --force: regenerating all commits');
 

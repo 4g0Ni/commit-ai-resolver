@@ -3,9 +3,25 @@
  */
 
 import { llmHelper } from './llm-helper.js';
-import { fetchCommitDiff, fetchCommitChanges, fetchFileContent } from './ado-git-client.js';
+import { fetchCommitDiff, fetchCommitChanges, fetchFileContent, fetchFileContentBatch } from './ado-git-client.js';
 import { classifyChanges, buildSkippedFilesSummary, MAX_FILES_FOR_DIFF, MAX_DIFF_SIZE } from './diff-filter.js';
 import { createPatch } from 'diff';
+import { writeFile, mkdir } from 'fs/promises';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const DIFFS_DIR = join(__dirname, '..', '..', 'data', 'diffs');
+
+/** Save the full LLM input for a commit to disk for inspection. */
+async function saveLlmInput(repoName, commitId, systemPrompt, userMessage) {
+    try {
+        const repoDir = join(DIFFS_DIR, repoName);
+        await mkdir(repoDir, { recursive: true });
+        const content = `=== SYSTEM PROMPT ===\n${systemPrompt}\n\n=== USER MESSAGE ===\n${userMessage}`;
+        await writeFile(join(repoDir, `${commitId.substring(0, 8)}.txt`), content);
+    } catch { /* non-critical, don't fail summarization */ }
+}
 
 // ---------------------------------------------------------------------------
 // Prompt templates
@@ -135,6 +151,9 @@ async function summarizeCommit(repoConfig, commit) {
             '--- DIFF END ---',
         ].join('\n');
 
+        // Save LLM input for inspection
+        await saveLlmInput(repoConfig.name, commit.commitId, COMMIT_SUMMARY_PROMPT, userMessage);
+
         const tLlm = Date.now();
         const response = await llmHelper(COMMIT_SUMMARY_PROMPT, [
             { role: 'user', content: userMessage },
@@ -182,7 +201,7 @@ async function summarizeCommit(repoConfig, commit) {
 
 /**
  * Fetch diffs only for specific files (not the full commit).
- * Reuses the same diff logic from ado-git-client but only for filtered files.
+ * Uses batch API to fetch all file contents in 2 calls instead of 2N.
  */
 async function fetchFilteredDiffs(repoConfig, commitId, filteredChanges) {
     // We need the parent to produce diffs
@@ -190,36 +209,40 @@ async function fetchFilteredDiffs(repoConfig, commitId, filteredChanges) {
     const commitInfo = await fetchCommitById(repoConfig, commitId);
     const parentCommitId = commitInfo.parents?.[0];
 
-    // Process files in batches of 10 to balance speed vs ADO rate limits
-    const DIFF_CONCURRENCY = 10;
-    const diffs = [];
-    for (let i = 0; i < filteredChanges.length; i += DIFF_CONCURRENCY) {
-        const batch = filteredChanges.slice(i, i + DIFF_CONCURRENCY);
-        const batchResults = await Promise.all(
-            batch.map(async (change) => {
-                let currentContent = null;
-                let parentContent = null;
+    // Collect paths needed for current and parent versions
+    const currentPaths = filteredChanges
+        .filter(c => c.changeType !== 'delete')
+        .map(c => c.path);
+    const parentPaths = parentCommitId
+        ? filteredChanges.filter(c => c.changeType !== 'add').map(c => c.path)
+        : [];
 
-                if (change.changeType !== 'delete') {
-                    currentContent = await fetchFileContent(repoConfig, change.path, commitId);
-                }
-                if (change.changeType !== 'add' && parentCommitId) {
-                    parentContent = await fetchFileContent(repoConfig, change.path, parentCommitId);
-                }
+    // Batch fetch: 2 API calls instead of 2N individual calls
+    const [currentContents, parentContents] = await Promise.all([
+        currentPaths.length > 0
+            ? fetchFileContentBatch(repoConfig, currentPaths, commitId)
+            : new Map(),
+        parentPaths.length > 0
+            ? fetchFileContentBatch(repoConfig, parentPaths, parentCommitId)
+            : new Map(),
+    ]);
 
-                if (change.changeType === 'edit' && parentContent && currentContent) {
-                    const patch = createPatch(change.path, parentContent, currentContent, 'Parent', 'Current');
-                    return `${change.path} Modified:\n${patch}`;
-                } else if (change.changeType === 'add') {
-                    return `Added: ${change.path}\n${currentContent ?? ''}`;
-                } else if (change.changeType === 'delete') {
-                    return `Deleted: ${change.path}`;
-                }
-                return `${change.changeType}: ${change.path}`;
-            })
-        );
-        diffs.push(...batchResults);
-    }
+    // Build diffs from fetched contents
+    const diffs = filteredChanges.map(change => {
+        const currentContent = currentContents.get(change.path) ?? null;
+        const parentContent = parentContents.get(change.path) ?? null;
+
+        if (change.changeType === 'edit' && parentContent && currentContent) {
+            const patch = createPatch(change.path, parentContent, currentContent, 'Parent', 'Current');
+            return `${change.path} Modified:\n${patch}`;
+        } else if (change.changeType === 'add') {
+            return `Added: ${change.path}\n${currentContent ?? ''}`;
+        } else if (change.changeType === 'delete') {
+            return `Deleted: ${change.path}`;
+        }
+        return `${change.changeType}: ${change.path}`;
+    });
+
     return diffs;
 }
 
