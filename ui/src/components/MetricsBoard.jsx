@@ -4,7 +4,7 @@
 
 function MetricsBoard({ dates, dayData }) {
     // Aggregate across all visible dates
-    let totalCommits = 0, totalHigh = 0, totalMedium = 0, totalLow = 0;
+    let totalCommits = 0, totalHigh = 0, totalMedium = 0, totalLow = 0, totalConfigChanges = 0;
     const repoTotals = {};
 
     for (const date of dates) {
@@ -14,6 +14,7 @@ function MetricsBoard({ dates, dayData }) {
         totalHigh += data.summary.totalHigh;
         totalMedium += data.summary.totalMedium;
         totalLow += data.summary.totalLow;
+        totalConfigChanges += data.summary.totalConfigChanges || 0;
 
         for (const [name, repo] of Object.entries(data.repositories)) {
             if (!repoTotals[name]) repoTotals[name] = { commits: 0, high: 0 };
@@ -46,6 +47,12 @@ function MetricsBoard({ dates, dayData }) {
                 <div className="metric-value">{totalLow}</div>
                 <div className="metric-label">Low Risk</div>
             </div>
+            {totalConfigChanges > 0 && (
+                <div className="metric-card config">
+                    <div className="metric-value">{totalConfigChanges}</div>
+                    <div className="metric-label">Config Changes</div>
+                </div>
+            )}
             {Object.entries(repoTotals).map(([name, stats]) => (
                 <div key={name} className="metric-card repo">
                     <div className="metric-value">{stats.commits}</div>

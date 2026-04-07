@@ -44,13 +44,13 @@ const REPOSITORIES = {
     //     tagStrategy: 'versioned',
     //     tagPattern: 'tags/',
     // },
-    // AdsAppUI: {
-    //     name: 'AdsAppUI',
-    //     project: ADO_PROJECT,
-    //     defaultBranch: 'refs/heads/master',
-    //     tagStrategy: 'versioned',
-    //     tagPattern: 'tags/',
-    // },
+    AdsAppUI: {
+        name: 'AdsAppUI',
+        project: ADO_PROJECT,
+        defaultBranch: 'refs/heads/master',
+        tagStrategy: 'versioned',
+        tagPattern: 'tags/',
+    },
 };
 
 export { ADO_ORG, ADO_PROJECT, REPOSITORIES };

@@ -3,7 +3,9 @@
  */
 
 import { llmHelper } from './llm-helper.js';
-import { fetchCommitDiff } from './ado-git-client.js';
+import { fetchCommitDiff, fetchCommitChanges, fetchFileContent } from './ado-git-client.js';
+import { classifyChanges, buildSkippedFilesSummary, MAX_FILES_FOR_DIFF, MAX_DIFF_SIZE } from './diff-filter.js';
+import { createPatch } from 'diff';
 
 // ---------------------------------------------------------------------------
 // Prompt templates
@@ -12,42 +14,113 @@ import { fetchCommitDiff } from './ado-git-client.js';
 const COMMIT_SUMMARY_PROMPT = `You are a senior software engineer analyzing code changes in a Microsoft Advertising codebase.
 Your job is to summarize each commit's changes for an on-call DRI investigating production incidents.
 
-For each commit diff provided, produce a JSON response with these fields:
-- "title": A concise one-line summary of what changed (max 120 chars)
-- "summary": A detailed paragraph explaining what changed, why it likely changed, and what components are affected
-- "riskLevel": One of "LOW", "MEDIUM", or "HIGH" based on the criteria below
-- "affectedAreas": Array of affected areas/components (e.g. ["Campaign Grid", "Budget API", "Pilot Config"])
-- "flags": Array of any pilot flags or feature flags mentioned in the diff
+For each commit diff provided, produce a JSON response with EXACTLY these fields:
 
-Risk level criteria:
-- LOW: Documentation, tests, comments, lock file updates, version bumps, minor config
-- MEDIUM: Business logic changes scoped to a single feature, new pilot-gated code, API parameter changes
-- HIGH: Shared utility/infrastructure changes, authentication/authorization changes, database schema changes, pilot ramp changes affecting broad traffic, removal of feature gates, error handling changes in critical paths
+{
+  "title": "Concise one-line summary, max 80 chars. Be specific about WHAT changed, not just where.",
+  "summary": "2-3 sentences max. Focus on behavioral impact: what changed, what it affects, and any risk. Skip obvious context.",
+  "riskLevel": "LOW | MEDIUM | HIGH",
+  "affectedAreas": ["Max 3-4 areas. Use the most specific component name, not generic paths."],
+  "flags": ["Only ACTUAL flag/pilot names found literally in the diff. Never guess or invent flag names."],
+  "changeType": "code | config | mixed",
+  "configChanges": [{"key": "flag name", "action": "added|modified|removed", "detail": "brief description"}],
+  "breakingChange": false
+}
 
-Important rules:
-- Be factual — only describe what you see in the diff, do not speculate
-- If the diff is a lock file or auto-generated code, just say so briefly and mark as LOW risk
-- Keep the summary concise but informative enough for incident investigation
-- Focus on behavioral changes, not just file-level descriptions
+FIELD RULES:
+- "title": Max 80 chars. Start with a verb. Bad: "Updates to campaign grid component". Good: "Add bulk edit drawer to campaign grid".
+- "summary": Max 3 sentences. Focus on WHAT behavior changed and WHO is affected. Skip listing files.
+- "riskLevel": See criteria below. When in doubt between MEDIUM and LOW, prefer LOW. When in doubt between MEDIUM and HIGH, prefer MEDIUM.
+- "affectedAreas": Max 4 items. Use feature names (e.g. "Campaign Grid", "Budget API"), not file paths.
+- "flags": ONLY include flag/pilot names that appear LITERALLY as string constants in the diff. If no flags exist, use empty array []. NEVER output "TBD", "unknown", or guessed names.
+- "changeType": "config" = ONLY config/pilot/flag files changed. "mixed" = both code + config. "code" = everything else.
+- "configChanges": Only when changeType is "config" or "mixed". Each entry must reference a real key name from the diff.
+- "breakingChange": true if the commit removes public APIs, changes function signatures used by other packages, alters DB schemas, removes feature gates without replacement, or changes shared contracts/interfaces. false otherwise.
+
+RISK LEVEL CRITERIA:
+- LOW: Tests only, documentation, comments, localization strings, version bumps, dependency updates, build/CI config, adding new code behind a feature flag (not yet enabled)
+- MEDIUM: Business logic in a single feature, new API parameters, UI behavior changes scoped to one page, pilot ramp changes < 50%
+- HIGH: Shared utility/infrastructure changes, auth/authz changes, DB schema, pilot ramp ≥ 50% or to 100%, removal of feature gates, error handling in critical paths, breaking contract changes
+
+IMPORTANT:
+- Be factual — ONLY describe what you see in the diff
+- If the diff is a lock file or auto-generated code, say so briefly and mark LOW
+- Do NOT speculate about intent or future plans
+- Do NOT invent flag names that don't appear in the code
 
 Respond with valid JSON only, no markdown fencing.`;
 
 /**
- * Summarize a single commit using LLM.
+ * Summarize a single commit using LLM, with diff filtering.
+ *
+ * 1. Fetch changed files list first (cheap API call)
+ * 2. Classify files: needsDiff / autoSummary / ignored
+ * 3. If all files are auto/ignored, produce summary without LLM
+ * 4. Otherwise fetch diffs only for files that need it, send to LLM
  *
  * @param {object} repoConfig - Repository config
  * @param {object} commit - Formatted commit object from fetchLatestCommits
  * @returns {Promise<object>} Commit with LLM summary attached
  */
 async function summarizeCommit(repoConfig, commit) {
+    const t0 = Date.now();
     try {
-        const diffs = await fetchCommitDiff(repoConfig, commit.commitId);
-        const diffText = diffs.join('\n---\n');
+        // Step 1: Get changed files list (cheap)
+        const t1 = Date.now();
+        const { changes } = await fetchCommitChanges(repoConfig, commit.commitId);
+        const changesMs = Date.now() - t1;
 
-        // Truncate to avoid token limits (~100K chars ≈ ~25K tokens)
-        const truncatedDiff = diffText.length > 100000
-            ? diffText.substring(0, 100000) + '\n... (diff truncated)'
-            : diffText;
+        // Step 2: Classify
+        const { needsDiff, autoSummary, ignored } = classifyChanges(changes, repoConfig.name);
+        const skippedNote = buildSkippedFilesSummary(autoSummary, ignored);
+
+        // Step 3: If nothing needs LLM, auto-summarize
+        if (needsDiff.length === 0) {
+            const reasons = [...new Set(autoSummary.map(f => f.reason))];
+            return {
+                ...commit,
+                llmSummary: {
+                    title: `${reasons.join(', ')} (${autoSummary.length + ignored.length} files)`,
+                    summary: `Auto-classified commit: ${reasons.join(', ')}. ${autoSummary.length} auto-summarized, ${ignored.length} ignored files.`,
+                    riskLevel: 'LOW',
+                    affectedAreas: [],
+                    flags: [],
+                    changeType: 'code',
+                    configChanges: [],
+                    breakingChange: false,
+                    _autoClassified: true,
+                },
+            };
+        }
+
+        // Step 4: If too many files, send just file names, not diffs
+        let diffText;
+        if (needsDiff.length > MAX_FILES_FOR_DIFF) {
+            diffText = [
+                `Commit touches ${changes.length} files (${needsDiff.length} code files, ${autoSummary.length} auto-skipped, ${ignored.length} ignored).`,
+                'File list (diffs omitted due to size):',
+                ...needsDiff.map(f => `  ${f.changeType}: ${f.path}`),
+            ].join('\n');
+        } else {
+            // Fetch diffs only for files that need it
+            const tDiff = Date.now();
+            const diffs = await fetchFilteredDiffs(repoConfig, commit.commitId, needsDiff);
+            const diffMs = Date.now() - tDiff;
+            if (diffMs > 5000) {
+                console.warn(`      ⏱ ${commit.shortId} diff fetch (${(diffMs/1000).toFixed(1)}s) ${needsDiff.length} files`);
+            }
+            diffText = diffs.join('\n---\n');
+        }
+
+        // Append skipped files note
+        if (skippedNote) {
+            diffText += `\n\n--- SKIPPED FILES ---\n${skippedNote}`;
+        }
+
+        // Truncate
+        if (diffText.length > MAX_DIFF_SIZE) {
+            diffText = diffText.substring(0, MAX_DIFF_SIZE) + '\n... (diff truncated)';
+        }
 
         const userMessage = [
             `Repository: ${repoConfig.name}`,
@@ -55,27 +128,36 @@ async function summarizeCommit(repoConfig, commit) {
             `Author: ${commit.author} <${commit.authorEmail}>`,
             `Date: ${commit.date}`,
             `Message: ${commit.message}`,
+            `Files changed: ${changes.length} total (${needsDiff.length} analyzed, ${autoSummary.length} auto-skipped, ${ignored.length} ignored)`,
             '',
             '--- DIFF START ---',
-            truncatedDiff,
+            diffText,
             '--- DIFF END ---',
         ].join('\n');
 
+        const tLlm = Date.now();
         const response = await llmHelper(COMMIT_SUMMARY_PROMPT, [
             { role: 'user', content: userMessage },
         ]);
+        const llmMs = Date.now() - tLlm;
+        const totalMs = Date.now() - t0;
+        if (totalMs > 15000) {
+            console.warn(`      ⏱ ${commit.shortId} total=${(totalMs/1000).toFixed(1)}s changes=${changesMs}ms diff=${diffText.length > 0 ? (tLlm - t0 - changesMs) + 'ms' : 'skip'} llm=${(llmMs/1000).toFixed(1)}s`);
+        }
 
         let summary;
         try {
             summary = JSON.parse(response);
         } catch {
-            // If LLM didn't return valid JSON, wrap the raw response
             summary = {
                 title: commit.title,
                 summary: response,
                 riskLevel: 'MEDIUM',
                 affectedAreas: [],
                 flags: [],
+                changeType: 'code',
+                configChanges: [],
+                breakingChange: false,
             };
         }
 
@@ -89,26 +171,104 @@ async function summarizeCommit(repoConfig, commit) {
                 riskLevel: 'MEDIUM',
                 affectedAreas: [],
                 flags: [],
+                changeType: 'code',
+                configChanges: [],
+                breakingChange: false,
+                _error: true,
             },
         };
     }
 }
 
 /**
- * Summarize an array of commits. Processes sequentially to respect rate limits.
+ * Fetch diffs only for specific files (not the full commit).
+ * Reuses the same diff logic from ado-git-client but only for filtered files.
+ */
+async function fetchFilteredDiffs(repoConfig, commitId, filteredChanges) {
+    // We need the parent to produce diffs
+    const { fetchCommitById } = await import('./ado-git-client.js');
+    const commitInfo = await fetchCommitById(repoConfig, commitId);
+    const parentCommitId = commitInfo.parents?.[0];
+
+    // Process files in batches of 10 to balance speed vs ADO rate limits
+    const DIFF_CONCURRENCY = 10;
+    const diffs = [];
+    for (let i = 0; i < filteredChanges.length; i += DIFF_CONCURRENCY) {
+        const batch = filteredChanges.slice(i, i + DIFF_CONCURRENCY);
+        const batchResults = await Promise.all(
+            batch.map(async (change) => {
+                let currentContent = null;
+                let parentContent = null;
+
+                if (change.changeType !== 'delete') {
+                    currentContent = await fetchFileContent(repoConfig, change.path, commitId);
+                }
+                if (change.changeType !== 'add' && parentCommitId) {
+                    parentContent = await fetchFileContent(repoConfig, change.path, parentCommitId);
+                }
+
+                if (change.changeType === 'edit' && parentContent && currentContent) {
+                    const patch = createPatch(change.path, parentContent, currentContent, 'Parent', 'Current');
+                    return `${change.path} Modified:\n${patch}`;
+                } else if (change.changeType === 'add') {
+                    return `Added: ${change.path}\n${currentContent ?? ''}`;
+                } else if (change.changeType === 'delete') {
+                    return `Deleted: ${change.path}`;
+                }
+                return `${change.changeType}: ${change.path}`;
+            })
+        );
+        diffs.push(...batchResults);
+    }
+    return diffs;
+}
+
+/**
+ * Summarize an array of commits. Processes in parallel batches for speed.
  *
  * @param {object} repoConfig - Repository config
  * @param {Array} commits - Array of formatted commit objects
  * @param {function} onProgress - Optional callback(index, total, commit) for progress
+ * @param {number} concurrency - Max parallel LLM calls (default 25)
  * @returns {Promise<Array>} Commits with llmSummary attached
  */
-async function summarizeCommits(repoConfig, commits, onProgress) {
-    const results = [];
-    for (let i = 0; i < commits.length; i++) {
-        if (onProgress) onProgress(i + 1, commits.length, commits[i]);
-        const summarized = await summarizeCommit(repoConfig, commits[i]);
-        results.push(summarized);
+async function summarizeCommits(repoConfig, commits, onProgress, concurrency = 25) {
+    const results = new Array(commits.length);
+    let completed = 0;
+    const PER_COMMIT_TIMEOUT = 180000; // 3 minutes max per commit
+
+    // Process in batches of `concurrency`
+    for (let batchStart = 0; batchStart < commits.length; batchStart += concurrency) {
+        const batch = commits.slice(batchStart, batchStart + concurrency);
+        const batchPromises = batch.map((commit, idx) => {
+            const globalIdx = batchStart + idx;
+            const timeoutPromise = new Promise((_, reject) =>
+                setTimeout(() => reject(new Error(`Commit ${commit.shortId} timed out after ${PER_COMMIT_TIMEOUT / 1000}s`)), PER_COMMIT_TIMEOUT)
+            );
+            return Promise.race([summarizeCommit(repoConfig, commit), timeoutPromise])
+                .catch(err => ({
+                    ...commit,
+                    llmSummary: {
+                        title: commit.title,
+                        summary: `Timed out: ${err.message}`,
+                        riskLevel: 'MEDIUM',
+                        affectedAreas: [],
+                        flags: [],
+                        changeType: 'code',
+                        configChanges: [],
+                        breakingChange: false,
+                        _error: true,
+                    },
+                }))
+                .then(result => {
+                    completed++;
+                    if (onProgress) onProgress(completed, commits.length, commit);
+                    results[globalIdx] = result;
+                });
+        });
+        await Promise.all(batchPromises);
     }
+
     return results;
 }
 

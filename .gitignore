@@ -119,6 +119,7 @@ private/ui-next/si-certificate*
 # yarn pnp
 .pnp/
 .pnp.js
+.vite/
 
 pnpm.exe
 .pnpm
