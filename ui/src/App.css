@@ -731,9 +731,10 @@
   border-top: 1px solid var(--border);
   display: flex;
   gap: 8px;
+  align-items: stretch;
 }
 
-.chat-input-area input {
+.chat-input-area textarea {
   flex: 1;
   background: var(--bg-tertiary);
   border: 1px solid var(--border);
@@ -741,14 +742,20 @@
   padding: 10px 14px;
   color: var(--text-primary);
   font-size: 14px;
+  font-family: inherit;
   outline: none;
+  resize: none;
+  overflow-y: auto;
+  min-height: 40px;
+  max-height: 150px;
+  line-height: 1.4;
 }
 
-.chat-input-area input:focus {
+.chat-input-area textarea:focus {
   border-color: var(--accent);
 }
 
-.chat-input-area input::placeholder {
+.chat-input-area textarea::placeholder {
   color: var(--text-secondary);
 }
 
