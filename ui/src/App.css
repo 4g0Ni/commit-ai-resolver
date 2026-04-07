@@ -41,8 +41,25 @@
   flex-direction: column;
 }
 
+.resize-handle {
+  width: 5px;
+  cursor: col-resize;
+  background: transparent;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 10;
+  transition: background 0.15s;
+}
+
+.resize-handle:hover,
+.resize-handle:active {
+  background: var(--accent, #58a6ff);
+}
+
 .chat-panel {
-  width: 380px;
+  width: 560px;
+  min-width: 360px;
+  max-width: 1200px;
   min-height: 0;
   border-left: 1px solid var(--border);
   display: flex;
