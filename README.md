@@ -13,6 +13,7 @@
 | Config/pilot change detection | ✅ Done | changeType + configChanges fields |
 | React dashboard | ✅ Done | Dark theme, chart, filters, metrics |
 | LLM chat interface | ✅ Done | Markdown rendering, context-aware |
+| Vector search (RAG) | ✅ Done | text-embedding-3-large, local JSON vector store |
 | Daily data generation (cached) | ✅ Done | Incremental, skip cached commits |
 | C2C Cosmos DB pilot tracker | ❌ Planned | DB-level pilot ramp tracking |
 | Queryable DB storage | ❌ Planned | Currently JSON files |
@@ -340,6 +341,79 @@ WHERE ABS(new_percentage - old_percentage) > 10 AND date = '2026-03-30';
 | Prompt engineering | System prompts that instruct the model to correlate user-described symptoms with retrieved change data and produce ranked suspect lists with links. | [10544208](https://msasg.visualstudio.com/Bing_Ads/_workitems/edit/10544208) |
 | Context window management | Handle large report windows (multiple days × multiple repos) within token limits — summarize or paginate as needed. | [10544209](https://msasg.visualstudio.com/Bing_Ads/_workitems/edit/10544209) |
 | Response formatting | Structured output: ranked suspects, links, risk assessment, suggested next steps. | [10544210](https://msasg.visualstudio.com/Bing_Ads/_workitems/edit/10544210) |
+
+### 6.6 Vector Search & Embedding (RAG)
+
+#### Architecture
+
+The chat interface uses a **Retrieval-Augmented Generation (RAG)** pipeline to avoid stuffing all commit summaries into the LLM context window. Instead, the user's query is embedded and matched against pre-computed commit embeddings via cosine similarity.
+
+```
+User Query
+    │
+    ▼
+┌─────────────────┐     ┌───────────────────┐
+│  Embed Query    │────▶│  Vector Search     │
+│  (text-embed-   │     │  (cosine similarity│
+│   3-large)      │     │   top-K=20)        │
+└─────────────────┘     └───────────────────┘
+                                │
+                                ▼
+                        ┌───────────────────┐
+                        │  Build Context    │
+                        │  (top 20 commits) │
+                        └───────────────────┘
+                                │
+                                ▼
+                        ┌───────────────────┐
+                        │  LLM Chat         │
+                        │  (GPT-4.1)        │
+                        └───────────────────┘
+```
+
+#### Components
+
+| Component | File | Description |
+|---|---|---|
+| Embedding client | `src/services/embedding-client.js` | Azure OpenAI `text-embedding-3-large` client (3072 dimensions), uses `DefaultAzureCredential`, same endpoint as the LLM |
+| Vector store | `src/services/vector-store.js` | JSON file-backed vector DB (`data/embeddings/vectors.json`). Brute-force cosine similarity — fast enough for ~1000 commits (<10ms search) |
+| Embedding generator | `src/scripts/generate-embeddings.js` | Reads daily JSON files, builds searchable text per commit, generates embeddings in batches of 16, upserts into vector store. Incremental (skips already-embedded commits) |
+| Chat API (RAG) | `api/server.js` | Embeds user query → searches vector store for top-20 matches → sends only relevant commits as LLM context. Falls back to full-context if no vector store |
+
+#### Embedding Model
+
+- **Model:** `text-embedding-3-large` (3072 dimensions)
+- **API version:** `2023-05-15`
+- **Endpoint:** Same Azure OpenAI resource as the LLM
+- **Auth:** `DefaultAzureCredential` (Azure AD token)
+
+#### Text Representation per Commit
+
+Each commit is embedded as a concatenation of:
+- Date and repository name
+- LLM-generated title and summary
+- Risk level and author
+- Affected areas, feature flags, config changes
+
+#### Usage
+
+```bash
+# Generate embeddings for all daily data (incremental)
+cd src && node scripts/generate-embeddings.js
+
+# Re-embed last 7 days
+node scripts/generate-embeddings.js --days 7
+
+# Force re-embed everything
+node scripts/generate-embeddings.js --force
+```
+
+#### Fallback Behavior
+
+The chat API gracefully degrades:
+1. **Vector store available + results found** → RAG path (top-20 semantically relevant commits)
+2. **Vector store available but no results** → Falls back to full context stuffing
+3. **No vector store** → Full context stuffing (original behavior)
 
 ---
 
