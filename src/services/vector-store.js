@@ -2,7 +2,7 @@
  * Vector database — LanceDB-backed vector store for commit embeddings.
  *
  * Uses LanceDB (embedded, no server needed) stored at data/lancedb/.
- * Table schema: id, commitId, repo, date, text, vector (Float32[3072]), metadata (JSON string).
+ * Table schema: id, commitId, repo, date, author, text, vector (Float32[3072]), metadata (JSON string).
  *
  * LanceDB handles ANN indexing and fast cosine similarity search natively.
  */
@@ -60,20 +60,31 @@ function cosineSimilarity(a, b) {
  * @param {number} opts.topK - Number of results to return (default: 10)
  * @param {number} opts.minScore - Minimum similarity threshold (default: 0.3)
  * @param {string} opts.repo - Filter by repo name (optional)
+ * @param {string} opts.author - Filter by author name, case-insensitive substring (optional)
  * @param {string} opts.dateFrom - Filter by start date (optional)
  * @param {string} opts.dateTo - Filter by end date (optional)
  * @returns {Promise<Array>} Ranked results with score and metadata
  */
 async function searchVectors(queryEmbedding, opts = {}) {
-    const { topK = 10, minScore = 0.3, repo, dateFrom, dateTo } = opts;
+    const { topK = 10, minScore = 0.3, repo, author, dateFrom, dateTo } = opts;
     const table = await getTable();
     if (!table) return [];
 
-    let query = table.vectorSearch(queryEmbedding).distanceType('cosine').limit(topK * 2); // over-fetch for post-filtering
+    // Build WHERE clauses for LanceDB pre-filtering
+    const whereClauses = [];
+    if (repo) whereClauses.push(`repo = '${repo.replace(/'/g, "''")}' `);
+    if (author) whereClauses.push(`lower(author) LIKE '%${author.toLowerCase().replace(/'/g, "''")}%'`);
+    if (dateFrom) whereClauses.push(`date >= '${dateFrom}'`);
+    if (dateTo) whereClauses.push(`date <= '${dateTo}'`);
+
+    let query = table.vectorSearch(queryEmbedding).distanceType('cosine').limit(topK * 2);
+    if (whereClauses.length > 0) {
+        query = query.where(whereClauses.join(' AND '));
+    }
 
     const raw = await query.toArray();
 
-    // Convert results and apply filters
+    // Convert results
     let results = raw.map(row => {
         // LanceDB returns _distance for cosine: distance = 1 - similarity
         const score = 1 - (row._distance ?? 0);
@@ -82,16 +93,12 @@ async function searchVectors(queryEmbedding, opts = {}) {
             commitId: row.commitId,
             repo: row.repo,
             date: row.date,
+            author: row.author,
             text: row.text,
             score,
             metadata: JSON.parse(row.metadata),
         };
     });
-
-    // Apply post-filters
-    if (repo) results = results.filter(r => r.repo === repo);
-    if (dateFrom) results = results.filter(r => r.date >= dateFrom);
-    if (dateTo) results = results.filter(r => r.date <= dateTo);
 
     return results
         .filter(r => r.score >= minScore)
@@ -115,6 +122,7 @@ async function upsertVectors(entries) {
         commitId: e.commitId || '',
         repo: e.repo,
         date: e.date,
+        author: e.author || e.metadata?.author || '',
         text: e.text,
         vector: e.embedding,
         metadata: JSON.stringify(e.metadata),
@@ -155,7 +163,7 @@ async function getVectorStats() {
         };
     }
 
-    const allRows = await table.query().select(['repo', 'date']).toArray();
+    const allRows = await table.query().select(['repo', 'date', 'author']).toArray();
     const repos = [...new Set(allRows.map(r => r.repo))];
     const dates = [...new Set(allRows.map(r => r.date))].sort();
 
@@ -183,6 +191,7 @@ async function loadVectorStore() {
             commitId: r.commitId,
             repo: r.repo,
             date: r.date,
+            author: r.author,
             text: r.text,
             embedding: Array.from(r.vector),
             metadata: JSON.parse(r.metadata),

@@ -106,6 +106,7 @@ async function main() {
                     commitId: commit.commitId,
                     repo: repoName,
                     date,
+                    author: commit.author,
                     text: buildCommitText(commit, repoName, date),
                     metadata: {
                         author: commit.author,

@@ -81,12 +81,19 @@ async function embedQuery(text) {
 
 /** Check if vector store has data. */
 let _vectorStoreAvailable = null;
+let _knownAuthors = [];
 async function isVectorStoreAvailable() {
     if (_vectorStoreAvailable !== null) return _vectorStoreAvailable;
     try {
         const stats = await getVectorStats();
         _vectorStoreAvailable = stats.totalCommits > 0;
         console.log(`Vector store: ${stats.totalCommits} commits indexed`);
+        // Cache known authors for query extraction
+        if (_vectorStoreAvailable) {
+            const store = await loadVectorStore();
+            _knownAuthors = [...new Set(store.commits.map(c => c.author).filter(Boolean))];
+            console.log(`Known authors: ${_knownAuthors.length}`);
+        }
     } catch {
         _vectorStoreAvailable = false;
     }
@@ -155,6 +162,17 @@ app.get('/api/days/:date', async (req, res) => {
     }
 });
 
+/** Extract a known author name from the user's query. */
+function extractAuthorFilter(query) {
+    const lower = query.toLowerCase();
+    for (const author of _knownAuthors) {
+        // Match on first name, last name, or full name
+        const parts = author.toLowerCase().split(/\s+/);
+        if (parts.some(p => p.length > 2 && lower.includes(p))) return author;
+    }
+    return null;
+}
+
 // POST /api/chat — chat with LLM about summaries (RAG with vector search)
 app.post('/api/chat', async (req, res) => {
     try {
@@ -171,11 +189,15 @@ app.post('/api/chat', async (req, res) => {
         if (useVectors) {
             // --- RAG path: embed query → vector search → top-K context ---
             searchMethod = 'vector';
+            const authorFilter = extractAuthorFilter(message);
+            if (authorFilter) console.log(`  Author filter: "${authorFilter}"`);
             const t0 = Date.now();
             const queryEmbedding = await embedQuery(message);
             console.log(`  Embedding: ${Date.now() - t0}ms`);
             const t1 = Date.now();
-            const results = await searchVectors(queryEmbedding, { topK: 20, minScore: 0.25 });
+            const results = await searchVectors(queryEmbedding, {
+                topK: 20, minScore: 0.20, author: authorFilter || undefined,
+            });
             console.log(`  Vector search: ${results.length} results in ${Date.now() - t1}ms`);
 
             if (results.length > 0) {
@@ -225,7 +247,7 @@ ${contextText}
         const result = await openaiClient.chat.completions.create({
             messages,
             temperature: 0.3,
-            max_tokens: 2048,
+            max_completion_tokens: 2048,
         });
         console.log(`  LLM (${searchMethod}): ${Date.now() - t2}ms, tokens: ${result.usage?.total_tokens ?? '?'}`);
 
