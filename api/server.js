@@ -24,9 +24,11 @@ const DATA_DIR = join(__dirname, '..', 'data', 'daily');
 const PORT = process.env.PORT || 3001;
 
 // --- Azure OpenAI setup ---
-const AZURE_OPENAI_ENDPOINT = 'https://chezh-m7lorxce-eastus2.openai.azure.com/';
-const AZURE_OPENAI_DEPLOYMENT = 'gpt-4.1';
-const AZURE_OPENAI_API_VERSION = '2025-01-01-preview';
+const AZURE_OPENAI_ENDPOINT = 'https://yizha-maz2xf24-swedencentral.openai.azure.com/';
+const AZURE_OPENAI_DEPLOYMENT = 'gpt-5.4';
+const AZURE_OPENAI_API_VERSION = '2025-04-01-preview';
+const EMBEDDING_DEPLOYMENT = 'text-embedding-3-large';
+const EMBEDDING_API_VERSION = '2023-05-15';
 const COGNITIVE_SERVICES_SCOPE = 'https://cognitiveservices.azure.com/.default';
 
 const credential = new DefaultAzureCredential();
@@ -39,9 +41,57 @@ const openaiClient = new AzureOpenAI({
     deployment: AZURE_OPENAI_DEPLOYMENT,
 });
 
+const embeddingClient = new AzureOpenAI({
+    endpoint: AZURE_OPENAI_ENDPOINT,
+    apiKey: '',
+    azureADTokenProvider: () =>
+        credential.getToken(COGNITIVE_SERVICES_SCOPE).then(at => at.token),
+    apiVersion: EMBEDDING_API_VERSION,
+    deployment: EMBEDDING_DEPLOYMENT,
+});
+
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// --- Request logging middleware ---
+app.use((req, res, next) => {
+    const start = Date.now();
+    const { method, url } = req;
+    res.on('finish', () => {
+        const ms = Date.now() - start;
+        const status = res.statusCode;
+        const color = status >= 500 ? '\x1b[31m' : status >= 400 ? '\x1b[33m' : '\x1b[32m';
+        console.log(`${color}${method} ${url} ${status}\x1b[0m ${ms}ms`);
+    });
+    next();
+});
+
+// --- Vector store ---
+import { searchVectors, getVectorStats } from '../src/services/vector-store.js';
+
+/** Generate a query embedding using the embedding client. */
+async function embedQuery(text) {
+    const result = await embeddingClient.embeddings.create({
+        input: [text],
+        model: EMBEDDING_DEPLOYMENT,
+    });
+    return result.data[0].embedding;
+}
+
+/** Check if vector store has data. */
+let _vectorStoreAvailable = null;
+async function isVectorStoreAvailable() {
+    if (_vectorStoreAvailable !== null) return _vectorStoreAvailable;
+    try {
+        const stats = await getVectorStats();
+        _vectorStoreAvailable = stats.totalCommits > 0;
+        console.log(`Vector store: ${stats.totalCommits} commits indexed`);
+    } catch {
+        _vectorStoreAvailable = false;
+    }
+    return _vectorStoreAvailable;
+}
 
 // --- Helper: load daily JSON files ---
 
@@ -105,7 +155,69 @@ app.get('/api/days/:date', async (req, res) => {
     }
 });
 
-// POST /api/chat — chat with LLM about summaries
+/**
+ * Use a lightweight LLM call to extract structured search filters from a natural language query.
+ * Returns: { author, repo, dateFrom, dateTo, searchQuery }
+ */
+async function extractQueryIntent(query) {
+    const today = new Date().toISOString().slice(0, 10);
+    const repoList = 'AdsAppsCampaignUI, AdsAppsMT, AdsAppUI';
+    const prompt = `Extract search filters from the user's question about code commits. Today is ${today}.
+
+Return ONLY a JSON object with these fields (use null for missing):
+- "author": full person name if the user is asking about a specific person's commits (null if not person-specific)
+- "repo": exact repo name from [${repoList}] if mentioned (null if not repo-specific)
+- "dateFrom": start date YYYY-MM-DD if a time range is mentioned (null if open-ended)
+- "dateTo": end date YYYY-MM-DD if a time range is mentioned (null if open-ended)
+- "searchQuery": a rewritten version of the query optimized for semantic search against commit summaries. Remove person names and date references, keep the technical intent. This should be what we embed for vector similarity search.
+
+Examples:
+User: "what did Beina Zhang change last week"
+{"author":"Beina Zhang","repo":null,"dateFrom":"${daysAgo(7, today)}","dateTo":"${today}","searchQuery":"code changes and modifications"}
+
+User: "any store page crashes in CampaignUI recently"
+{"author":null,"repo":"AdsAppsCampaignUI","dateFrom":null,"dateTo":null,"searchQuery":"store page crash error bug"}
+
+User: "what high risk changes were deployed yesterday"
+{"author":null,"repo":null,"dateFrom":"${daysAgo(1, today)}","dateTo":"${daysAgo(1, today)}","searchQuery":"high risk changes deployment"}
+
+User: "show pilot flag changes"
+{"author":null,"repo":null,"dateFrom":null,"dateTo":null,"searchQuery":"pilot flag feature gate config changes"}
+
+Now extract from:
+User: "${query.replace(/"/g, '\\"')}"`;
+
+    try {
+        const result = await openaiClient.chat.completions.create({
+            messages: [{ role: 'user', content: prompt }],
+            temperature: 0,
+            max_completion_tokens: 256,
+        });
+        const text = result.choices?.[0]?.message?.content?.trim() || '{}';
+        // Extract JSON from response (handle markdown code blocks)
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) return { searchQuery: query };
+        const parsed = JSON.parse(jsonMatch[0]);
+        return {
+            author: parsed.author || null,
+            repo: parsed.repo || null,
+            dateFrom: parsed.dateFrom || null,
+            dateTo: parsed.dateTo || null,
+            searchQuery: parsed.searchQuery || query,
+        };
+    } catch (err) {
+        console.error('  Intent extraction failed:', err.message);
+        return { searchQuery: query };
+    }
+}
+
+function daysAgo(n, today) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - n);
+    return d.toISOString().slice(0, 10);
+}
+
+// POST /api/chat — chat with LLM about summaries (RAG with vector search)
 app.post('/api/chat', async (req, res) => {
     try {
         const { message, history = [] } = req.body;
@@ -113,25 +225,60 @@ app.post('/api/chat', async (req, res) => {
             return res.status(400).json({ error: 'message is required' });
         }
 
-        // Load all available day data as context
-        const dates = await listAvailableDates();
-        const allData = [];
-        for (const date of dates) {
-            allData.push(await loadDayData(date));
+        let contextText;
+        let searchMethod;
+        const useVectors = await isVectorStoreAvailable();
+        console.log(`  Chat query: "${message.slice(0, 100)}${message.length > 100 ? '...' : ''}"`);
+
+        if (useVectors) {
+            // --- Step 1: LLM intent extraction ---
+            searchMethod = 'vector';
+            const t_intent = Date.now();
+            const intent = await extractQueryIntent(message);
+            console.log(`  Intent (${Date.now() - t_intent}ms): ${JSON.stringify(intent)}`);
+
+            const hasFilters = intent.author || intent.repo || intent.dateFrom || intent.dateTo;
+
+            // --- Step 2: Embed the optimized search query ---
+            const t0 = Date.now();
+            const queryEmbedding = await embedQuery(intent.searchQuery);
+            console.log(`  Embedding: ${Date.now() - t0}ms`);
+
+            // --- Step 3: Vector search with extracted filters ---
+            const t1 = Date.now();
+            const results = await searchVectors(queryEmbedding, {
+                topK: 30,
+                minScore: hasFilters ? 0.05 : 0.20,
+                author: intent.author || undefined,
+                repo: intent.repo || undefined,
+                dateFrom: intent.dateFrom || undefined,
+                dateTo: intent.dateTo || undefined,
+            });
+            console.log(`  Vector search: ${results.length} results in ${Date.now() - t1}ms`);
+
+            if (results.length > 0) {
+                contextText = results.map(r =>
+                    `[${r.date}] ${r.repo} | ${r.metadata.riskLevel} | ${r.id} by ${r.metadata.author}\n` +
+                    `  Title: ${r.metadata.title}\n` +
+                    `  Summary: ${r.metadata.summary}\n` +
+                    (r.metadata.flags?.length ? `  Flags: ${r.metadata.flags.join(', ')}\n` : '') +
+                    (r.metadata.affectedAreas?.length ? `  Areas: ${r.metadata.affectedAreas.join(', ')}\n` : '') +
+                    `  Score: ${r.score.toFixed(3)}`
+                ).join('\n\n');
+            } else {
+                // Vector search returned nothing — fall back to full context
+                searchMethod = 'fallback-full';
+                contextText = await buildFullContext();
+            }
+        } else {
+            // --- Fallback: stuff all data into context (original behavior) ---
+            searchMethod = 'full';
+            contextText = await buildFullContext();
         }
 
-        const contextText = allData.map(day => {
-            const repos = Object.entries(day.repositories).map(([name, repo]) => {
-                const commits = repo.commits.map(c =>
-                    `  - [${c.summary.riskLevel}] ${c.shortId} by ${c.author}: ${c.summary.title}\n    ${c.summary.summary}${c.summary.flags?.length ? `\n    Flags: ${c.summary.flags.join(', ')}` : ''}`
-                ).join('\n');
-                return `### ${name} (${repo.stats.total} commits: ${repo.stats.high} HIGH, ${repo.stats.medium} MEDIUM, ${repo.stats.low} LOW)\n${commits}`;
-            }).join('\n\n');
-            return `## ${day.date}\n${repos}`;
-        }).join('\n\n---\n\n');
-
         const systemPrompt = `You are an expert change analysis assistant for the Microsoft Advertising engineering team.
-You have access to daily commit summaries across repositories. Use this data to answer questions about:
+You have access to commit summaries across repositories${searchMethod === 'vector' ? ' (retrieved via semantic search — most relevant results shown)' : ''}.
+Use this data to answer questions about:
 - What changed on a specific day or date range
 - Which commits might be related to an incident or regression
 - Risk assessment of recent changes
@@ -142,7 +289,7 @@ When correlating incidents with changes, consider a 2-day buffer (releases take 
 Always cite specific commit SHAs and authors when referencing changes.
 Be concise and actionable.
 
---- DAILY COMMIT SUMMARIES ---
+--- COMMIT SUMMARIES (${searchMethod}) ---
 ${contextText}
 --- END SUMMARIES ---`;
 
@@ -152,16 +299,46 @@ ${contextText}
             { role: 'user', content: message },
         ];
 
+        const t2 = Date.now();
         const result = await openaiClient.chat.completions.create({
             messages,
             temperature: 0.3,
-            max_tokens: 2048,
+            max_completion_tokens: 2048,
         });
+        console.log(`  LLM (${searchMethod}): ${Date.now() - t2}ms, tokens: ${result.usage?.total_tokens ?? '?'}`);
 
         const reply = result.choices?.[0]?.message?.content ?? 'No response from LLM.';
-        res.json({ reply });
+        res.json({ reply, searchMethod });
     } catch (err) {
         console.error('Chat error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+/** Build full context from all daily JSON files (fallback when no vector store). */
+async function buildFullContext() {
+    const dates = await listAvailableDates();
+    const allData = [];
+    for (const date of dates) {
+        allData.push(await loadDayData(date));
+    }
+    return allData.map(day => {
+        const repos = Object.entries(day.repositories).map(([name, repo]) => {
+            const commits = repo.commits.map(c =>
+                `  - [${c.summary.riskLevel}] ${c.shortId} by ${c.author}: ${c.summary.title}\n    ${c.summary.summary}${c.summary.flags?.length ? `\n    Flags: ${c.summary.flags.join(', ')}` : ''}`
+            ).join('\n');
+            return `### ${name} (${repo.stats.total} commits: ${repo.stats.high} HIGH, ${repo.stats.medium} MEDIUM, ${repo.stats.low} LOW)\n${commits}`;
+        }).join('\n\n');
+        return `## ${day.date}\n${repos}`;
+    }).join('\n\n---\n\n');
+}
+
+// GET /api/vectors/stats — vector store stats
+app.get('/api/vectors/stats', async (req, res) => {
+    try {
+        const stats = await getVectorStats();
+        res.json(stats);
+    } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });

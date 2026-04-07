@@ -22,10 +22,16 @@ const DATA_DIR = join(__dirname, '..', '..', 'data', 'daily');
 
 function parseArgs() {
     const args = process.argv.slice(2);
-    const opts = { days: 10, force: false };
+    const opts = { days: 10, force: false, from: null, to: null };
     for (let i = 0; i < args.length; i++) {
         if (args[i] === '--days' && args[i + 1]) {
             opts.days = parseInt(args[i + 1], 10) || 10;
+            i++;
+        } else if (args[i] === '--from' && args[i + 1]) {
+            opts.from = args[i + 1];
+            i++;
+        } else if (args[i] === '--to' && args[i + 1]) {
+            opts.to = args[i + 1];
             i++;
         } else if (args[i] === '--force') {
             opts.force = true;
@@ -48,20 +54,34 @@ function groupByDate(commits) {
 }
 
 /**
- * Generate an array of dates going back N days from today.
+ * Generate an array of dates. If from/to are given, use that range;
+ * otherwise go back N days from today.
  */
-function getDates(days) {
-    const dates = [];
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    for (let i = 0; i < days; i++) {
-        const d = new Date(today);
-        d.setDate(d.getDate() - i);
+function getDates(days, from, to) {
+    const fmt = (d) => {
         const yyyy = d.getFullYear();
         const mm = String(d.getMonth() + 1).padStart(2, '0');
         const dd = String(d.getDate()).padStart(2, '0');
-        dates.push(`${yyyy}-${mm}-${dd}`);
+        return `${yyyy}-${mm}-${dd}`;
+    };
+
+    if (from) {
+        const start = new Date(from + 'T00:00:00');
+        const end = to ? new Date(to + 'T00:00:00') : new Date(from + 'T00:00:00');
+        const dates = [];
+        for (let d = new Date(end); d >= start; d.setDate(d.getDate() - 1)) {
+            dates.push(fmt(d));
+        }
+        return dates; // newest first
+    }
+
+    const dates = [];
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    for (let i = 0; i < days; i++) {
+        const d = new Date(today);
+        d.setDate(d.getDate() - i);
+        dates.push(fmt(d));
     }
     return dates; // newest first
 }
@@ -159,7 +179,7 @@ async function main() {
 
     await mkdir(DATA_DIR, { recursive: true });
 
-    const targetDates = getDates(opts.days);
+    const targetDates = getDates(opts.days, opts.from, opts.to);
     console.log(`Target dates (${targetDates.length}): ${targetDates.join(', ')}`);
     if (opts.force) console.log('  --force: regenerating all commits');
 

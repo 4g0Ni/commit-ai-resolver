@@ -38,6 +38,10 @@ lock
 
 # LLM input diffs (for local inspection)
 /data/diffs/
+
+# Vector embeddings (large binary data)
+/data/embeddings/
+/data/lancedb/
 *.projhash*
 *.slnhash*
 # quickbuild.exe

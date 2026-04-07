@@ -42,28 +42,76 @@ node scripts/generate-sample-data.js --days 5
 | Flag | Description |
 |---|---|
 | `--days N` | Number of weekdays to generate (default: 10) |
+| `--from DATE` | Start date YYYY-MM-DD (use with `--to` for a specific range) |
+| `--to DATE` | End date YYYY-MM-DD |
 | `--force` | Regenerate all commits even if cached |
+
+**Examples:**
+```bash
+# Last 5 days
+node scripts/generate-sample-data.js --days 5
+
+# Force regenerate a specific date range
+node scripts/generate-sample-data.js --from 2026-03-25 --to 2026-03-31 --force
+
+# Just one day
+node scripts/generate-sample-data.js --from 2026-04-01 --to 2026-04-01 --force
+```
 
 **Caching:** Previously summarized commits (by commitId) are loaded from existing JSON files and skipped. Error summaries are always re-attempted. Use `--force` to override.
 
 **Parallelism:** LLM calls run 10 at a time per batch. Each day's JSON is written to disk after each repo completes, so partial results survive failures.
 
-### 2. Start the Backend API
+### 2. Generate Embeddings
+
+Embeds all commit summaries into LanceDB for vector search. Required for the chat RAG pipeline.
+
+```bash
+cd src
+node scripts/generate-embeddings.js
+```
+
+**Options:**
+| Flag | Description |
+|---|---|
+| `--days N` | Only process last N days of data |
+| `--from DATE` | Start date YYYY-MM-DD (inclusive) |
+| `--to DATE` | End date YYYY-MM-DD (inclusive) |
+| `--force` | Re-embed all commits (needed after schema changes) |
+
+**Examples:**
+```bash
+# Incremental (only new commits)
+node scripts/generate-embeddings.js
+
+# Re-embed a specific date range
+node scripts/generate-embeddings.js --from 2026-04-01 --to 2026-04-03 --force
+
+# Force re-embed everything
+node scripts/generate-embeddings.js --force
+```
+
+Embeddings are stored in `data/lancedb/` (LanceDB embedded database). If you change the vector store schema, delete `data/lancedb/` and re-run with `--force`.
+
+### 3. Start the Backend API
 
 ```bash
 cd api
 node server.js
 ```
 
-Runs on `http://localhost:3001`:
+Runs on `http://localhost:3001` with request logging (method, URL, status, duration):
 | Endpoint | Description |
 |---|---|
 | `GET /api/days` | List available dates |
 | `GET /api/days/:date` | Summary for a specific date |
 | `GET /api/days?from=&to=` | Date range query |
-| `POST /api/chat` | LLM chat (body: `{ message, history }`) |
+| `POST /api/chat` | LLM chat with RAG vector search (body: `{ message, history }`) |
+| `GET /api/vectors/stats` | Vector store stats (commit count, repos, date range) |
 
-### 3. Start the Frontend
+Chat requests log: query text, extracted filters, embedding time, search results count, LLM time, and token usage.
+
+### 4. Start the Frontend
 
 ```bash
 cd ui
@@ -71,6 +119,76 @@ npx vite --host
 ```
 
 Runs on `http://localhost:5173` (or next available port).
+
+---
+
+## Vector Search & LLM Intent Extraction
+
+The chat uses a **RAG pipeline**: embed your question → search LanceDB for matching commits → send only relevant commits to the LLM.
+
+### LLM-Based Query Understanding
+
+The API uses a lightweight LLM pre-processing call to extract structured filters from your natural language query. This replaced the previous regex-based approach (which had false positives like "changes" matching author "Chang").
+
+The LLM extracts:
+- **author** — person name if asking about a specific person
+- **repo** — exact repo name (recognizes aliases like "campaignui", "cmui", "appui")
+- **dateFrom / dateTo** — date range (resolves "yesterday", "last week", "March 30", etc.)
+- **searchQuery** — a rewritten query optimized for embedding search (filter terms stripped)
+
+The rewritten `searchQuery` is embedded for vector similarity, while extracted filters become SQL WHERE clauses in LanceDB. When any filter is active, the similarity threshold drops to 0.05 to return all matching commits.
+
+### Smart Query Filter Extraction
+
+Examples of how the LLM extracts filters:
+
+| Query | Extracted Filters |
+|---|---|
+| "what did Beina Zhang change last week" | `author=Beina Zhang`, `dateFrom=...`, `dateTo=...`, `searchQuery=code changes and modifications` |
+| "any store page crashes in CampaignUI" | `repo=AdsAppsCampaignUI`, `searchQuery=store page crash error bug` |
+| "what high risk changes were deployed yesterday" | `dateFrom=yesterday`, `dateTo=yesterday`, `searchQuery=high risk changes deployment` |
+| "show pilot flag changes" | `searchQuery=pilot flag feature gate config changes` |
+
+If intent extraction fails (LLM error), the system gracefully falls back to embedding the raw query with no filters.
+
+---
+
+## Testing
+
+### Run E2E Tests
+
+```bash
+cd src
+node tests/test-search-e2e.js
+```
+
+Requires LanceDB data (run `generate-embeddings.js` first) and API server on port 3001 for the full 13-suite test coverage:
+
+| Suite | Tests | What it covers |
+|---|---|---|
+| 1. LanceDB health | 5 | DB connectivity, commit count, author fields |
+| 2. Author filter | 3 | Returns ALL commits by a specific person |
+| 3. Author case insensitivity | 3 | Lowercase, first-name-only matching |
+| 4. Repo filter | 6 | Per-repo WHERE filtering |
+| 5. Date range filter | 4 | Single day, multi-day ranges |
+| 6. Combined filters | 2 | Author + repo together |
+| 7. Semantic relevance | 10 | Domain queries (flags, risk, bugs, grid) |
+| 8. Score ordering | 3 | Descending scores, valid range |
+| 9. minScore threshold | 3 | Threshold filtering behavior |
+| 10. Result shape | 12 | All fields present and typed correctly |
+| 11. Edge cases | 4 | Unrelated queries, non-existent filters |
+| 12. Chat API E2E | 6 | Full roundtrip chat queries |
+| 13. API endpoints | 5 | GET/POST endpoints, 404 handling |
+
+### Other Test Suites
+
+```bash
+# Unit tests for vector store (cosine similarity, dedup logic)
+node tests/test-vector-store.js
+
+# Integration tests with real embeddings
+node tests/test-vector-search-integration.js
+```
 
 ---
 
@@ -107,7 +225,7 @@ The React dashboard has three main areas:
   - LLM-generated title and summary
   - Config changes list (key, action, detail)
   - Affected areas and feature flag tags
-- **Chat Panel** — Ask questions about changes, investigate incidents. Responses rendered as markdown.
+- **Chat Panel** — Ask questions about changes, investigate incidents. Responses rendered as markdown. **Resizable** — drag the left edge to adjust width (min 360px, max 1200px, default 560px). Width is persisted across page refreshes.
 
 ---
 
@@ -180,15 +298,22 @@ commit-ai-resolver/
 │   │   └── repositories.js           # Repo definitions and tag strategies
 │   ├── scripts/
 │   │   ├── generate-sample-data.js   # Generate daily summaries (cached, parallel)
+│   │   ├── generate-embeddings.js    # Embed commit summaries into LanceDB
 │   │   └── extend-sample-data.js     # Generate synthetic historical data
 │   ├── services/
 │   │   ├── ado-git-client.js         # Azure DevOps REST API client
 │   │   ├── llm-helper.js             # Azure OpenAI client (retry, auth)
 │   │   ├── commit-summarizer.js      # LLM summarization with diff filtering
-│   │   └── diff-filter.js            # File classification & skip rules
+│   │   ├── diff-filter.js            # File classification & skip rules
+│   │   ├── vector-store.js           # LanceDB vector database (search, upsert, stats)
+│   │   └── embedding-client.js       # Azure OpenAI text-embedding-3-large client
+│   ├── tests/
+│   │   ├── test-search-e2e.js        # E2E tests (74 tests, 13 suites)
+│   │   ├── test-vector-store.js      # Unit tests for vector store
+│   │   └── test-vector-search-integration.js  # Integration tests
 │   └── package.json
 ├── api/                              # Express backend API
-│   ├── server.js                     # REST endpoints + LLM chat
+│   ├── server.js                     # REST endpoints + LLM chat + smart filters
 │   └── package.json
 ├── ui/                               # React dashboard (Vite 5)
 │   ├── src/
@@ -206,9 +331,11 @@ commit-ai-resolver/
 │   │       └── ChatBox.jsx           # LLM chat with markdown rendering
 │   └── package.json
 ├── data/
-│   └── daily/                        # Generated daily JSON files
-│       ├── index.json                # Dates index
-│       └── YYYY-MM-DD.json           # Per-day commit summaries
+│   ├── daily/                        # Generated daily JSON files
+│   │   ├── index.json                # Dates index
+│   │   └── YYYY-MM-DD.json          # Per-day commit summaries
+│   ├── lancedb/                      # LanceDB vector database (auto-generated)
+│   └── diffs/                        # LLM input diffs (for inspection)
 ├── README.md                         # Product specification
 └── USERGUIDE.md                      # This file
 ```
