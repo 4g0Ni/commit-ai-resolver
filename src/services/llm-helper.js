@@ -7,9 +7,9 @@
 import { DefaultAzureCredential } from '@azure/identity';
 import { AzureOpenAI } from 'openai';
 
-const AZURE_OPENAI_ENDPOINT = 'https://chezh-m7lorxce-eastus2.openai.azure.com/';
-const AZURE_OPENAI_DEPLOYMENT = 'gpt-4.1';
-const AZURE_OPENAI_API_VERSION = '2025-01-01-preview';
+const AZURE_OPENAI_ENDPOINT = 'https://yizha-maz2xf24-swedencentral.openai.azure.com/';
+const AZURE_OPENAI_DEPLOYMENT = 'gpt-5.4';
+const AZURE_OPENAI_API_VERSION = '2025-04-01-preview';
 const COGNITIVE_SERVICES_SCOPE = 'https://cognitiveservices.azure.com/.default';
 
 const credential = new DefaultAzureCredential();
@@ -25,23 +25,56 @@ const client = new AzureOpenAI({
 
 /**
  * Send a chat completion request to Azure OpenAI.
+ * Retries up to `maxRetries` times on transient errors.
  *
  * @param {string} systemPrompt - System prompt
  * @param {Array} messages - Array of { role, content } messages
- * @param {object} opts - Optional overrides (temperature, max_tokens)
+ * @param {object} opts - Optional overrides (temperature, max_completion_tokens, maxRetries)
  * @returns {Promise<string>} LLM response text
  */
 async function llmHelper(systemPrompt, messages, opts = {}) {
-    const result = await client.chat.completions.create({
-        messages: [
-            { role: 'system', content: systemPrompt },
-            ...messages,
-        ],
-        temperature: opts.temperature ?? 0.2,
-        max_tokens: opts.max_tokens ?? 2048,
-    });
+    const maxRetries = opts.maxRetries ?? 3;
+    let lastError;
 
-    return result.choices?.[0]?.message?.content ?? '';
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            const timeoutMs = opts.timeout ?? 120000; // 2 min timeout
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+            const llmStart = Date.now();
+            const inputChars = messages.reduce((sum, m) => sum + (m.content?.length || 0), 0);
+            const result = await client.chat.completions.create({
+                messages: [
+                    { role: 'system', content: systemPrompt },
+                    ...messages,
+                ],
+                temperature: opts.temperature ?? 0.2,
+                max_completion_tokens: opts.max_completion_tokens ?? opts.max_tokens ?? 128000,
+            }, { signal: controller.signal });
+
+            clearTimeout(timer);
+            const llmElapsed = Date.now() - llmStart;
+            const usage = result.usage;
+            if (llmElapsed > 10000) {
+                console.warn(`      ⏱ LLM slow (${(llmElapsed/1000).toFixed(1)}s) input=${(inputChars/1024).toFixed(0)}KB tokens=${usage?.prompt_tokens || '?'}/${usage?.completion_tokens || '?'}`);
+            }
+            return result.choices?.[0]?.message?.content ?? '';
+        } catch (err) {
+            lastError = err;
+            // Don't retry on 4xx client errors (except 429 rate limit)
+            const status = err.status || err.statusCode;
+            if (status && status >= 400 && status < 500 && status !== 429) {
+                throw err;
+            }
+            if (attempt < maxRetries) {
+                const delay = Math.min(1000 * Math.pow(2, attempt - 1), 10000);
+                console.warn(`  LLM retry ${attempt}/${maxRetries} after ${delay}ms: ${err.message}`);
+                await new Promise(r => setTimeout(r, delay));
+            }
+        }
+    }
+    throw lastError;
 }
 
 export { llmHelper, client };

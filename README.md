@@ -2,17 +2,31 @@
 
 ## 1. Overview
 
-**Commit AI Resolver** is an LLM-powered daily change tracking and regression diagnosis system. It automatically collects, summarizes, and indexes daily code changes and configuration diffs across multiple repositories, then exposes an interactive LLM chat interface that enables engineers to quickly correlate production incidents with recent deployments.
+**Commit AI Resolver** is an LLM-powered daily change tracking and regression diagnosis system. It automatically collects, summarizes, and indexes daily code changes and configuration diffs across multiple repositories, then exposes a React dashboard with an interactive LLM chat interface that enables engineers to quickly correlate production incidents with recent deployments.
+
+### Implementation Status
+
+| Component | Status | Notes |
+|---|---|---|
+| ADO Git integration (commits, diffs, tags) | ✅ Done | 3 tag strategies supported |
+| LLM commit summarization | ✅ Done | GPT-5.4, 10x parallel, retry, diff filtering |
+| Config/pilot change detection | ✅ Done | changeType + configChanges fields |
+| React dashboard | ✅ Done | Dark theme, chart, filters, metrics |
+| LLM chat interface | ✅ Done | Markdown rendering, context-aware |
+| Vector search (RAG) | ✅ Done | LanceDB embedded vector DB, text-embedding-3-large, LLM-based query intent extraction |
+| Daily data generation (cached) | ✅ Done | Incremental, skip cached commits, --from/--to date range |
+| C2C Cosmos DB pilot tracker | ❌ Planned | DB-level pilot ramp tracking |
+| Queryable DB storage | ❌ Planned | Currently JSON files |
 
 ### Repositories in Scope
 
-| Repository | Domain |
-|---|---|
-| AdsAppsCampaignUI | Campaign management UI |
-| AdsAppsDB | Database / data layer |
-| AdsAppsMT | Middle-tier services |
-| AnB | Ads & Billing platform |
-| AdsAppUI | Ads Apps UI shell |
+| Repository | Domain | Tag Strategy | Status |
+|---|---|---|---|
+| AdsAppsCampaignUI | Campaign management UI | Date-sorted | ✅ Active |
+| AdsAppsMT | Middle-tier services | Rolling | ✅ Active |
+| AdsAppUI | Ads Apps UI shell | Versioned | ✅ Active |
+| AdsAppsDB | Database / data layer | Versioned | Commented out |
+| AnB | Ads & Billing platform | Versioned | Commented out |
 
 ---
 
@@ -34,20 +48,33 @@
 - **Feature pilot flags** — Any flag added, removed, or whose ramp percentage / ring changed.
 - **Dynamic configs** — Key-value configuration entries that control runtime behavior in both UI and MT layers.
 
-#### Detection Sources
+#### Current Implementation (Code-Level Detection)
 
-**Source A: Code-level flag/config diffs**
+Each commit diff is analyzed by the LLM to detect config changes. The summarizer classifies every commit as:
+- `code` — Pure code changes
+- `config` — Only changes to pilot flags, feature gates, experiment definitions, ramp percentages, or configuration files
+- `mixed` — Both code and config changes
 
-- Diff the flag/config definition files (or API snapshots) between today's build and yesterday's build.
-- For each change, capture:
-  - Flag / config key name
-  - Old value → New value
-  - Repository & file path
-  - Commit SHA and PR link
-  - Author
-  - Timestamp
+For `config` and `mixed` commits, a `configChanges` array captures each flag/config key with its action (added/modified/removed) and a brief description.
 
-**Source B: C2C Campaign DB → Cosmos (DB-level pilot changes)**
+**Detection is based on:**
+- File names containing `config`, `pilot`, `flag`, `experiment`, `feature-gate`, `dynamic-config`
+- JSON/XML config files
+- The LLM prompt instructs the model to identify these patterns in diffs
+
+#### Diff Filtering (Noise Reduction)
+
+Before sending diffs to the LLM, files are classified by `src/services/diff-filter.js`:
+
+| Category | Action | Examples |
+|---|---|---|
+| **Ignored** | Dropped entirely | `.snap`, `.png`, `.woff2`, `.Designer.cs` |
+| **Auto-summarized** | LOW risk, no LLM call | Lock files, `.min.js`, `.resx`, `.xlf`, `/dist/`, `.map` |
+| **Needs diff** | Full diff sent to LLM | Everything else |
+
+Per-repo custom rules exist for CampaignUI (localization), MT (generated code), and AdsAppUI (localization). Commits with >50 files get file-list-only summaries.
+
+#### Planned: C2C Cosmos DB Pilot Ramp Tracker
 
 - Read pilot ramp data from the C2C campaign database replicated to Cosmos DB.
 - For each pilot ID, capture:
@@ -71,69 +98,85 @@ Flag flips and config changes can alter production behavior **without any code d
 
 ### 3.2 Pillar 2: Code Commit Changes per Release
 
-#### What to Track
+#### Current Implementation
 
-- All commits merged to `master` (via closed PRs) between yesterday's release tag and today's release tag for each repository.
+All commits merged to `master` are fetched per-day via the ADO REST API v7.1 `fetchCommitsBetweenDates` endpoint.
 
-#### Per-Commit Processing
+#### Per-Commit Processing Pipeline
 
-For each commit, the system must:
+For each commit, the system:
 
-1. Fetch the full diff.
-2. **Filter out noise** — Skip or minimally summarize changes to:
-   - `pnpm-lock.yaml` / lock files (can be 20K+ lines)
-   - Auto-generated proxy files
-   - Other configurable exclusion patterns (glob-based)
-3. **LLM summarization** — Generate:
-   - A concise title (one line)
-   - A detailed summary paragraph explaining what changed and why
-   - Risk assessment tag: `[LOW]` / `[MEDIUM]` / `[HIGH]` based on scope and blast radius
-4. Capture metadata:
-   - Commit SHA
-   - PR number & link
-   - Author
-   - Files changed (count + list)
-   - Repository name
-   - Merge timestamp
+1. **Fetches the changed files list** (cheap ADO API call) via `fetchCommitChanges`.
+2. **Classifies files** using `diff-filter.js` — ignored / auto-summarized / needs-diff.
+3. **Skips LLM entirely** for commits where all files are auto-classifiable (instant LOW risk).
+4. **Fetches diffs only for relevant files** — skips lock files, assets, generated code.
+5. **LLM summarization** (10x parallel, 3 retries with exponential backoff) — produces:
+   - Concise title (one line)
+   - Detailed summary paragraph
+   - Risk assessment: `LOW` / `MEDIUM` / `HIGH`
+   - Change type: `code` / `config` / `mixed`
+   - Config changes array (key, action, detail)
+   - Affected areas and feature flags
+6. **Captures metadata:** SHA, author, date, message, URL
+7. **Caches results** — existing commit summaries in JSON files are reused unless `--force` is specified
 
 ---
 
 ## 4. Daily Report
 
-A **Daily Change Report** is produced for each calendar day and stored as a structured document (JSON + rendered Markdown).
+Daily reports are stored as JSON files in `data/daily/YYYY-MM-DD.json`, generated by `src/scripts/generate-sample-data.js`.
 
-### Report Structure
+### JSON Structure
 
+```json
+{
+  "date": "2026-04-02",
+  "repositories": {
+    "AdsAppsCampaignUI": {
+      "repo": "AdsAppsCampaignUI",
+      "commits": [
+        {
+          "commitId": "...",
+          "shortId": "8c4b796e",
+          "author": "...",
+          "date": "...",
+          "url": "...",
+          "summary": {
+            "title": "...",
+            "summary": "...",
+            "riskLevel": "MEDIUM",
+            "affectedAreas": ["Scope Bar", "Campaign Dropdown"],
+            "flags": ["IsRenameHotelToLodgingEnabled"],
+            "changeType": "code",
+            "configChanges": []
+          }
+        }
+      ],
+      "stats": { "total": 65, "high": 2, "medium": 35, "low": 28, "configChanges": 5 }
+    },
+    "AdsAppsMT": { "..." : "..." },
+    "AdsAppUI": { "..." : "..." }
+  },
+  "summary": {
+    "totalCommits": 98,
+    "totalHigh": 8,
+    "totalMedium": 56,
+    "totalLow": 34,
+    "totalConfigChanges": 30,
+    "reposIncluded": ["AdsAppsCampaignUI", "AdsAppsMT", "AdsAppUI"]
+  }
+}
 ```
-Daily Report — 2026-03-31
-├── Repositories
-│   ├── AdsAppsCampaignUI
-│   │   ├── Pilot Flag Changes [ ]
-│   │   ├── Dynamic Config Changes [ ]
-│   │   └── Commits [ ]
-│   ├── AdsAppsDB
-│   │   └── ...
-│   ├── AdsAppsMT
-│   │   └── ...
-│   ├── AnB
-│   │   └── ...
-│   └── AdsAppUI
-│       └── ...
-└── Summary Statistics
-    ├── Total commits: N
-    ├── Total flag changes: N
-    ├── High-risk changes: N
-    └── Repositories touched: [ ]
-```
 
-### Date Chart
+### Dashboard Visualization
 
-A historical timeline view where each day is a row/card showing:
+The React dashboard renders daily reports as:
 
-- Number of commits per repo
-- Number of flag/config changes
-- High-risk change indicators
-- Drill-down links to the full report
+- **Stacked bar chart** — One bar per day, segments colored by risk level, clickable
+- **Vertical metrics sidebar** — Aggregate counts with color-coded borders
+- **Commit detail view** — Per-repo sections with full commit cards, config badges, and flag tags
+- **Date range picker** — Filter to 7/14/30 day windows
+- **Repo filter** — Toggle individual repos on/off
 
 ---
 
@@ -298,6 +341,98 @@ WHERE ABS(new_percentage - old_percentage) > 10 AND date = '2026-03-30';
 | Prompt engineering | System prompts that instruct the model to correlate user-described symptoms with retrieved change data and produce ranked suspect lists with links. | [10544208](https://msasg.visualstudio.com/Bing_Ads/_workitems/edit/10544208) |
 | Context window management | Handle large report windows (multiple days × multiple repos) within token limits — summarize or paginate as needed. | [10544209](https://msasg.visualstudio.com/Bing_Ads/_workitems/edit/10544209) |
 | Response formatting | Structured output: ranked suspects, links, risk assessment, suggested next steps. | [10544210](https://msasg.visualstudio.com/Bing_Ads/_workitems/edit/10544210) |
+
+### 6.6 Vector Search & Embedding (RAG)
+
+#### Architecture
+
+The chat interface uses a **Retrieval-Augmented Generation (RAG)** pipeline to avoid stuffing all commit summaries into the LLM context window. Instead, the user's query is embedded and matched against pre-computed commit embeddings via cosine similarity.
+
+```
+User Query
+    │
+    ├──── LLM Intent Extraction ──┐
+    │     (extract author, repo,  │
+    │      date range, rewritten  │
+    │      search query via LLM)  │
+    ▼                             ▼
+┌─────────────────┐     ┌───────────────────┐
+│  Embed Query    │────▶│  LanceDB Search   │
+│  (text-embed-   │     │  (cosine + WHERE  │
+│   3-large)      │     │   pre-filters)    │
+└─────────────────┘     └───────────────────┘
+                                │
+                                ▼
+                        ┌───────────────────┐
+                        │  Build Context    │
+                        │  (top 30 commits) │
+                        └───────────────────┘
+                                │
+                                ▼
+                        ┌───────────────────┐
+                        │  LLM Chat         │
+                        │  (GPT-5.4)        │
+                        └───────────────────┘
+```
+
+#### LLM-Based Query Intent Extraction
+
+The chat API uses a lightweight LLM pre-processing call to extract structured filters from natural language queries. This replaces the previous regex-based approach which was fragile (e.g., "changes" falsely matching author "Chang").
+
+The LLM extracts a JSON object with:
+- `author` — person name if the query is about a specific person's commits
+- `repo` — exact repo name if mentioned (recognizes aliases like "campaignui", "cmui")
+- `dateFrom` / `dateTo` — date range if time is mentioned (resolves relative dates like "last week", "yesterday")
+- `searchQuery` — a rewritten version optimized for embedding similarity search (stripped of filter terms)
+
+When any filter is active, `minScore` is lowered to 0.05 so filtering dominates over semantic ranking.
+
+#### Components
+
+| Component | File | Description |
+|---|---|---|
+| Embedding client | `src/services/embedding-client.js` | Azure OpenAI `text-embedding-3-large` client (3072 dimensions), uses `DefaultAzureCredential`, same endpoint as the LLM |
+| Vector store | `src/services/vector-store.js` | LanceDB embedded vector DB (`data/lancedb/`). Cosine similarity search with SQL pre-filtering on author, repo, and date columns |
+| Embedding generator | `src/scripts/generate-embeddings.js` | Reads daily JSON files, builds searchable text per commit, generates embeddings in batches of 16, upserts into vector store. Incremental (skips already-embedded commits) |
+| Chat API (RAG) | `api/server.js` | LLM intent extraction (author, repo, date, search query) → embeds optimized search query → searches LanceDB with pre-filters → sends relevant commits as LLM context. Falls back to full-context if no vector store |
+
+#### Embedding Model
+
+- **Model:** `text-embedding-3-large` (3072 dimensions)
+- **API version:** `2023-05-15`
+- **Endpoint:** Same Azure OpenAI resource as the LLM
+- **Auth:** `DefaultAzureCredential` (Azure AD token)
+
+#### Text Representation per Commit
+
+Each commit is embedded as a concatenation of:
+- Date and repository name
+- LLM-generated title and summary
+- Risk level and author
+- Affected areas, feature flags, config changes
+
+#### Usage
+
+```bash
+# Generate embeddings for all daily data (incremental)
+cd src && node scripts/generate-embeddings.js
+
+# Re-embed last 7 days
+node scripts/generate-embeddings.js --days 7
+
+# Re-embed a specific date range
+node scripts/generate-embeddings.js --from 2026-03-25 --to 2026-03-31 --force
+
+# Force re-embed everything
+node scripts/generate-embeddings.js --force
+```
+
+#### Fallback Behavior
+
+The chat API gracefully degrades:
+1. **Vector store available + results found** → RAG path (top-20 semantically relevant commits)
+2. **Vector store available but no results** → Falls back to full context stuffing
+3. **No vector store** → Full context stuffing (original behavior)
 
 ---
 

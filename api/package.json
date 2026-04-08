@@ -10,6 +10,8 @@
   },
   "dependencies": {
     "@azure/identity": "^4.0.0",
+    "@lancedb/lancedb": "^0.27.2",
+    "apache-arrow": "^18.1.0",
     "cors": "^2.8.5",
     "express": "^5.1.0",
     "openai": "^6.33.0"

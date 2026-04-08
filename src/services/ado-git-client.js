@@ -11,30 +11,56 @@ import { ADO_ORG, ADO_PROJECT, RELEASE_PIPELINE_DEFINITION_ID, RELEASE_LOG_TASKS
 
 const ADO_SCOPE = '499b84ac-1321-427f-aa17-267ca6975798/.default';
 
+// Cached credential instance — reuse across calls to avoid contention
+const credential = new DefaultAzureCredential();
+let _cachedToken = null;
+let _tokenExpiry = 0;
+let _tokenPromise = null;
+
 /**
  * Get a Bearer token for Azure DevOps REST APIs.
- * Uses DefaultAzureCredential which supports:
- *   - Az CLI login (local dev)
- *   - Managed Identity (deployed)
+ * Caches the token and reuses until 5 min before expiry.
  */
 async function getCredentialToken() {
-    const credential = new DefaultAzureCredential();
-    const tokenResponse = await credential.getToken(ADO_SCOPE);
-    return tokenResponse.token;
+    const now = Date.now();
+    if (_cachedToken && now < _tokenExpiry - 300000) {
+        return _cachedToken;
+    }
+    // Dedup concurrent token requests
+    if (!_tokenPromise) {
+        _tokenPromise = credential.getToken(ADO_SCOPE).then(resp => {
+            _cachedToken = resp.token;
+            _tokenExpiry = resp.expiresOnTimestamp;
+            _tokenPromise = null;
+            return _cachedToken;
+        });
+    }
+    return _tokenPromise;
 }
 
 /**
  * Make an authenticated GET request to Azure DevOps REST API.
  */
 async function adoGet(url) {
+    const start = Date.now();
     const token = await getCredentialToken();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 60000); // 60s timeout
     const response = await fetch(url, {
         method: 'GET',
         headers: {
             Authorization: `Bearer ${token}`,
             'Content-Type': 'application/json',
         },
+        signal: controller.signal,
     });
+    clearTimeout(timer);
+    const elapsed = Date.now() - start;
+    if (elapsed > 5000) {
+        // Extract API name from URL for readable logs
+        const apiPath = url.replace(/.*_apis\//, '').split('?')[0];
+        console.warn(`      ⏱ ADO slow (${(elapsed/1000).toFixed(1)}s): ${apiPath}`);
+    }
     if (!response.ok) {
         const errorText = await response.text();
         throw new Error(`ADO API error ${response.status}: ${errorText}`);
@@ -320,14 +346,140 @@ async function fetchFileContent(repoConfig, filePath, commitId) {
     });
     const url = `https://dev.azure.com/${ADO_ORG}/${repoConfig.project}/_apis/git/repositories/${repoConfig.name}/items?${params}`;
 
+    const start = Date.now();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 60000);
     const response = await fetch(url, {
         method: 'GET',
         headers: { Authorization: `Bearer ${token}` },
+        signal: controller.signal,
     });
+    clearTimeout(timer);
+    const elapsed = Date.now() - start;
+    if (elapsed > 5000) {
+        console.warn(`      ⏱ ADO file slow (${(elapsed/1000).toFixed(1)}s): ${filePath}`);
+    }
 
     if (!response.ok) return null;
     const content = await response.text();
     return minifyContent(content, filePath);
+}
+
+/**
+ * Fetch multiple file contents at a specific commit in a single API call.
+ * Uses ADO's Items Batch API to avoid N individual requests.
+ *
+ * @param {object} repoConfig - Repository config
+ * @param {string[]} filePaths - Array of file paths to fetch
+ * @param {string} commitId - The commit SHA
+ * @returns {Promise<Map<string, string|null>>} Map of filePath → content (or null)
+ */
+async function fetchFileContentBatch(repoConfig, filePaths, commitId) {
+    if (filePaths.length === 0) return new Map();
+
+    const token = await getCredentialToken();
+    const url = `https://dev.azure.com/${ADO_ORG}/${repoConfig.project}/_apis/git/repositories/${repoConfig.name}/itemsbatch?api-version=7.1`;
+
+    const body = {
+        itemDescriptors: filePaths.map(path => ({
+            path,
+            version: commitId,
+            versionType: 'commit',
+            recursionLevel: 'none',
+        })),
+        includeContentMetadata: true,
+    };
+
+    const start = Date.now();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 60000);
+
+    let batchResult;
+    try {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                Authorization: `Bearer ${token}`,
+                'Content-Type': 'application/json',
+            },
+            signal: controller.signal,
+        body: JSON.stringify(body),
+        });
+        clearTimeout(timer);
+
+        if (!response.ok) {
+            // Fallback to individual fetches if batch API fails
+            console.warn(`      ⚠ Batch API failed (${response.status}), falling back to individual fetches`);
+            return fetchFileContentIndividual(repoConfig, filePaths, commitId);
+        }
+        batchResult = await response.json();
+    } catch (err) {
+        clearTimeout(timer);
+        console.warn(`      ⚠ Batch API error: ${err.message}, falling back to individual fetches`);
+        return fetchFileContentIndividual(repoConfig, filePaths, commitId);
+    }
+
+    const elapsed = Date.now() - start;
+    if (elapsed > 5000) {
+        console.warn(`      ⏱ ADO batch slow (${(elapsed/1000).toFixed(1)}s): ${filePaths.length} files`);
+    }
+
+    // The batch API returns item metadata but not content directly.
+    // We need to fetch content using the objectId (blob SHA) from the batch response.
+    const results = new Map();
+    const contentFetches = [];
+
+    for (let i = 0; i < filePaths.length; i++) {
+        const items = batchResult.value?.[i];
+        const item = items?.[0]; // each descriptor returns an array of items
+        if (!item || !item.objectId) {
+            results.set(filePaths[i], null);
+            continue;
+        }
+
+        // Fetch blob content by objectId — faster than by path+version
+        contentFetches.push({ path: filePaths[i], objectId: item.objectId });
+    }
+
+    // Fetch all blob contents in parallel
+    const BATCH_CONCURRENCY = 15;
+    for (let i = 0; i < contentFetches.length; i += BATCH_CONCURRENCY) {
+        const batch = contentFetches.slice(i, i + BATCH_CONCURRENCY);
+        await Promise.all(batch.map(async ({ path, objectId }) => {
+            const blobUrl = `https://dev.azure.com/${ADO_ORG}/${repoConfig.project}/_apis/git/repositories/${repoConfig.name}/blobs/${objectId}?api-version=7.1&$format=text`;
+            try {
+                const blobResp = await fetch(blobUrl, {
+                    headers: { Authorization: `Bearer ${token}` },
+                });
+                if (blobResp.ok) {
+                    const content = await blobResp.text();
+                    results.set(path, minifyContent(content, path));
+                } else {
+                    results.set(path, null);
+                }
+            } catch {
+                results.set(path, null);
+            }
+        }));
+    }
+
+    return results;
+}
+
+/**
+ * Fallback: fetch file contents individually (used when batch API fails).
+ */
+async function fetchFileContentIndividual(repoConfig, filePaths, commitId) {
+    const results = new Map();
+    const CONCURRENCY = 10;
+    for (let i = 0; i < filePaths.length; i += CONCURRENCY) {
+        const batch = filePaths.slice(i, i + CONCURRENCY);
+        await Promise.all(batch.map(async (path) => {
+            const content = await fetchFileContent(repoConfig, path, commitId);
+            results.set(path, content);
+        }));
+    }
+    return results;
 }
 
 /**
@@ -539,6 +691,7 @@ export {
     fetchCommitChanges,
     fetchCommitDiff,
     fetchFileContent,
+    fetchFileContentBatch,
     minifyContent,
     fetchReleaseInfo,
 };
