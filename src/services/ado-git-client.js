@@ -632,6 +632,62 @@ async function fetchReleaseInfo(dateStr) {
     };
 }
 
+/**
+ * List recent release builds from the last N days with their child build IDs.
+ *
+ * @param {number} days - Number of days to look back (default: 7)
+ * @returns {Promise<Array>} Array of { build, logResults } objects
+ */
+async function fetchReleaseList(days = 7) {
+    const minTime = new Date();
+    minTime.setDate(minTime.getDate() - days);
+
+    const params = new URLSearchParams({
+        'definitions': String(RELEASE_PIPELINE_DEFINITION_ID),
+        'minTime': minTime.toISOString(),
+        'queryOrder': 'queueTimeDescending',
+        '$top': '50',
+        'api-version': '7.1',
+    });
+    const url = `https://dev.azure.com/${ADO_ORG}/${ADO_PROJECT}/_apis/build/builds?${params}`;
+    const result = await adoGet(url);
+    const builds = result.value || [];
+
+    // For each build, fetch timeline and extract child build Run IDs
+    const results = [];
+    for (const build of builds) {
+        const records = await fetchBuildTimeline(build.id);
+
+        const logResults = {};
+        for (const [key, taskName] of Object.entries(RELEASE_LOG_TASKS)) {
+            const record = records.find(r => r.name && r.name.includes(taskName));
+            if (!record || !record.log?.id) {
+                logResults[key] = { taskName, found: false };
+                continue;
+            }
+
+            const logText = await fetchBuildLogText(build.id, record.log.id);
+            const parsed = parseReleaseLogInfo(logText);
+            logResults[key] = { taskName, found: true, ...parsed };
+        }
+
+        results.push({
+            build: {
+                id: build.id,
+                buildNumber: build.buildNumber,
+                status: build.status,
+                result: build.result,
+                startTime: build.startTime,
+                finishTime: build.finishTime,
+                url: build._links?.web?.href ?? null,
+            },
+            logResults,
+        });
+    }
+
+    return results;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -694,4 +750,5 @@ export {
     fetchFileContentBatch,
     minifyContent,
     fetchReleaseInfo,
+    fetchReleaseList,
 };

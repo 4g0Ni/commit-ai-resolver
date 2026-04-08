@@ -70,6 +70,9 @@ app.use((req, res, next) => {
 // --- Vector store ---
 import { searchVectors, getVectorStats } from '../src/services/vector-store.js';
 
+// --- Release list ---
+import { fetchReleaseList } from '../src/services/ado-git-client.js';
+
 /** Generate a query embedding using the embedding client. */
 async function embedQuery(text) {
     const result = await embeddingClient.embeddings.create({
@@ -152,6 +155,23 @@ app.get('/api/days/:date', async (req, res) => {
         } else {
             res.status(500).json({ error: err.message });
         }
+    }
+});
+
+// GET /api/releases — list recent release builds (cached 5 min)
+let _releaseCache = { data: null, expiresAt: 0 };
+
+app.get('/api/releases', async (req, res) => {
+    try {
+        const now = Date.now();
+        if (_releaseCache.data && now < _releaseCache.expiresAt) {
+            return res.json(_releaseCache.data);
+        }
+        const releases = await fetchReleaseList(14);
+        _releaseCache = { data: releases, expiresAt: now + 5 * 60 * 1000 };
+        res.json(releases);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
     }
 });
 

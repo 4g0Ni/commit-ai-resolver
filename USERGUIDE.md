@@ -300,6 +300,14 @@ Release Info for: 20260407
     Source Branch:  refs/heads/master
 ```
 
+### List recent release builds
+
+```bash
+node index.js --releaseList
+```
+
+Lists all release builds from the last 7 days in a table showing the release name, build ID, status, and the child build IDs for AdsAppsCampaignUI and AdsAppUI.
+
 ---
 
 ## Risk Level Criteria

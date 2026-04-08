@@ -21,6 +21,12 @@ export async function fetchDayRange(from, to) {
     return res.json();
 }
 
+export async function fetchReleases() {
+    const res = await fetch(`${API_BASE}/releases`);
+    if (!res.ok) throw new Error(`Failed to fetch releases: ${res.statusText}`);
+    return res.json();
+}
+
 export async function sendChatMessage(message, history = []) {
     const res = await fetch(`${API_BASE}/chat`, {
         method: 'POST',

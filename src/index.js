@@ -7,6 +7,7 @@
  *   node index.js --tags             — List recent release tags per repo
  *   node index.js --summarize        — Fetch release commits + LLM summary for each
  *   node index.js --releaseInfo 20260407 — Show release build info for a date
+ *   node index.js --releaseList          — List release builds from the last 7 days
  *   node index.js --repos r1,r2      — Limit to specific repos (comma-separated)
  */
 
@@ -16,6 +17,7 @@ import {
     fetchCommitsBetweenReleaseTags,
     resolveReleaseTags,
     fetchReleaseInfo,
+    fetchReleaseList,
 } from './services/ado-git-client.js';
 import { summarizeCommits } from './services/commit-summarizer.js';
 
@@ -50,6 +52,8 @@ function parseArgs() {
                 console.error('Error: --releaseInfo requires a date argument in yyyyMMdd format');
                 process.exit(1);
             }
+        } else if (args[i] === '--releaseList') {
+            opts.mode = 'releaseList';
         }
     }
     return opts;
@@ -254,6 +258,60 @@ async function modeReleaseInfo(dateStr) {
 }
 
 // ---------------------------------------------------------------------------
+// Mode: releaseList — list recent release builds
+// ---------------------------------------------------------------------------
+async function modeReleaseList() {
+    console.log(`\n${'='.repeat(80)}`);
+    console.log(`Release Builds (last 7 days)`);
+    console.log(`${'='.repeat(80)}`);
+
+    try {
+        const releases = await fetchReleaseList(7);
+
+        if (releases.length === 0) {
+            console.log('  No release builds found in the last 7 days.');
+            return;
+        }
+
+        // Table header
+        const hdr = [
+            'Release Name'.padEnd(28),
+            'Build ID'.padEnd(10),
+            'Status'.padEnd(12),
+            'CampaignUI Build'.padEnd(18),
+            'CampaignUI SHA'.padEnd(16),
+            'AppUI Build'.padEnd(18),
+            'AppUI SHA'.padEnd(16),
+        ].join(' | ');
+        console.log(`\n  ${hdr}`);
+        console.log(`  ${'-'.repeat(hdr.length)}`);
+
+        for (const { build, logResults } of releases) {
+            const campaignRunId = logResults.AdsAppsCampaignUI?.runId ?? 'N/A';
+            const campaignSHA = (logResults.AdsAppsCampaignUI?.sourceCommit ?? 'N/A').substring(0, 12);
+            const appUIRunId = logResults.AdsAppUI?.runId ?? 'N/A';
+            const appUISHA = (logResults.AdsAppUI?.sourceCommit ?? 'N/A').substring(0, 12);
+            const status = build.result ?? build.status;
+
+            const row = [
+                build.buildNumber.padEnd(28),
+                String(build.id).padEnd(10),
+                status.padEnd(12),
+                campaignRunId.padEnd(18),
+                campaignSHA.padEnd(16),
+                appUIRunId.padEnd(18),
+                appUISHA.padEnd(16),
+            ].join(' | ');
+            console.log(`  ${row}`);
+        }
+
+        console.log(`\n  Total: ${releases.length} releases\n`);
+    } catch (err) {
+        console.error(`  Error: ${err.message}`);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 async function main() {
@@ -262,6 +320,12 @@ async function main() {
     if (opts.mode === 'releaseInfo') {
         console.log(`Mode: releaseInfo | Date: ${opts.releaseDate}`);
         await modeReleaseInfo(opts.releaseDate);
+        return;
+    }
+
+    if (opts.mode === 'releaseList') {
+        console.log(`Mode: releaseList`);
+        await modeReleaseList();
         return;
     }
 
