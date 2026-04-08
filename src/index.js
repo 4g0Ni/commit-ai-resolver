@@ -6,6 +6,7 @@
  *   node index.js --latest [N]       — Fetch latest N commits per repo (default: 10)
  *   node index.js --tags             — List recent release tags per repo
  *   node index.js --summarize        — Fetch release commits + LLM summary for each
+ *   node index.js --releaseInfo 20260407 — Show release build info for a date
  *   node index.js --repos r1,r2      — Limit to specific repos (comma-separated)
  */
 
@@ -14,12 +15,13 @@ import {
     fetchLatestCommits,
     fetchCommitsBetweenReleaseTags,
     resolveReleaseTags,
+    fetchReleaseInfo,
 } from './services/ado-git-client.js';
 import { summarizeCommits } from './services/commit-summarizer.js';
 
 function parseArgs() {
     const args = process.argv.slice(2);
-    const opts = { mode: 'release', repos: null, top: 10, maxSummarize: 5 };
+    const opts = { mode: 'release', repos: null, top: 10, maxSummarize: 5, releaseDate: null };
 
     for (let i = 0; i < args.length; i++) {
         if (args[i] === '--latest') {
@@ -39,6 +41,15 @@ function parseArgs() {
         } else if (args[i] === '--repos' && args[i + 1]) {
             opts.repos = args[i + 1].split(',').map(s => s.trim());
             i++;
+        } else if (args[i] === '--releaseInfo') {
+            opts.mode = 'releaseInfo';
+            if (args[i + 1] && !args[i + 1].startsWith('--')) {
+                opts.releaseDate = args[i + 1];
+                i++;
+            } else {
+                console.error('Error: --releaseInfo requires a date argument in yyyyMMdd format');
+                process.exit(1);
+            }
         }
     }
     return opts;
@@ -191,10 +202,69 @@ async function modeSummarize(repos, maxSummarize) {
 }
 
 // ---------------------------------------------------------------------------
+// Mode: releaseInfo — release build info by date
+// ---------------------------------------------------------------------------
+async function modeReleaseInfo(dateStr) {
+    if (!/^\d{8}$/.test(dateStr)) {
+        console.error(`Invalid date format: "${dateStr}". Expected yyyyMMdd (e.g. 20260407)`);
+        process.exit(1);
+    }
+
+    console.log(`\n${'='.repeat(60)}`);
+    console.log(`Release Info for: ${dateStr}`);
+    console.log(`${'='.repeat(60)}`);
+
+    try {
+        const result = await fetchReleaseInfo(dateStr);
+
+        if (result.error) {
+            console.log(`  Error: ${result.error}`);
+            return;
+        }
+
+        const { build, logResults } = result;
+
+        console.log(`\n  Build ID:     ${build.id}`);
+        console.log(`  Build Number: ${build.buildNumber}`);
+        console.log(`  Status:       ${build.status} / ${build.result}`);
+        console.log(`  Started:      ${build.startTime}`);
+        console.log(`  Finished:     ${build.finishTime}`);
+        if (build.url) {
+            console.log(`  URL:          ${build.url}`);
+        }
+
+        for (const [repoKey, info] of Object.entries(logResults)) {
+            console.log(`\n  ${'-'.repeat(40)}`);
+            console.log(`  ${repoKey} (${info.taskName}):`);
+
+            if (!info.found) {
+                console.log(`    Not found: ${info.error}`);
+                continue;
+            }
+
+            console.log(`    Source Commit:  ${info.sourceCommit ?? 'N/A'}`);
+            console.log(`    Run ID:        ${info.runId ?? 'N/A'}`);
+            console.log(`    Source Branch:  ${info.sourceBranch ?? 'N/A'}`);
+        }
+
+        console.log();
+    } catch (err) {
+        console.error(`  Error: ${err.message}`);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 async function main() {
     const opts = parseArgs();
+
+    if (opts.mode === 'releaseInfo') {
+        console.log(`Mode: releaseInfo | Date: ${opts.releaseDate}`);
+        await modeReleaseInfo(opts.releaseDate);
+        return;
+    }
+
     const repos = getRepos(opts.repos);
 
     if (repos.length === 0) {

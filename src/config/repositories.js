@@ -6,6 +6,15 @@
 const ADO_ORG = 'msasg';
 const ADO_PROJECT = 'Bing_Ads';
 
+/** Pipeline definition ID for the release pipeline ("MAP WebUI Daily Shipping"). */
+const RELEASE_PIPELINE_DEFINITION_ID = 66277;
+
+/** Log task name patterns in the release build that contain source commit info. */
+const RELEASE_LOG_TASKS = {
+    AdsAppsCampaignUI: 'Log AdsAppsCampaignUI',
+    AdsAppUI:          'Log AdsAppUI_Release_WebUI',
+};
+
 /**
  * Tag strategy types:
  *   'dateSorted' — Tags like "Prefix.YYYYMMDD.NN". Sorted by date+sequence desc.
@@ -53,4 +62,4 @@ const REPOSITORIES = {
     // },
 };
 
-export { ADO_ORG, ADO_PROJECT, REPOSITORIES };
+export { ADO_ORG, ADO_PROJECT, REPOSITORIES, RELEASE_PIPELINE_DEFINITION_ID, RELEASE_LOG_TASKS };

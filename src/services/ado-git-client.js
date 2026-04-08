@@ -7,7 +7,7 @@
 
 import { DefaultAzureCredential } from '@azure/identity';
 import { createPatch } from 'diff';
-import { ADO_ORG, ADO_PROJECT } from '../config/repositories.js';
+import { ADO_ORG, ADO_PROJECT, RELEASE_PIPELINE_DEFINITION_ID, RELEASE_LOG_TASKS } from '../config/repositories.js';
 
 const ADO_SCOPE = '499b84ac-1321-427f-aa17-267ca6975798/.default';
 
@@ -40,6 +40,23 @@ async function adoGet(url) {
         throw new Error(`ADO API error ${response.status}: ${errorText}`);
     }
     return response.json();
+}
+
+/**
+ * Make an authenticated GET request that returns plain text.
+ * Used for build log endpoints which return text/plain.
+ */
+async function adoGetText(url) {
+    const token = await getCredentialToken();
+    const response = await fetch(url, {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`ADO API error ${response.status}: ${errorText}`);
+    }
+    return response.text();
 }
 
 /**
@@ -358,6 +375,112 @@ async function fetchCommitDiff(repoConfig, commitId) {
 }
 
 // ---------------------------------------------------------------------------
+// Release Build APIs
+// ---------------------------------------------------------------------------
+
+/**
+ * Find a release build by date from the configured release pipeline.
+ *
+ * @param {string} dateStr - Date in yyyyMMdd format (e.g. '20260407')
+ * @returns {Promise<object|null>} Build object or null if not found
+ */
+async function fetchBuildByDate(dateStr) {
+    const params = new URLSearchParams({
+        'definitions': String(RELEASE_PIPELINE_DEFINITION_ID),
+        'buildNumber': `*${dateStr}*`,
+        '$top': '1',
+        'api-version': '7.1',
+    });
+    const url = `https://dev.azure.com/${ADO_ORG}/${ADO_PROJECT}/_apis/build/builds?${params}`;
+    const result = await adoGet(url);
+    return result.value?.[0] ?? null;
+}
+
+/**
+ * Get the timeline records for a build (tasks, phases, stages).
+ *
+ * @param {number} buildId - The build ID
+ * @returns {Promise<Array>} Array of timeline record objects
+ */
+async function fetchBuildTimeline(buildId) {
+    const url = `https://dev.azure.com/${ADO_ORG}/${ADO_PROJECT}/_apis/build/builds/${buildId}/timeline?api-version=7.1`;
+    const result = await adoGet(url);
+    return result.records || [];
+}
+
+/**
+ * Fetch the plain-text content of a specific build log.
+ *
+ * @param {number} buildId - The build ID
+ * @param {number} logId - The log ID from a timeline record's log.id
+ * @returns {Promise<string>} Log text content
+ */
+async function fetchBuildLogText(buildId, logId) {
+    const url = `https://dev.azure.com/${ADO_ORG}/${ADO_PROJECT}/_apis/build/builds/${buildId}/logs/${logId}?api-version=7.1`;
+    return adoGetText(url);
+}
+
+/**
+ * Parse structured fields from a release log task's output.
+ *
+ * @param {string} logText - Raw log text
+ * @returns {object} Parsed fields { sourceCommit, runId, sourceBranch }
+ */
+function parseReleaseLogInfo(logText) {
+    const extract = (pattern) => {
+        const match = logText.match(pattern);
+        return match?.[1]?.trim() ?? null;
+    };
+    return {
+        sourceCommit: extract(/Source Commit:\s*(.+)/i),
+        runId:        extract(/Run ID:\s*(.+)/i),
+        sourceBranch: extract(/Source Branch:\s*(.+)/i),
+    };
+}
+
+/**
+ * High-level: find a release build for the given date and extract
+ * source commit info for each configured log task.
+ *
+ * @param {string} dateStr - Date in yyyyMMdd format
+ * @returns {Promise<object>} { build, logResults }
+ */
+async function fetchReleaseInfo(dateStr) {
+    const build = await fetchBuildByDate(dateStr);
+    if (!build) {
+        return { build: null, error: `No release build found for date ${dateStr}` };
+    }
+
+    const records = await fetchBuildTimeline(build.id);
+
+    const logResults = {};
+    for (const [key, taskName] of Object.entries(RELEASE_LOG_TASKS)) {
+        const record = records.find(r => r.name && r.name.includes(taskName));
+        if (!record || !record.log?.id) {
+            logResults[key] = { taskName, found: false, error: `Timeline record "${taskName}" not found` };
+            continue;
+        }
+
+        const logText = await fetchBuildLogText(build.id, record.log.id);
+        const parsed = parseReleaseLogInfo(logText);
+        logResults[key] = { taskName, found: true, logId: record.log.id, ...parsed };
+    }
+
+    return {
+        build: {
+            id: build.id,
+            buildNumber: build.buildNumber,
+            status: build.status,
+            result: build.result,
+            startTime: build.startTime,
+            finishTime: build.finishTime,
+            url: build._links?.web?.href ?? null,
+        },
+        logResults,
+    };
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -417,4 +540,5 @@ export {
     fetchCommitDiff,
     fetchFileContent,
     minifyContent,
+    fetchReleaseInfo,
 };
