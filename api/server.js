@@ -70,6 +70,9 @@ app.use((req, res, next) => {
 // --- Vector store ---
 import { searchVectors, getVectorStats } from '../src/services/vector-store.js';
 
+// --- Agentic search ---
+import { agenticSearch } from './agents/orchestrator.js';
+
 /** Generate a query embedding using the embedding client. */
 async function embedQuery(text) {
     const result = await embeddingClient.embeddings.create({
@@ -158,6 +161,7 @@ app.get('/api/days/:date', async (req, res) => {
 /**
  * Use a lightweight LLM call to extract structured search filters from a natural language query.
  * Returns: { author, repo, dateFrom, dateTo, searchQuery }
+ * @deprecated Kept for backward compatibility. The agentic pipeline uses intent-extractor agent instead.
  */
 async function extractQueryIntent(query) {
     const today = new Date().toISOString().slice(0, 10);
@@ -217,7 +221,7 @@ function daysAgo(n, today) {
     return d.toISOString().slice(0, 10);
 }
 
-// POST /api/chat — chat with LLM about summaries (RAG with vector search)
+// POST /api/chat — Agentic search pipeline with iterative refinement
 app.post('/api/chat', async (req, res) => {
     try {
         const { message, history = [] } = req.body;
@@ -225,59 +229,41 @@ app.post('/api/chat', async (req, res) => {
             return res.status(400).json({ error: 'message is required' });
         }
 
-        let contextText;
-        let searchMethod;
         const useVectors = await isVectorStoreAvailable();
         console.log(`  Chat query: "${message.slice(0, 100)}${message.length > 100 ? '...' : ''}"`);
 
         if (useVectors) {
-            // --- Step 1: LLM intent extraction ---
-            searchMethod = 'vector';
-            const t_intent = Date.now();
-            const intent = await extractQueryIntent(message);
-            console.log(`  Intent (${Date.now() - t_intent}ms): ${JSON.stringify(intent)}`);
-
-            const hasFilters = intent.author || intent.repo || intent.dateFrom || intent.dateTo;
-
-            // --- Step 2: Embed the optimized search query ---
+            // --- Agentic pipeline ---
             const t0 = Date.now();
-            const queryEmbedding = await embedQuery(intent.searchQuery);
-            console.log(`  Embedding: ${Date.now() - t0}ms`);
-
-            // --- Step 3: Vector search with extracted filters ---
-            const t1 = Date.now();
-            const results = await searchVectors(queryEmbedding, {
-                topK: 30,
-                minScore: hasFilters ? 0.05 : 0.20,
-                author: intent.author || undefined,
-                repo: intent.repo || undefined,
-                dateFrom: intent.dateFrom || undefined,
-                dateTo: intent.dateTo || undefined,
+            const result = await agenticSearch({
+                llm: openaiClient,
+                embedQuery,
+                searchVectors,
+                buildFullContext,
+                query: message,
+                history,
+                maxIterations: 5,
+                onProgress: (iteration, stage, details) => {
+                    // Log progress server-side
+                },
             });
-            console.log(`  Vector search: ${results.length} results in ${Date.now() - t1}ms`);
+            const totalMs = Date.now() - t0;
+            console.log(`  Agentic search: ${result.searchMethod}, ${result.iterations} iteration(s), ${totalMs}ms`);
 
-            if (results.length > 0) {
-                contextText = results.map(r =>
-                    `[${r.date}] ${r.repo} | ${r.metadata.riskLevel} | ${r.id} by ${r.metadata.author}\n` +
-                    `  Title: ${r.metadata.title}\n` +
-                    `  Summary: ${r.metadata.summary}\n` +
-                    (r.metadata.flags?.length ? `  Flags: ${r.metadata.flags.join(', ')}\n` : '') +
-                    (r.metadata.affectedAreas?.length ? `  Areas: ${r.metadata.affectedAreas.join(', ')}\n` : '') +
-                    `  Score: ${r.score.toFixed(3)}`
-                ).join('\n\n');
-            } else {
-                // Vector search returned nothing — fall back to full context
-                searchMethod = 'fallback-full';
-                contextText = await buildFullContext();
-            }
+            res.json({
+                reply: result.reply,
+                searchMethod: result.searchMethod,
+                type: result.type,
+                confidence: result.confidence,
+                iterations: result.iterations,
+                ...(result.type === 'clarification' ? { question: result.question } : {}),
+            });
         } else {
-            // --- Fallback: stuff all data into context (original behavior) ---
-            searchMethod = 'full';
-            contextText = await buildFullContext();
-        }
+            // --- Fallback: stuff all data into context (no vector store) ---
+            const contextText = await buildFullContext();
 
-        const systemPrompt = `You are an expert change analysis assistant for the Microsoft Advertising engineering team.
-You have access to commit summaries across repositories${searchMethod === 'vector' ? ' (retrieved via semantic search — most relevant results shown)' : ''}.
+            const systemPrompt = `You are an expert change analysis assistant for the Microsoft Advertising engineering team.
+You have access to commit summaries across repositories.
 Use this data to answer questions about:
 - What changed on a specific day or date range
 - Which commits might be related to an incident or regression
@@ -289,26 +275,27 @@ When correlating incidents with changes, consider a 2-day buffer (releases take 
 Always cite specific commit SHAs and authors when referencing changes.
 Be concise and actionable.
 
---- COMMIT SUMMARIES (${searchMethod}) ---
+--- COMMIT SUMMARIES (full) ---
 ${contextText}
 --- END SUMMARIES ---`;
 
-        const messages = [
-            { role: 'system', content: systemPrompt },
-            ...history.map(h => ({ role: h.role, content: h.content })),
-            { role: 'user', content: message },
-        ];
+            const messages = [
+                { role: 'system', content: systemPrompt },
+                ...history.map(h => ({ role: h.role, content: h.content })),
+                { role: 'user', content: message },
+            ];
 
-        const t2 = Date.now();
-        const result = await openaiClient.chat.completions.create({
-            messages,
-            temperature: 0.3,
-            max_completion_tokens: 2048,
-        });
-        console.log(`  LLM (${searchMethod}): ${Date.now() - t2}ms, tokens: ${result.usage?.total_tokens ?? '?'}`);
+            const t2 = Date.now();
+            const result = await openaiClient.chat.completions.create({
+                messages,
+                temperature: 0.3,
+                max_completion_tokens: 2048,
+            });
+            console.log(`  LLM (full): ${Date.now() - t2}ms, tokens: ${result.usage?.total_tokens ?? '?'}`);
 
-        const reply = result.choices?.[0]?.message?.content ?? 'No response from LLM.';
-        res.json({ reply, searchMethod });
+            const reply = result.choices?.[0]?.message?.content ?? 'No response from LLM.';
+            res.json({ reply, searchMethod: 'full', type: 'answer' });
+        }
     } catch (err) {
         console.error('Chat error:', err);
         res.status(500).json({ error: err.message });
