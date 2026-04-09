@@ -31,7 +31,7 @@ function skip(name) {
     skipped++;
 }
 
-const API_BASE = 'http://localhost:3001';
+const API_BASE = 'http://localhost:4399';
 async function apiAvailable() {
     try {
         const res = await fetch(`${API_BASE}/api/vectors/stats`);

@@ -21,7 +21,7 @@ import { AzureOpenAI } from 'openai';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, '..', 'data', 'daily');
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 4399;
 
 // --- Azure OpenAI setup ---
 const AZURE_OPENAI_ENDPOINT = 'https://yizha-maz2xf24-swedencentral.openai.azure.com/';

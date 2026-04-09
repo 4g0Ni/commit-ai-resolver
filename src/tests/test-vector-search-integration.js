@@ -130,7 +130,7 @@ console.log('\n== 4. Repo and date filtering ==');
 console.log('\n== 5. API endpoint (optional) ==');
 
 try {
-    const res = await fetch('http://localhost:3001/api/vectors/stats');
+    const res = await fetch('http://localhost:4399/api/vectors/stats');
     if (res.ok) {
         const apiStats = await res.json();
         assert(apiStats.totalCommits > 0, `API /vectors/stats returns ${apiStats.totalCommits} commits`);
@@ -142,7 +142,7 @@ try {
 }
 
 try {
-    const res = await fetch('http://localhost:3001/api/chat', {
+    const res = await fetch('http://localhost:4399/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: 'What changed today?' }),
