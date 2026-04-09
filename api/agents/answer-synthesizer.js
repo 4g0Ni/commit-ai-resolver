@@ -53,8 +53,9 @@ INSTRUCTIONS:
 1. Answer the user's question based ONLY on the commit data above. Do NOT hallucinate commits that aren't listed.
 2. Rank suspect commits by relevance. For each suspect, explain WHY it might be related.
 3. Always include commit SHAs and author names when referencing changes.
-4. When correlating with incidents, consider a 2-day release buffer.
-5. Be concise and actionable.
+4. For EVERY commit you mention, include a clickable markdown link using the URL from the data. Format: [shortId](url). Example: [abc123](https://msasg.visualstudio.com/...). If a URL is "N/A" or missing, just show the SHA without a link.
+5. When correlating with incidents, consider a 2-day release buffer.
+6. Be concise and actionable.
 
 After your answer, output a JSON block on a new line starting with |||JSON||| containing:
 {

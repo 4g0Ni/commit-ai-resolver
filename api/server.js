@@ -273,6 +273,7 @@ Use this data to answer questions about:
 
 When correlating incidents with changes, consider a 2-day buffer (releases take up to 2 days to reach production).
 Always cite specific commit SHAs and authors when referencing changes.
+For EVERY commit you mention, include a clickable markdown link using the URL from the data. Format: [shortId](url). If a URL is "N/A" or missing, just show the SHA.
 Be concise and actionable.
 
 --- COMMIT SUMMARIES (full) ---
@@ -312,7 +313,7 @@ async function buildFullContext() {
     return allData.map(day => {
         const repos = Object.entries(day.repositories).map(([name, repo]) => {
             const commits = repo.commits.map(c =>
-                `  - [${c.summary.riskLevel}] ${c.shortId} by ${c.author}: ${c.summary.title}\n    ${c.summary.summary}${c.summary.flags?.length ? `\n    Flags: ${c.summary.flags.join(', ')}` : ''}`
+                `  - [${c.summary.riskLevel}] ${c.shortId} by ${c.author}: ${c.summary.title}\n    URL: ${c.url || 'N/A'}\n    ${c.summary.summary}${c.summary.flags?.length ? `\n    Flags: ${c.summary.flags.join(', ')}` : ''}`
             ).join('\n');
             return `### ${name} (${repo.stats.total} commits: ${repo.stats.high} HIGH, ${repo.stats.medium} MEDIUM, ${repo.stats.low} LOW)\n${commits}`;
         }).join('\n\n');
