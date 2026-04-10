@@ -122,34 +122,99 @@ Runs on `http://localhost:5173` (or next available port).
 
 ---
 
-## Vector Search & LLM Intent Extraction
+## Vector Search & Agentic Search Pipeline
 
-The chat uses a **RAG pipeline**: embed your question → search LanceDB for matching commits → send only relevant commits to the LLM.
+The chat uses an **agentic multi-step RAG pipeline** that iteratively refines queries for better results. Instead of a single-pass search, the system coordinates 4 LLM-based agents in a loop (max 5 iterations):
+
+### Pipeline Flow
+
+```
+User Query → Intent Extractor → Extraction Analyzer → RAG Search → Answer Synthesizer → Answer Evaluator
+                    ↑                    │                                                      │
+                    │    (REFORMULATE)   │                                         (RETRY)      │
+                    └────────────────────┘                                ┌──────────────────────┘
+                                                                         │ (refine query, add
+                                                                         │  keywords, broaden)
+                                                                         └──→ back to Intent Extractor
+```
+
+### Agent Roles
+
+| Agent | Purpose | Output |
+|---|---|---|
+| **Intent Extractor** | Extracts structured filters (author, repo, dates, search query) + confidence score + keywords | JSON with filters + `confidence` 0–1 |
+| **Extraction Analyzer** | Evaluates extraction quality. Decides: proceed, reformulate, or ask user for clarification | `GOOD` / `REFORMULATE` / `ASK_USER` |
+| **Answer Synthesizer** | Analyzes RAG results, ranks suspect commits, generates answer with commit links | Markdown answer + confidence + coverage |
+| **Answer Evaluator** | Rates answer quality and grounding. Decides: return to user or retry with different query | `PASS` / `RETRY` / `PARTIAL` |
+
+### Clarification Flow
+
+If your query is too vague (e.g., "something broke"), the system asks a follow-up question instead of guessing:
+
+```
+You: "something broke"
+System: "🤔 Need more details — What broke, and roughly when did it start?
+         If you know the affected feature/repo and whether it was an error,
+         crash, UI issue, or regression, include that too."
+You: "the campaign editor page is crashing since yesterday"
+→ Pipeline resumes with enriched context
+```
+
+### Iteration Behavior
+
+| Iteration | Strategy |
+|---|---|
+| 1 | Full pipeline with initial extraction |
+| 2 | Refine query with evaluator feedback (add keywords, adjust dates) |
+| 3 | Broaden filters (remove restrictive constraints) |
+| 4–5 | Alternative search strategies, then best-effort return |
+
+The pipeline exits early when the Answer Evaluator scores quality ≥ 0.7 (typically on iteration 1 for clear queries).
+
+### API Response Format
+
+The `POST /api/chat` response now includes agentic metadata:
+
+```json
+{
+  "reply": "Based on the commits from March 27–29...",
+  "type": "answer",           // "answer" or "clarification"
+  "searchMethod": "agentic",  // "agentic", "fallback-full", or "full"
+  "iterations": 1,            // Number of pipeline iterations used
+  "confidence": 0.91          // Answer confidence 0–1
+}
+```
+
+For clarifications:
+```json
+{
+  "reply": "Could you clarify which page or feature is affected?",
+  "type": "clarification",
+  "searchMethod": "agentic",
+  "iterations": 1,
+  "question": "Could you clarify which page or feature is affected?"
+}
+```
 
 ### LLM-Based Query Understanding
 
-The API uses a lightweight LLM pre-processing call to extract structured filters from your natural language query. This replaced the previous regex-based approach (which had false positives like "changes" matching author "Chang").
-
-The LLM extracts:
+The Intent Extractor agent extracts:
 - **author** — person name if asking about a specific person
 - **repo** — exact repo name (recognizes aliases like "campaignui", "cmui", "appui")
 - **dateFrom / dateTo** — date range (resolves "yesterday", "last week", "March 30", etc.)
 - **searchQuery** — a rewritten query optimized for embedding search (filter terms stripped)
+- **keywords** — fallback keywords for text matching
+- **confidence** — self-assessed extraction quality (0–1)
+- **ambiguities** — parts of the query that are unclear
 
 The rewritten `searchQuery` is embedded for vector similarity, while extracted filters become SQL WHERE clauses in LanceDB. When any filter is active, the similarity threshold drops to 0.05 to return all matching commits.
 
-### Smart Query Filter Extraction
+### Fallback Behavior
 
-Examples of how the LLM extracts filters:
-
-| Query | Extracted Filters |
-|---|---|
-| "what did Beina Zhang change last week" | `author=Beina Zhang`, `dateFrom=...`, `dateTo=...`, `searchQuery=code changes and modifications` |
-| "any store page crashes in CampaignUI" | `repo=AdsAppsCampaignUI`, `searchQuery=store page crash error bug` |
-| "what high risk changes were deployed yesterday" | `dateFrom=yesterday`, `dateTo=yesterday`, `searchQuery=high risk changes deployment` |
-| "show pilot flag changes" | `searchQuery=pilot flag feature gate config changes` |
-
-If intent extraction fails (LLM error), the system gracefully falls back to embedding the raw query with no filters.
+The pipeline gracefully degrades:
+1. **Vector store + agentic** → Full 4-agent pipeline with iterative refinement
+2. **Vector store + no results** → Falls back to full context stuffing
+3. **No vector store** → Single-pass full context stuffing (original behavior)
 
 ---
 
@@ -358,7 +423,13 @@ commit-ai-resolver/
 │   │   └── test-vector-search-integration.js  # Integration tests
 │   └── package.json
 ├── api/                              # Express backend API
-│   ├── server.js                     # REST endpoints + LLM chat + smart filters
+│   ├── server.js                     # REST endpoints + agentic chat pipeline
+│   ├── agents/                       # Agentic search pipeline agents
+│   │   ├── orchestrator.js           # Agent loop coordinator (max 5 iterations)
+│   │   ├── intent-extractor.js       # Agent 1: Extract filters + confidence from query
+│   │   ├── extraction-analyzer.js    # Agent 2: Evaluate extraction quality
+│   │   ├── answer-synthesizer.js     # Agent 3: Generate ranked answer with commit links
+│   │   └── answer-evaluator.js       # Agent 4: Rate answer quality, decide pass/retry
 │   └── package.json
 ├── ui/                               # React dashboard (Vite 5)
 │   ├── src/

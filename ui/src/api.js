@@ -1,4 +1,4 @@
-const API_BASE = 'http://localhost:3001/api';
+const API_BASE = 'http://localhost:4399/api';
 
 export async function fetchDays() {
     const res = await fetch(`${API_BASE}/days`);
