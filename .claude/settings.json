@@ -5,18 +5,5 @@
     "ANTHROPIC_MODEL": "claude-opus-4.6-1m",
     "ANTHROPIC_SMALL_FAST_MODEL": "claude-opus-4.6-1m",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
-  },
-  "hooks": {
-    "Notification": [
-      {
-        "matcher": "stop|permission_prompt|idle_prompt",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "powershell.exe -Command \"[System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms'); [System.Windows.Forms.MessageBox]::Show('Claude needs attention', 'Claude Code')\""
-          }
-        ]
-      }
-    ]
   }
 }

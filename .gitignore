@@ -122,6 +122,7 @@ private/ui-legacy/Test/Selenium/UpgradeLog.htm
 
 private/ui-next/si-certificate*
 
+.playwright-mcp/
 
 # yarn pnp
 .pnp/
