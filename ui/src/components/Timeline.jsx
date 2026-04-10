@@ -1,4 +1,5 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
+import { fetchReleases } from '../api';
 import DateRangePicker from './DateRangePicker';
 import RepoFilter from './RepoFilter';
 import MetricsBoard from './MetricsBoard';
@@ -13,6 +14,12 @@ function getDefaultRange() {
         from: from.toISOString().substring(0, 10),
         to: to.toISOString().substring(0, 10),
     };
+}
+
+/** Extract YYYY-MM-DD from a build number like "#Prod-20260407..1". */
+function extractDateFromBuildNumber(buildNumber) {
+    const m = buildNumber?.match(/(\d{4})(\d{2})(\d{2})/);
+    return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
 }
 
 /** Collect all unique repo names from all day data. */
@@ -55,6 +62,48 @@ function Timeline({ dates, dayData }) {
     const allRepos = useMemo(() => getAllRepos(dayData), [dayData]);
     const [selectedRepos, setSelectedRepos] = useState(allRepos);
 
+    // --- Release mode state ---
+    const [releaseMode, setReleaseMode] = useState(false);
+    const [releases, setReleases] = useState([]);
+    const [releasesLoading, setReleasesLoading] = useState(false);
+    const [fromRelease, setFromRelease] = useState(null);
+    const [toRelease, setToRelease] = useState(null);
+
+    // Fetch releases lazily when release mode is first toggled on
+    useEffect(() => {
+        if (releaseMode && releases.length === 0 && !releasesLoading) {
+            setReleasesLoading(true);
+            fetchReleases()
+                .then(setReleases)
+                .catch(err => console.error('Failed to load releases:', err))
+                .finally(() => setReleasesLoading(false));
+        }
+    }, [releaseMode]);
+
+    const handleReleaseModeChange = (on) => {
+        setReleaseMode(on);
+        if (!on) {
+            const d = getDefaultRange();
+            setFromDate(d.from);
+            setToDate(d.to);
+            setFromRelease(null);
+            setToRelease(null);
+        }
+    };
+
+    const handleReleaseChange = (from, to) => {
+        setFromRelease(from);
+        setToRelease(to);
+        if (from && to) {
+            const fd = extractDateFromBuildNumber(from.build.buildNumber);
+            const td = extractDateFromBuildNumber(to.build.buildNumber);
+            if (fd && td) {
+                setFromDate(fd <= td ? fd : td);
+                setToDate(fd <= td ? td : fd);
+            }
+        }
+    };
+
     // Filter dates to selected range
     const filteredDates = useMemo(() => {
         return dates.filter(d => d >= fromDate && d <= toDate).sort();
@@ -90,6 +139,13 @@ function Timeline({ dates, dayData }) {
                     fromDate={fromDate}
                     toDate={toDate}
                     onChange={handleRangeChange}
+                    releaseMode={releaseMode}
+                    onReleaseModeChange={handleReleaseModeChange}
+                    releases={releases}
+                    releasesLoading={releasesLoading}
+                    fromRelease={fromRelease}
+                    toRelease={toRelease}
+                    onReleaseChange={handleReleaseChange}
                 />
                 <RepoFilter
                     allRepos={allRepos}

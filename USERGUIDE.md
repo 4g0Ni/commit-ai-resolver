@@ -330,6 +330,51 @@ To customize, edit `repoFilters` in `src/services/diff-filter.js`.
 
 ---
 
+### Get release build info by date
+
+```bash
+node index.js --releaseInfo 20260407
+```
+
+Looks up the release pipeline build (MAP WebUI Daily Shipping) matching the given date, retrieves the build timeline, and extracts source commit SHAs from the log tasks for AdsAppsCampaignUI and AdsAppUI.
+
+Example output:
+
+```
+============================================================
+Release Info for: 20260407
+============================================================
+
+  Build ID:     66926764
+  Build Number: #Prod-20260407..1
+  Status:       completed / succeeded
+  Started:      2026-04-07T08:00:00Z
+  Finished:     2026-04-07T09:30:00Z
+  URL:          https://msasg.visualstudio.com/Bing_Ads/_build/results?buildId=66926764
+
+  ----------------------------------------
+  AdsAppsCampaignUI (Log AdsAppsCampaignUI):
+    Source Commit:  abc1234def5678...
+    Run ID:        66915346
+    Source Branch:  refs/heads/master
+
+  ----------------------------------------
+  AdsAppUI (Log AdsAppUI_Release_WebUI):
+    Source Commit:  9262bcae8749c6cc...
+    Run ID:        66915346
+    Source Branch:  refs/heads/master
+```
+
+### List recent release builds
+
+```bash
+node index.js --releaseList
+```
+
+Lists all release builds from the last 7 days in a table showing the release name, build ID, status, and the child build IDs for AdsAppsCampaignUI and AdsAppUI.
+
+---
+
 ## Risk Level Criteria
 
 | Level | Criteria |
@@ -459,6 +504,15 @@ No PAT tokens needed.
 
 ## CLI Usage (Advanced)
 
+| Setting | Location | Current Value |
+|---|---|---|
+| Azure OpenAI endpoint | `services/llm-helper.js` | `chezh-m7lorxce-eastus2.openai.azure.com` |
+| Model deployment | `services/llm-helper.js` | `gpt-4.1` |
+| API version | `services/llm-helper.js` | `2025-01-01-preview` |
+| ADO org | `config/repositories.js` | `msasg` |
+| ADO project | `config/repositories.js` | `Bing_Ads` |
+| Release pipeline ID | `config/repositories.js` | `66277` |
+| Release log tasks | `config/repositories.js` | `Log AdsAppsCampaignUI`, `Log AdsAppUI_Release_WebUI` |
 From `src/`:
 
 ```bash
