@@ -71,18 +71,23 @@ export async function agenticSearch({
         log(i, 'rag-search', { status: 'running', query: intent.searchQuery.slice(0, 80) });
 
         const hasFilters = intent.author || intent.repo || intent.dateFrom || intent.dateTo;
+        const hasMetadataFilters = intent.riskLevel || intent.changeType;
         const t0 = Date.now();
         const queryEmbedding = await embedQuery(intent.searchQuery);
         const embeddingMs = Date.now() - t0;
 
+        // Determine effective dates: use retry date overrides if available
+        const effectiveDateFrom = context.dateOverrides?.dateFrom || intent.dateFrom || undefined;
+        const effectiveDateTo = context.dateOverrides?.dateTo || intent.dateTo || undefined;
+
         const t1 = Date.now();
         const results = await searchVectors(queryEmbedding, {
-            topK: 30,
-            minScore: hasFilters ? 0.05 : 0.15,
+            topK: hasMetadataFilters ? 50 : 30,
+            minScore: intent.author ? 0.01 : (hasFilters ? 0.05 : 0.15),
             author: intent.author || undefined,
             repo: intent.repo || undefined,
-            dateFrom: intent.dateFrom || undefined,
-            dateTo: intent.dateTo || undefined,
+            dateFrom: effectiveDateFrom,
+            dateTo: effectiveDateTo,
             riskLevel: intent.riskLevel || undefined,
             changeType: intent.changeType || undefined,
         });
@@ -138,6 +143,13 @@ export async function agenticSearch({
         // RETRY — prepare feedback for next iteration
         if (evaluation.retryStrategy && i < maxIterations) {
             context.feedback = evaluation.retryStrategy;
+            // Apply date expansion overrides for next iteration's RAG search
+            if (evaluation.retryStrategy.expandedDateFrom || evaluation.retryStrategy.expandedDateTo) {
+                context.dateOverrides = {
+                    dateFrom: evaluation.retryStrategy.expandedDateFrom || effectiveDateFrom,
+                    dateTo: evaluation.retryStrategy.expandedDateTo || effectiveDateTo,
+                };
+            }
             log(i, 'retry', {
                 action: evaluation.retryStrategy.action,
                 newKeywords: evaluation.retryStrategy.newKeywords,

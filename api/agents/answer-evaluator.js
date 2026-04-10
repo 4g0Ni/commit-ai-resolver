@@ -30,7 +30,7 @@ export async function evaluateAnswer(llm, synthesis, context, results) {
     // Fast-path: if this is the last iteration, just return what we have
     if (iteration >= 3) {
         return {
-            verdict: synthesis.confidence >= 0.4 ? 'PARTIAL' : 'PASS',
+            verdict: synthesis.confidence >= 0.4 ? 'PASS' : 'PARTIAL',
             qualityScore: synthesis.confidence,
             issues: ['max iterations reached'],
             retryStrategy: null,

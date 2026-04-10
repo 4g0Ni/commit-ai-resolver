@@ -115,9 +115,17 @@ Rules for searchCoverage:
             } catch { /* keep defaults */ }
         }
 
+        // Clamp confidence based on objective metrics to prevent inflated scores
+        let confidence = metadata.confidence;
+        if (results.length === 0) {
+            confidence = 0;
+        } else if (results.length <= 2 && parseFloat(scoreStats.avgScore) < 0.3) {
+            confidence = Math.min(confidence, 0.5);
+        }
+
         return {
             answer,
-            confidence: metadata.confidence,
+            confidence,
             searchCoverage: metadata.searchCoverage,
             suspectCount: metadata.suspectCount,
             suggestedActions: metadata.suggestedActions,
