@@ -499,7 +499,326 @@ The chat API gracefully degrades:
 
 ---
 
-## 11. Open Questions
+## 11. Agentic Search Flow (Multi-Step Query Pipeline)
+
+### 11.1 Motivation
+
+The current search flow is single-pass: extract intent → embed → vector search → LLM answer. This works for straightforward queries but produces suboptimal results when:
+
+- The user's query is vague or ambiguous ("something broke last week")
+- Intent extraction misidentifies filters (wrong repo, wrong date range)
+- The RAG results don't contain enough relevant commits to form a good answer
+- The LLM answer is low-confidence or too generic
+
+An **agentic loop** adds self-evaluation and iterative refinement, allowing the system to retry with better queries, request clarification from the user, and validate answer quality before responding.
+
+### 11.2 Architecture Overview
+
+```
+                          ┌─────────────────────────────────┐
+                          │         User Query               │
+                          └────────────┬────────────────────┘
+                                       │
+                          ┌────────────▼────────────────────┐
+                          │   Agent 1: Intent Extractor      │
+                          │   (extract filters + search      │
+                          │    query from natural language)   │
+                          └────────────┬────────────────────┘
+                                       │
+                          ┌────────────▼────────────────────┐
+                          │   Agent 2: Extraction Analyzer   │
+                          │   (evaluate extraction quality,  │
+                          │    detect ambiguity, check        │
+                          │    filter coherence)              │
+                          └──────┬───────────┬──────────────┘
+                                 │           │
+                        ┌────────▼──┐   ┌────▼──────────────┐
+                        │  GOOD     │   │  BAD / AMBIGUOUS   │
+                        │           │   │  → reformulate OR  │
+                        │           │   │  → ask user for    │
+                        │           │   │    clarification    │
+                        └────┬──────┘   └───────┬───────────┘
+                             │                  │ (loop back to
+                             │                  │  Intent Extractor
+                             │                  │  with feedback)
+                          ┌──▼──────────────────────────────┐
+                          │   RAG Search Pipeline            │
+                          │   (embed query → LanceDB →       │
+                          │    retrieve top-K commits)        │
+                          └────────────┬────────────────────┘
+                                       │
+                          ┌────────────▼────────────────────┐
+                          │   Agent 3: Answer Synthesizer    │
+                          │   (analyze results, rank         │
+                          │    suspects, generate answer     │
+                          │    with commit links + ratings)   │
+                          └────────────┬────────────────────┘
+                                       │
+                          ┌────────────▼────────────────────┐
+                          │   Agent 4: Answer Evaluator      │
+                          │   (rate confidence, check         │
+                          │    grounding, validate links)     │
+                          └──────┬───────────┬──────────────┘
+                                 │           │
+                        ┌────────▼──┐   ┌────▼──────────────┐
+                        │  GOOD     │   │  LOW CONFIDENCE    │
+                        │  → return │   │  → refine query    │
+                        │  to user  │   │    (add keywords,  │
+                        │           │   │     broaden dates,  │
+                        │           │   │     try other repo) │
+                        └───────────┘   └───────┬───────────┘
+                                                │ (loop back to
+                                                │  RAG Search with
+                                                │  enriched query)
+                                                │
+                                        max 5 iterations
+```
+
+### 11.3 Agent Definitions
+
+#### Agent 1: Intent Extractor
+
+**Input:** Raw user query + conversation history + (optional) feedback from Analyzer on previous attempt.
+
+**Output:** Structured JSON:
+```json
+{
+  "author": "Beina Zhang" | null,
+  "repo": "AdsAppsCampaignUI" | null,
+  "dateFrom": "2026-03-25" | null,
+  "dateTo": "2026-03-31" | null,
+  "searchQuery": "store page crash error in campaign editor",
+  "keywords": ["crash", "store page", "campaign editor"],
+  "confidence": 0.85,
+  "ambiguities": []
+}
+```
+
+**Enhancements over current `extractQueryIntent`:**
+- Adds `confidence` score (0–1) for the extraction quality
+- Adds `keywords` array for fallback keyword matching if vector search underperforms
+- Adds `ambiguities` array listing parts of the query that are unclear
+- Accepts feedback from the Analyzer to reformulate on retry
+
+#### Agent 2: Extraction Analyzer
+
+**Input:** The Intent Extractor's structured output + the original user query.
+
+**Output:**
+```json
+{
+  "verdict": "GOOD" | "REFORMULATE" | "ASK_USER",
+  "issues": ["date range too broad — 30+ days", "repo name ambiguous"],
+  "suggestions": ["narrow to last 7 days", "ask user which repo"],
+  "reformulatedQuery": "...",       // if verdict = REFORMULATE
+  "clarificationQuestion": "..."    // if verdict = ASK_USER
+}
+```
+
+**Evaluation criteria:**
+- **Filter coherence:** Do the extracted filters make sense together? (e.g., author + repo that never had commits from that author)
+- **Date range reasonableness:** Is the date range too wide (>14 days) or missing when the query implies recency?
+- **Search query quality:** Is the rewritten search query specific enough for embedding similarity? (e.g., "code changes" is too generic)
+- **Confidence threshold:** If Intent Extractor confidence < 0.6, recommend reformulation
+- **Ambiguity check:** If ambiguities were flagged, determine if they're resolvable or need user input
+
+#### Agent 3: Answer Synthesizer
+
+**Input:** RAG search results (top-K commits with metadata) + original query + extracted intent.
+
+**Output:**
+```json
+{
+  "answer": "Based on the commits from March 27–29, the most likely cause...",
+  "suspects": [
+    {
+      "commitId": "abc123",
+      "repo": "AdsAppsCampaignUI",
+      "author": "...",
+      "title": "...",
+      "relevanceScore": 0.92,
+      "reasoning": "This commit modified the store page rendering path...",
+      "commitUrl": "https://msasg.visualstudio.com/..."
+    }
+  ],
+  "confidence": 0.78,
+  "suggestedActions": ["revert flag X", "check perf traces for commit abc123"],
+  "searchCoverage": "partial"    // "full" | "partial" | "insufficient"
+}
+```
+
+**Responsibilities:**
+- Rank suspect commits by relevance to the user's query
+- Include direct commit links (ADO URLs) for each suspect
+- Assess confidence based on how well the results match the query
+- Flag when search coverage is insufficient (too few results, poor similarity scores)
+
+#### Agent 4: Answer Evaluator
+
+**Input:** The Answer Synthesizer's output + original query + search metadata (result count, score distribution).
+
+**Output:**
+```json
+{
+  "verdict": "PASS" | "RETRY" | "PARTIAL",
+  "qualityScore": 0.82,
+  "issues": [],
+  "retryStrategy": {
+    "action": "broaden_search" | "add_keywords" | "expand_dates" | "try_different_repo",
+    "newKeywords": ["performance", "latency", "P50"],
+    "expandedDateFrom": "2026-03-20",
+    "reasoning": "Initial search only found 3 results with low scores..."
+  }
+}
+```
+
+**Evaluation criteria:**
+- **Grounding check:** Are all cited commits actually present in the search results? (prevent hallucination)
+- **Relevance score:** Average relevance of cited suspects (threshold: > 0.5)
+- **Answer completeness:** Does the answer address all aspects of the user's query?
+- **Confidence threshold:** If Answer Synthesizer confidence < 0.5, trigger retry
+- **Result coverage:** If search returned < 5 results or all scores < 0.3, recommend broadening
+
+### 11.4 Iteration Loop
+
+The agentic flow runs in a loop with a **maximum of 5 iterations** per user query:
+
+```
+Iteration 1: Extract → Analyze → Search → Synthesize → Evaluate
+Iteration 2: (if eval = RETRY) Refine query → Search → Synthesize → Evaluate
+Iteration 3: (if eval = RETRY) Broaden filters → Search → Synthesize → Evaluate
+...
+Iteration 5: Force return best answer so far (even if low confidence)
+```
+
+**Iteration budget tracking:**
+
+| Iteration | Focus | Typical Action |
+|---|---|---|
+| 1 | Initial attempt | Full pipeline with extracted intent |
+| 2 | Query refinement | Add keywords from result analysis, adjust date range |
+| 3 | Filter broadening | Remove restrictive filters (e.g., drop repo filter, widen dates) |
+| 4 | Alternative search | Try keyword-based search alongside vector, combine results |
+| 5 | Best-effort | Return highest-confidence answer accumulated across iterations, with a disclaimer if confidence is still low |
+
+**Early exit conditions:**
+- Answer Evaluator returns `PASS` (qualityScore ≥ 0.7) → return immediately
+- Extraction Analyzer returns `ASK_USER` → pause loop, send clarification question to user, resume on user response
+- All 5 iterations exhausted → return best answer with confidence disclaimer
+
+### 11.5 Clarification Protocol (ASK_USER)
+
+When the Extraction Analyzer determines the query is too ambiguous to proceed:
+
+1. The pipeline pauses and returns a **clarification question** to the user via the chat interface
+2. The UI renders this as a system message (distinct from a final answer)
+3. The user responds with additional context
+4. The pipeline resumes from the Intent Extractor with the original query + user's clarification appended
+5. This counts as one iteration of the loop
+
+**Example:**
+```
+User: "something is broken"
+System: "Could you clarify: Which page or feature is affected? When did you first notice the issue? Are you seeing errors, crashes, or performance degradation?"
+User: "the campaign editor page is crashing since yesterday"
+→ Pipeline resumes with enriched context
+```
+
+### 11.6 Message Queue / Agent Coordination
+
+The agents are **not** a traditional message queue system. They are implemented as **sequential LLM calls within a single request handler**, coordinated by an orchestrator function. This keeps the architecture simple and avoids the complexity of distributed message brokers.
+
+```javascript
+// Pseudocode for the orchestrator
+async function agenticSearch(userQuery, history, maxIterations = 5) {
+    let bestAnswer = null;
+    let context = { query: userQuery, history, feedback: null };
+
+    for (let i = 0; i < maxIterations; i++) {
+        // Agent 1: Extract intent
+        const intent = await intentExtractor(context);
+
+        // Agent 2: Analyze extraction
+        const analysis = await extractionAnalyzer(intent, context);
+        if (analysis.verdict === 'ASK_USER') {
+            return { type: 'clarification', question: analysis.clarificationQuestion };
+        }
+        if (analysis.verdict === 'REFORMULATE') {
+            context.feedback = analysis;
+            continue; // re-extract with feedback
+        }
+
+        // RAG search
+        const results = await ragSearch(intent);
+
+        // Agent 3: Synthesize answer
+        const answer = await answerSynthesizer(results, intent, context);
+
+        // Agent 4: Evaluate answer
+        const evaluation = await answerEvaluator(answer, context, results);
+
+        if (evaluation.qualityScore > (bestAnswer?.qualityScore || 0)) {
+            bestAnswer = { ...answer, qualityScore: evaluation.qualityScore };
+        }
+
+        if (evaluation.verdict === 'PASS') {
+            return { type: 'answer', ...bestAnswer };
+        }
+
+        // Prepare retry context
+        context.feedback = evaluation.retryStrategy;
+        context.previousResults = results;
+    }
+
+    // Max iterations reached — return best effort
+    return { type: 'answer', ...bestAnswer, disclaimer: 'Low confidence — results may be incomplete.' };
+}
+```
+
+**Why not a message queue?**
+- The entire flow is **request-scoped** — it starts and ends within a single HTTP request
+- Latency is critical (user is waiting) — adding broker overhead is counterproductive
+- The agents share state (accumulated context, previous results) which is trivial with in-process calls but complex with a queue
+- If async processing is needed in the future (e.g., background deep analysis), a job queue can be added alongside without replacing the synchronous orchestrator
+
+### 11.7 Latency Budget
+
+Each iteration adds LLM calls. Target latencies per agent:
+
+| Agent | Target Latency | LLM Calls |
+|---|---|---|
+| Intent Extractor | 500ms | 1 (lightweight, low temperature) |
+| Extraction Analyzer | 500ms | 1 (lightweight evaluation) |
+| RAG Search | 300ms | 0 (embedding + LanceDB) |
+| Answer Synthesizer | 2000ms | 1 (full analysis, higher token output) |
+| Answer Evaluator | 500ms | 1 (lightweight evaluation) |
+
+**Per-iteration budget:** ~3.8 seconds
+**Worst case (5 iterations):** ~19 seconds
+**Typical case (1–2 iterations):** ~4–8 seconds
+
+To stay within acceptable chat response times:
+- Use `gpt-5.4` (fast) for lightweight agents (Extractor, Analyzer, Evaluator)
+- Reserve higher token budgets only for the Synthesizer
+- Stream the final answer to the UI (show partial response while generating)
+- Show iteration progress in the UI ("Refining search... attempt 2/5")
+
+### 11.8 Work Items
+
+| Work Item | Description | ADO |
+|---|---|---|
+| Agent orchestrator | Implement the iteration loop with agent coordination, budget tracking, and early exit logic | TBD |
+| Intent Extractor v2 | Upgrade `extractQueryIntent` with confidence scoring, keywords, ambiguity detection, and feedback acceptance | TBD |
+| Extraction Analyzer agent | New LLM-based agent that evaluates intent extraction quality and decides next action | TBD |
+| Answer Synthesizer agent | New agent that ranks suspects, generates structured answers with commit links and confidence | TBD |
+| Answer Evaluator agent | New agent that evaluates answer quality, grounding, and decides pass/retry/refine | TBD |
+| Clarification UI | Chat UI support for system clarification questions (distinct from answers) and user responses that resume the pipeline | TBD |
+| Iteration progress UI | Show "Searching... attempt N/5" progress indicator in the chat interface | TBD |
+| Streaming support | Stream the final answer to the UI for perceived latency improvement | TBD |
+
+---
+
+## 12. Open Questions
 
 1. How are release tags structured in each repo? Are they consistent or repo-specific?
 2. Where do pilot flag definitions live — in code, in a config service, or both?

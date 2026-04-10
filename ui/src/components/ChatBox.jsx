@@ -33,8 +33,23 @@ function ChatBox() {
                 .filter((_, i) => i > 0) // skip welcome
                 .slice(-10); // keep last 10 messages for context
 
-            const { reply } = await sendChatMessage(text, history);
-            setMessages(prev => [...prev, { role: 'assistant', content: reply }]);
+            const data = await sendChatMessage(text, history);
+
+            if (data.type === 'clarification') {
+                // System is asking for clarification — render as a special message
+                setMessages(prev => [...prev, {
+                    role: 'assistant',
+                    content: data.reply,
+                    isClarification: true,
+                }]);
+            } else {
+                // Normal answer — optionally show metadata
+                let reply = data.reply;
+                if (data.iterations > 1) {
+                    reply += `\n\n<small>🔍 *Search refined ${data.iterations} time(s)${data.confidence ? ` · Confidence: ${(data.confidence * 100).toFixed(0)}%` : ''}*</small>`;
+                }
+                setMessages(prev => [...prev, { role: 'assistant', content: reply }]);
+            }
         } catch (err) {
             setMessages(prev => [
                 ...prev,
@@ -57,7 +72,8 @@ function ChatBox() {
             <div className="chat-header">Change Analysis Chat</div>
             <div className="chat-messages">
                 {messages.map((msg, i) => (
-                    <div key={i} className={`chat-message ${msg.role}`}>
+                    <div key={i} className={`chat-message ${msg.role}${msg.isClarification ? ' clarification' : ''}`}>
+                        {msg.isClarification && <div className="clarification-badge">🤔 Need more details</div>}
                         {msg.role === 'user' ? msg.content : <ReactMarkdown>{msg.content}</ReactMarkdown>}
                     </div>
                 ))}
