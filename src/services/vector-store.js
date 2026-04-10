@@ -63,10 +63,12 @@ function cosineSimilarity(a, b) {
  * @param {string} opts.author - Filter by author name, case-insensitive substring (optional)
  * @param {string} opts.dateFrom - Filter by start date (optional)
  * @param {string} opts.dateTo - Filter by end date (optional)
+ * @param {string} opts.riskLevel - Filter by risk level: HIGH, MEDIUM, LOW (optional)
+ * @param {string} opts.changeType - Filter by change type: code, config, mixed (optional)
  * @returns {Promise<Array>} Ranked results with score and metadata
  */
 async function searchVectors(queryEmbedding, opts = {}) {
-    const { topK = 10, minScore = 0.3, repo, author, dateFrom, dateTo } = opts;
+    const { topK = 10, minScore = 0.3, repo, author, dateFrom, dateTo, riskLevel, changeType } = opts;
     const table = await getTable();
     if (!table) return [];
 
@@ -99,6 +101,18 @@ async function searchVectors(queryEmbedding, opts = {}) {
             metadata: JSON.parse(row.metadata),
         };
     });
+
+    // Post-filter by metadata fields not available as top-level columns
+    if (riskLevel) {
+        results = results.filter(r => r.metadata.riskLevel === riskLevel);
+    }
+    if (changeType) {
+        if (changeType === 'config') {
+            results = results.filter(r => r.metadata.changeType === 'config' || r.metadata.changeType === 'mixed');
+        } else {
+            results = results.filter(r => r.metadata.changeType === changeType);
+        }
+    }
 
     return results
         .filter(r => r.score >= minScore)

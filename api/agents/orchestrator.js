@@ -100,6 +100,8 @@ export async function agenticSearch({
             repo: intent.repo || undefined,
             dateFrom: intent.dateFrom || undefined,
             dateTo: intent.dateTo || undefined,
+            riskLevel: intent.riskLevel || undefined,
+            changeType: intent.changeType || undefined,
         });
         const searchMs = Date.now() - t1;
         log(i, 'rag-search', { status: 'done', resultCount: results.length, embeddingMs, searchMs });
@@ -120,8 +122,14 @@ export async function agenticSearch({
             elapsed: synthesis._elapsed,
         });
 
+        // Guard: if answer is empty, fall back to full context on first occurrence
+        if ((!synthesis.answer || synthesis.answer.trim().length === 0) && i === 1) {
+            log(i, 'fallback', { reason: 'empty synthesis answer' });
+            return await fallbackFullContext({ llm, buildFullContext, query, history, iterationLog, i });
+        }
+
         // Track best answer
-        if (synthesis.confidence > bestScore) {
+        if (synthesis.confidence > bestScore && synthesis.answer && synthesis.answer.trim().length > 0) {
             bestScore = synthesis.confidence;
             bestAnswer = synthesis;
         }
@@ -187,6 +195,8 @@ function formatAnswer(synthesis, searchMethod, iterations, iterationLog, disclai
         searchMethod,
         confidence: synthesis.confidence,
         searchCoverage: synthesis.searchCoverage,
+        suggestedActions: synthesis.suggestedActions || [],
+        resultCount: synthesis.resultCount,
         iterations,
         iterationLog,
     };

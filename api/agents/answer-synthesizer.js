@@ -15,7 +15,7 @@
 export async function synthesizeAnswer(llm, results, intent, context) {
     const { query, history = [] } = context;
 
-    const commitContext = results.map(r =>
+    const commitContext = results.slice(0, 20).map(r =>
         `[${r.date}] ${r.repo} | ${r.metadata.riskLevel} | ${r.id} by ${r.metadata.author}\n` +
         `  URL: ${r.metadata.url || 'N/A'}\n` +
         `  Title: ${r.metadata.title}\n` +
@@ -84,9 +84,23 @@ Rules for searchCoverage:
                 { role: 'user', content: query },
             ],
             temperature: 0.3,
-            max_completion_tokens: 2048,
+            max_completion_tokens: 4096,
         });
         const fullText = result.choices?.[0]?.message?.content ?? '';
+
+        // Guard: if LLM returned empty, return a meaningful fallback
+        if (!fullText.trim()) {
+            return {
+                answer: `I found ${results.length} commits matching your query but was unable to generate a summary. The top results were from ${[...new Set(results.slice(0, 5).map(r => r.repo))].join(', ')}.`,
+                confidence: 0.3,
+                searchCoverage: results.length >= 10 ? 'partial' : 'insufficient',
+                suspectCount: 0,
+                suggestedActions: ['Try a more specific query'],
+                resultCount: results.length,
+                scoreStats,
+                _elapsed: Date.now() - t0,
+            };
+        }
 
         // Parse out the JSON metadata block
         let answer = fullText;

@@ -42,19 +42,27 @@ ${conversationContext}
 Return ONLY a JSON object with these fields (use null for missing):
 - "author": full person name if asking about a specific person's commits (null if not person-specific)
 - "repo": exact repo name from [${repoList}] if mentioned. Recognize aliases: "campaignui"/"cmui" → AdsAppsCampaignUI, "mt"/"middle tier" → AdsAppsMT, "appui"/"shell" → AdsAppUI. (null if not repo-specific)
-- "dateFrom": start date YYYY-MM-DD if a time range is mentioned (null if open-ended)
+- "dateFrom": start date YYYY-MM-DD if a time range is mentioned. For incident/regression queries ("spike", "broke", "error", "crash", "regression"), expand the start date 2 days earlier to account for release buffer. For "this week", use Monday of the current week. (null if open-ended)
 - "dateTo": end date YYYY-MM-DD if a time range is mentioned (null if open-ended)
-- "searchQuery": a rewritten version optimized for semantic search against commit summaries. Remove person names and date references, keep the technical intent.
+- "searchQuery": a rewritten version optimized for semantic search against commit summaries. Remove person names and date references. Keep the technical intent specific. For author queries, include broad technical terms like "feature implementation configuration API change". For broad queries like "what changed", use "code changes features configuration deployment updates".
+- "riskLevel": "HIGH", "MEDIUM", or "LOW" if the user is asking about a specific risk level (null if not risk-specific)
+- "changeType": "config", "code", or "mixed" if the user is asking about config/pilot/flag changes vs code changes (null if not type-specific)
 - "keywords": array of 3-6 specific technical keywords for fallback text matching
 - "confidence": number 0-1 indicating how confident you are in the extraction accuracy
 - "ambiguities": array of strings describing any parts of the query that are unclear or could be interpreted multiple ways (empty array if everything is clear)
 
 Examples:
 User: "what did Beina Zhang change last week"
-{"author":"Beina Zhang","repo":null,"dateFrom":"${daysAgo(7, today)}","dateTo":"${today}","searchQuery":"code changes and modifications","keywords":["changes","modifications","code"],"confidence":0.9,"ambiguities":[]}
+{"author":"Beina Zhang","repo":null,"dateFrom":"${daysAgo(7, today)}","dateTo":"${today}","searchQuery":"feature implementation configuration API code changes deployment updates","riskLevel":null,"changeType":null,"keywords":["feature","implementation","configuration","API","changes"],"confidence":0.9,"ambiguities":[]}
+
+User: "show me all HIGH risk changes this week"
+{"author":null,"repo":null,"dateFrom":"${daysAgo(7, today)}","dateTo":"${today}","searchQuery":"high risk breaking changes pilot ramp deployment configuration removal","riskLevel":"HIGH","changeType":null,"keywords":["high","risk","breaking","pilot","ramp","deployment"],"confidence":0.9,"ambiguities":[]}
+
+User: "what pilot flags were changed recently"
+{"author":null,"repo":null,"dateFrom":"${daysAgo(7, today)}","dateTo":"${today}","searchQuery":"pilot flag feature gate configuration ramp percentage rollout enable disable","riskLevel":null,"changeType":"config","keywords":["pilot","flag","config","ramp","feature","gate"],"confidence":0.85,"ambiguities":[]}
 
 User: "something broke"
-{"author":null,"repo":null,"dateFrom":null,"dateTo":null,"searchQuery":"bug error crash broken regression","keywords":["bug","error","crash","broken","regression"],"confidence":0.3,"ambiguities":["which page or feature is affected?","when did the issue start?","what kind of breakage — errors, crashes, or slowness?"]}
+{"author":null,"repo":null,"dateFrom":null,"dateTo":null,"searchQuery":"bug error crash broken regression","riskLevel":null,"changeType":null,"keywords":["bug","error","crash","broken","regression"],"confidence":0.3,"ambiguities":["which page or feature is affected?","when did the issue start?","what kind of breakage — errors, crashes, or slowness?"]}
 ${feedbackBlock}
 
 Now extract from:
@@ -79,6 +87,8 @@ User: "${query.replace(/"/g, '\\"')}"`;
             dateFrom: parsed.dateFrom || null,
             dateTo: parsed.dateTo || null,
             searchQuery: parsed.searchQuery || query,
+            riskLevel: parsed.riskLevel || null,
+            changeType: parsed.changeType || null,
             keywords: parsed.keywords || [],
             confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.5,
             ambiguities: parsed.ambiguities || [],
