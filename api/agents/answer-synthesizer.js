@@ -15,7 +15,7 @@
 export async function synthesizeAnswer(llm, results, intent, context) {
     const { query, history = [] } = context;
 
-    const commitContext = results.slice(0, 20).map(r =>
+    const commitContext = results.slice(0, 10).map(r =>
         `[${r.date}] ${r.repo} | ${r.metadata.riskLevel} | ${r.id} by ${r.metadata.author}\n` +
         `  URL: ${r.metadata.url || 'N/A'}\n` +
         `  Title: ${r.metadata.title}\n` +
@@ -84,7 +84,7 @@ Rules for searchCoverage:
                 { role: 'user', content: query },
             ],
             temperature: 0.3,
-            max_completion_tokens: 4096,
+            max_completion_tokens: 2048,
         });
         const fullText = result.choices?.[0]?.message?.content ?? '';
 

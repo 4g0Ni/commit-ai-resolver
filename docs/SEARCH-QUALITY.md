@@ -252,6 +252,12 @@ Each test query is scored on 6 dimensions (0-3 each, max 18 total):
 | S-05 | Low | `orchestrator.js:98` | minScore=0.05 with filters may return too much noise | Open |
 | S-06 | High | `answer-synthesizer.js` | Empty LLM responses cause pipeline to return blank replies | **FIXED** — Guard + fallback added |
 | S-07 | High | `orchestrator.js` | bestAnswer tracking accepts empty strings, causing blank final output | **FIXED** — Non-empty check added |
+| S-08 | High | `extraction-analyzer.js` | Separate LLM call for validation adds 8-12s | **FIXED** — Merged into intent extractor |
+| S-09 | Medium | `answer-evaluator.js` | Fast-path threshold too strict (0.8 + full coverage), rarely triggers | **FIXED** — Lowered to 0.65 + 3 results |
+| S-10 | Medium | `orchestrator.js` | Max 5 iterations causes runaway loops on hard queries | **FIXED** — Reduced to 3 |
+| S-11 | Medium | `answer-synthesizer.js` | 20 results + 4096 tokens causes slow generation | **FIXED** — Reduced to 10 results + 2048 tokens |
+| S-12 | Low | `server.js` | No embedding cache — repeat queries re-embed | **FIXED** — LRU cache (100 entries) |
+| S-13 | Medium | `server.js:253` | suggestedActions/resultCount not forwarded to UI | **FIXED** — Added to API response |
 
 ### UI
 
@@ -315,3 +321,32 @@ Each test query is scored on 6 dimensions (0-3 each, max 18 total):
 - **Response time still 45-90s** — main bottleneck is LLM latency across 4 agents; acceptable but not ideal
 - **Confidence scores consistently 68-92%** — pipeline correctly self-assesses quality
 - **Only dimension lagging: Response Time** — all queries except UC-10 take 45-90s (score 1-2 out of 3)
+
+### Post-Speed-Optimization — 2026-04-10
+
+**Changes applied:** Merged Agents 1+2 (extraction analyzer eliminated), lowered evaluator fast-path threshold (0.8→0.65, removed coverage check), reduced max iterations (5→3), reduced synthesizer budget (4096→2048 tokens, 20→10 results), added embedding cache, forwarded suggestedActions/resultCount in API.
+
+| UC | Query | Rel | Comp | Acc | Act | Time | Clar | Total | Time(s) | Notes |
+|----|-------|-----|------|-----|-----|------|------|-------|---------|-------|
+| 01 | What shipped on March 28? | 3 | 2 | 3 | 3 | 2 | 3 | **16** | 43 | +1 time score (90→43s). 6 suggested actions. Conf 83% |
+| 02 | What did Younghoon Gim work on recently? | 3 | 2 | 3 | 3 | 1 | 3 | **15** | 63 | 2 iterations, 73→63s. Conf 88%, 3 actions |
+| 03 | What changed in AdsAppsMT this week? | 3 | 3 | 3 | 3 | 2 | 3 | **17** | 39 | 70→39s, +1 time score. 5 actions. Conf 81% |
+| 04 | Show me all HIGH risk changes this week | 3 | 2 | 3 | 3 | 2 | 3 | **16** | 45 | 52→45s (fallback-full). Same quality |
+| 05 | What pilot flags were changed recently? | 3 | 2 | 3 | 3 | 2 | 3 | **16** | 31 | 59→31s, +1 time score. 3 actions. Conf 95% |
+| 06 | What changed between March 20 and March 25? | 3 | 2 | 3 | 3 | 2 | 3 | **16** | 40 | 78→40s, +1 time score. 5 actions. Conf 89% |
+| 07 | What touched the campaign grid? | 3 | 3 | 3 | 3 | 2 | 3 | **17** | 37 | 45→37s. 5 actions. Conf 89% |
+| 08 | Latency spike starting March 30 | 3 | 2 | 3 | 3 | 2 | 3 | **16** | 38 | 56→38s. 5 actions. Conf 68% |
+| 09 | Related changes across repos March 28? | 3 | 2 | 3 | 3 | 2 | 3 | **16** | 40 | 45→40s. 4 actions. Conf 63% |
+| 10 | Something broke | 3 | 3 | 3 | 3 | 3 | 3 | **18** | 4.5 | 13→4.5s. Clarification via intent extractor (no separate analyzer) |
+
+**Average score: 16.3/18** (up from 15.9/18 post-improvement, +2.5% quality; up from 9.0/18 baseline, +81%)
+
+**Average response time: 38s** (down from 63s post-improvement, -40%; down from ~120s baseline, -68%)
+
+**Key speed improvements:**
+- **Eliminated 1 LLM round-trip** by merging intent extractor + extraction analyzer → saved 8-12s per query
+- **Evaluator fast-path triggers more often** (0.65 threshold vs 0.8) → skips evaluator LLM call on confident answers
+- **Reduced synthesizer context** (10 results vs 20, 2048 vs 4096 tokens) → faster generation
+- **UC-10 (clarification) dropped from 13s to 4.5s** — no longer needs separate analyzer LLM call
+- **Suggested action chips now appear in UI** (API now forwards suggestedActions)
+- **No quality regression** — all queries maintained or improved quality scores

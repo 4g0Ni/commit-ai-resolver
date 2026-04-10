@@ -8,7 +8,6 @@
  */
 
 import { extractIntent } from './intent-extractor.js';
-import { analyzeExtraction } from './extraction-analyzer.js';
 import { synthesizeAnswer } from './answer-synthesizer.js';
 import { evaluateAnswer } from './answer-evaluator.js';
 
@@ -33,7 +32,7 @@ export async function agenticSearch({
     buildFullContext,
     query,
     history = [],
-    maxIterations = 5,
+    maxIterations = 3,
     onProgress,
 }) {
     let bestAnswer = null;
@@ -51,37 +50,21 @@ export async function agenticSearch({
     let context = { query, history, feedback: null };
 
     for (let i = 1; i <= maxIterations; i++) {
-        // --- Agent 1: Intent Extraction ---
+        // --- Agent 1: Intent Extraction (includes self-validation) ---
         log(i, 'intent-extractor', { status: 'running' });
         const intent = await extractIntent(llm, context);
-        log(i, 'intent-extractor', { status: 'done', confidence: intent.confidence, elapsed: intent._elapsed });
+        log(i, 'intent-extractor', { status: 'done', confidence: intent.confidence, verdict: intent.verdict, elapsed: intent._elapsed });
 
-        // --- Agent 2: Extraction Analyzer ---
-        log(i, 'extraction-analyzer', { status: 'running' });
-        const analysis = await analyzeExtraction(llm, intent, context);
-        log(i, 'extraction-analyzer', { status: 'done', verdict: analysis.verdict, elapsed: analysis._elapsed });
-
-        if (analysis.verdict === 'ASK_USER') {
+        if (intent.verdict === 'ASK_USER') {
             // Pause pipeline — return clarification question to user
             return {
                 type: 'clarification',
-                question: analysis.clarificationQuestion || 'Could you provide more details about what you\'re looking for?',
-                reply: analysis.clarificationQuestion || 'Could you provide more details about what you\'re looking for?',
+                question: intent.clarificationQuestion || 'Could you provide more details about what you\'re looking for?',
+                reply: intent.clarificationQuestion || 'Could you provide more details about what you\'re looking for?',
                 searchMethod: 'agentic',
                 iterations: i,
                 iterationLog,
             };
-        }
-
-        if (analysis.verdict === 'REFORMULATE' && i < maxIterations) {
-            // Loop back with feedback to re-extract
-            context.feedback = {
-                issues: analysis.issues,
-                suggestions: analysis.suggestions,
-                reformulatedQuery: analysis.reformulatedQuery,
-            };
-            log(i, 'reformulate', { reason: analysis.issues.join('; ') });
-            continue; // Skip search, re-extract
         }
 
         // --- RAG Search ---

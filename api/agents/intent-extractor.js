@@ -50,19 +50,21 @@ Return ONLY a JSON object with these fields (use null for missing):
 - "keywords": array of 3-6 specific technical keywords for fallback text matching
 - "confidence": number 0-1 indicating how confident you are in the extraction accuracy
 - "ambiguities": array of strings describing any parts of the query that are unclear or could be interpreted multiple ways (empty array if everything is clear)
+- "verdict": "GOOD" or "ASK_USER". Use "GOOD" if confidence >= 0.3 or the search query contains at least one technical term. Use "ASK_USER" ONLY if the query is genuinely too ambiguous to produce useful results (e.g., "something broke" with zero context about what/when/where).
+- "clarificationQuestion": a specific question to ask the user (only when verdict is "ASK_USER", null otherwise)
 
 Examples:
 User: "what did Beina Zhang change last week"
-{"author":"Beina Zhang","repo":null,"dateFrom":"${daysAgo(7, today)}","dateTo":"${today}","searchQuery":"feature implementation configuration API code changes deployment updates","riskLevel":null,"changeType":null,"keywords":["feature","implementation","configuration","API","changes"],"confidence":0.9,"ambiguities":[]}
+{"author":"Beina Zhang","repo":null,"dateFrom":"${daysAgo(7, today)}","dateTo":"${today}","searchQuery":"feature implementation configuration API code changes deployment updates","riskLevel":null,"changeType":null,"keywords":["feature","implementation","configuration","API","changes"],"confidence":0.9,"ambiguities":[],"verdict":"GOOD","clarificationQuestion":null}
 
 User: "show me all HIGH risk changes this week"
-{"author":null,"repo":null,"dateFrom":"${daysAgo(7, today)}","dateTo":"${today}","searchQuery":"high risk breaking changes pilot ramp deployment configuration removal","riskLevel":"HIGH","changeType":null,"keywords":["high","risk","breaking","pilot","ramp","deployment"],"confidence":0.9,"ambiguities":[]}
+{"author":null,"repo":null,"dateFrom":"${daysAgo(7, today)}","dateTo":"${today}","searchQuery":"high risk breaking changes pilot ramp deployment configuration removal","riskLevel":"HIGH","changeType":null,"keywords":["high","risk","breaking","pilot","ramp","deployment"],"confidence":0.9,"ambiguities":[],"verdict":"GOOD","clarificationQuestion":null}
 
 User: "what pilot flags were changed recently"
-{"author":null,"repo":null,"dateFrom":"${daysAgo(7, today)}","dateTo":"${today}","searchQuery":"pilot flag feature gate configuration ramp percentage rollout enable disable","riskLevel":null,"changeType":"config","keywords":["pilot","flag","config","ramp","feature","gate"],"confidence":0.85,"ambiguities":[]}
+{"author":null,"repo":null,"dateFrom":"${daysAgo(7, today)}","dateTo":"${today}","searchQuery":"pilot flag feature gate configuration ramp percentage rollout enable disable","riskLevel":null,"changeType":"config","keywords":["pilot","flag","config","ramp","feature","gate"],"confidence":0.85,"ambiguities":[],"verdict":"GOOD","clarificationQuestion":null}
 
 User: "something broke"
-{"author":null,"repo":null,"dateFrom":null,"dateTo":null,"searchQuery":"bug error crash broken regression","riskLevel":null,"changeType":null,"keywords":["bug","error","crash","broken","regression"],"confidence":0.3,"ambiguities":["which page or feature is affected?","when did the issue start?","what kind of breakage — errors, crashes, or slowness?"]}
+{"author":null,"repo":null,"dateFrom":null,"dateTo":null,"searchQuery":"bug error crash broken regression","riskLevel":null,"changeType":null,"keywords":["bug","error","crash","broken","regression"],"confidence":0.3,"ambiguities":["which page or feature is affected?","when did the issue start?","what kind of breakage — errors, crashes, or slowness?"],"verdict":"ASK_USER","clarificationQuestion":"What exactly broke, in which feature or area, and roughly when did it start happening?"}
 ${feedbackBlock}
 
 Now extract from:
@@ -92,10 +94,12 @@ User: "${query.replace(/"/g, '\\"')}"`;
             keywords: parsed.keywords || [],
             confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.5,
             ambiguities: parsed.ambiguities || [],
+            verdict: ['GOOD', 'ASK_USER'].includes(parsed.verdict) ? parsed.verdict : 'GOOD',
+            clarificationQuestion: parsed.clarificationQuestion || null,
             _elapsed: Date.now() - t0,
         };
     } catch (err) {
         console.error('  [IntentExtractor] failed:', err.message);
-        return { searchQuery: query, keywords: [], confidence: 0.2, ambiguities: ['extraction error'], _elapsed: Date.now() - t0 };
+        return { searchQuery: query, keywords: [], confidence: 0.2, ambiguities: ['extraction error'], verdict: 'GOOD', clarificationQuestion: null, _elapsed: Date.now() - t0 };
     }
 }

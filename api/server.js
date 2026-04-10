@@ -73,13 +73,26 @@ import { searchVectors, getVectorStats } from '../src/services/vector-store.js';
 // --- Agentic search ---
 import { agenticSearch } from './agents/orchestrator.js';
 
-/** Generate a query embedding using the embedding client. */
+/** Generate a query embedding using the embedding client (with LRU cache). */
+const _embeddingCache = new Map();
+const EMBEDDING_CACHE_MAX = 100;
+
 async function embedQuery(text) {
+    if (_embeddingCache.has(text)) {
+        return _embeddingCache.get(text);
+    }
     const result = await embeddingClient.embeddings.create({
         input: [text],
         model: EMBEDDING_DEPLOYMENT,
     });
-    return result.data[0].embedding;
+    const embedding = result.data[0].embedding;
+    _embeddingCache.set(text, embedding);
+    // Evict oldest entries if cache exceeds max
+    if (_embeddingCache.size > EMBEDDING_CACHE_MAX) {
+        const firstKey = _embeddingCache.keys().next().value;
+        _embeddingCache.delete(firstKey);
+    }
+    return embedding;
 }
 
 /** Check if vector store has data. */
@@ -256,6 +269,8 @@ app.post('/api/chat', async (req, res) => {
                 type: result.type,
                 confidence: result.confidence,
                 iterations: result.iterations,
+                suggestedActions: result.suggestedActions || [],
+                resultCount: result.resultCount,
                 ...(result.type === 'clarification' ? { question: result.question } : {}),
             });
         } else {
