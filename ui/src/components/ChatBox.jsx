@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { sendChatMessage } from '../api';
+import { sendChatMessage, investigateCommits } from '../api';
 
 function ChatBox() {
     const [messages, setMessages] = useState(() => {
@@ -18,6 +18,7 @@ function ChatBox() {
     const [input, setInput] = useState('');
     const [loading, setLoading] = useState(false);
     const messagesEndRef = useRef(null);
+    const textareaRef = useRef(null);
 
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -26,6 +27,14 @@ function ChatBox() {
     useEffect(() => {
         try { localStorage.setItem('chat-history', JSON.stringify(messages)); } catch {}
     }, [messages]);
+
+    useEffect(() => {
+        const el = textareaRef.current;
+        if (el) {
+            el.style.height = 'auto';
+            el.style.height = Math.min(el.scrollHeight, 150) + 'px';
+        }
+    }, [input]);
 
     const handleSend = async () => {
         const text = input.trim();
@@ -69,6 +78,8 @@ function ChatBox() {
                     role: 'assistant',
                     content: reply,
                     suggestedActions: data.suggestedActions || [],
+                    suspects: data.suspects || [],
+                    originalQuery: text,
                 }]);
             }
         } catch (err) {
@@ -76,6 +87,45 @@ function ChatBox() {
                 ...prev,
                 { role: 'error', content: `Error: ${err.message}` },
             ]);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleInvestigate = async (msg) => {
+        if (loading) return;
+        setLoading(true);
+
+        setMessages(prev => [...prev, {
+            role: 'assistant',
+            content: '🔍 Fetching commit diffs and analyzing code changes...',
+            isInvestigating: true,
+        }]);
+
+        try {
+            const history = messages
+                .filter((_, i) => i > 0)
+                .slice(-10);
+
+            const data = await investigateCommits(msg.originalQuery, msg.suspects, history);
+
+            // Replace the investigating placeholder with the real result
+            setMessages(prev => {
+                const updated = prev.filter(m => !m.isInvestigating);
+                return [...updated, {
+                    role: 'assistant',
+                    content: data.reply,
+                    isInvestigation: true,
+                }];
+            });
+        } catch (err) {
+            setMessages(prev => {
+                const updated = prev.filter(m => !m.isInvestigating);
+                return [...updated, {
+                    role: 'error',
+                    content: `Investigation failed: ${err.message}`,
+                }];
+            });
         } finally {
             setLoading(false);
         }
@@ -108,7 +158,7 @@ function ChatBox() {
             </div>
             <div className="chat-messages">
                 {messages.map((msg, i) => (
-                    <div key={i} className={`chat-message ${msg.role}${msg.isClarification ? ' clarification' : ''}`}>
+                    <div key={i} className={`chat-message ${msg.role}${msg.isClarification ? ' clarification' : ''}${msg.isInvestigation ? ' investigation' : ''}`}>
                         {msg.isClarification && <div className="clarification-badge">🤔 Need more details</div>}
                         {msg.role === 'user' ? msg.content : <ReactMarkdown>{msg.content}</ReactMarkdown>}
                         {msg.suggestedActions?.length > 0 && (
@@ -126,6 +176,20 @@ function ChatBox() {
                                 ))}
                             </div>
                         )}
+                        {msg.suspects?.length > 0 && !msg.isInvestigation && (
+                            <div className="investigate-section">
+                                <button
+                                    className="investigate-btn"
+                                    onClick={() => handleInvestigate(msg)}
+                                    disabled={loading}
+                                >
+                                    Investigate these commits
+                                </button>
+                                <span className="investigate-hint">
+                                    Fetch code diffs and analyze for root cause
+                                </span>
+                            </div>
+                        )}
                     </div>
                 ))}
                 {loading && (
@@ -137,16 +201,13 @@ function ChatBox() {
             </div>
             <div className="chat-input-area">
                 <textarea
+                    ref={textareaRef}
                     value={input}
                     onChange={e => setInput(e.target.value)}
                     onKeyDown={handleKeyDown}
                     placeholder="Ask about recent changes..."
                     disabled={loading}
                     rows={1}
-                    onInput={e => {
-                        e.target.style.height = 'auto';
-                        e.target.style.height = Math.min(e.target.scrollHeight, 150) + 'px';
-                    }}
                 />
                 <button onClick={handleSend} disabled={loading || !input.trim()}>
                     Send

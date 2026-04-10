@@ -37,6 +37,7 @@ export async function agenticSearch({
 }) {
     let bestAnswer = null;
     let bestScore = 0;
+    let bestResults = [];
     const iterationLog = [];
 
     const log = (iteration, stage, details) => {
@@ -120,6 +121,7 @@ export async function agenticSearch({
         if (synthesis.confidence > bestScore && synthesis.answer && synthesis.answer.trim().length > 0) {
             bestScore = synthesis.confidence;
             bestAnswer = synthesis;
+            bestResults = results;
         }
 
         // --- Agent 4: Answer Evaluator ---
@@ -133,11 +135,11 @@ export async function agenticSearch({
         });
 
         if (evaluation.verdict === 'PASS') {
-            return formatAnswer(synthesis, 'agentic', i, iterationLog);
+            return formatAnswer(synthesis, 'agentic', i, iterationLog, null, results);
         }
 
         if (evaluation.verdict === 'PARTIAL') {
-            return formatAnswer(synthesis, 'agentic', i, iterationLog, 'Results may be incomplete — I searched with the best available context.');
+            return formatAnswer(synthesis, 'agentic', i, iterationLog, 'Results may be incomplete — I searched with the best available context.', results);
         }
 
         // RETRY — prepare feedback for next iteration
@@ -165,7 +167,8 @@ export async function agenticSearch({
             'agentic',
             maxIterations,
             iterationLog,
-            bestScore < 0.5 ? 'I wasn\'t fully confident in these results after multiple search attempts. Consider refining your question with more specific details.' : null
+            bestScore < 0.5 ? 'I wasn\'t fully confident in these results after multiple search attempts. Consider refining your question with more specific details.' : null,
+            bestResults
         );
     }
 
@@ -179,11 +182,26 @@ export async function agenticSearch({
     };
 }
 
-function formatAnswer(synthesis, searchMethod, iterations, iterationLog, disclaimer) {
+function formatAnswer(synthesis, searchMethod, iterations, iterationLog, disclaimer, results) {
     let reply = synthesis.answer;
     if (disclaimer) {
         reply += `\n\n---\n*⚠️ ${disclaimer}*`;
     }
+
+    // Extract top suspects for deep investigation
+    const suspects = (results || []).slice(0, 5).map(r => ({
+        commitId: r.commitId,
+        shortId: r.id,
+        repo: r.repo,
+        date: r.date,
+        author: r.author || r.metadata?.author,
+        title: r.metadata?.title,
+        summary: r.metadata?.summary,
+        riskLevel: r.metadata?.riskLevel,
+        url: r.metadata?.url,
+        score: r.score,
+    }));
+
     return {
         type: 'answer',
         reply,
@@ -192,6 +210,7 @@ function formatAnswer(synthesis, searchMethod, iterations, iterationLog, disclai
         searchCoverage: synthesis.searchCoverage,
         suggestedActions: synthesis.suggestedActions || [],
         resultCount: synthesis.resultCount,
+        suspects,
         iterations,
         iterationLog,
     };

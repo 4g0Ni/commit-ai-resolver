@@ -73,6 +73,11 @@ import { searchVectors, getVectorStats } from '../src/services/vector-store.js';
 // --- Agentic search ---
 import { agenticSearch } from './agents/orchestrator.js';
 
+// --- Deep investigation ---
+import { investigateDiffs } from './agents/diff-investigator.js';
+import { fetchCommitChanges, fetchCommitDiff } from '../src/services/ado-git-client.js';
+import { REPOSITORIES } from '../src/config/repositories.js';
+
 /** Generate a query embedding using the embedding client (with LRU cache). */
 const _embeddingCache = new Map();
 const EMBEDDING_CACHE_MAX = 100;
@@ -271,6 +276,7 @@ app.post('/api/chat', async (req, res) => {
                 iterations: result.iterations,
                 suggestedActions: result.suggestedActions || [],
                 resultCount: result.resultCount,
+                suspects: result.suspects || [],
                 ...(result.type === 'clarification' ? { question: result.question } : {}),
             });
         } else {
@@ -342,6 +348,76 @@ app.get('/api/vectors/stats', async (req, res) => {
         const stats = await getVectorStats();
         res.json(stats);
     } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// POST /api/investigate — Deep investigation: fetch commit diffs and analyze root cause
+app.post('/api/investigate', async (req, res) => {
+    try {
+        const { message, suspects = [], history = [] } = req.body;
+        if (!message || suspects.length === 0) {
+            return res.status(400).json({ error: 'message and suspects are required' });
+        }
+
+        console.log(`  Investigate: "${message.slice(0, 80)}" — ${suspects.length} suspect(s)`);
+        const t0 = Date.now();
+
+        // Fetch diffs for each suspect (cap at 5)
+        const suspectsWithDiffs = [];
+        for (const suspect of suspects.slice(0, 5)) {
+            const repoConfig = REPOSITORIES[suspect.repo];
+            if (!repoConfig) {
+                console.warn(`    Skipping ${suspect.shortId}: unknown repo "${suspect.repo}"`);
+                suspectsWithDiffs.push({ ...suspect, diff: '(unknown repository)' });
+                continue;
+            }
+
+            try {
+                console.log(`    Fetching diff for ${suspect.shortId} (${suspect.repo})...`);
+                const diffStart = Date.now();
+                const diffs = await fetchCommitDiff(repoConfig, suspect.commitId);
+                const diffText = diffs.join('\n\n');
+                const diffMs = Date.now() - diffStart;
+                console.log(`    ${suspect.shortId}: ${diffs.length} file(s), ${diffText.length} chars, ${diffMs}ms`);
+
+                // Cap diff size to avoid token explosion
+                const cappedDiff = diffText.length > 10000
+                    ? diffText.slice(0, 10000) + '\n... (diff truncated, ' + diffText.length + ' total chars)'
+                    : diffText;
+
+                suspectsWithDiffs.push({ ...suspect, diff: cappedDiff });
+            } catch (err) {
+                console.warn(`    Failed to fetch diff for ${suspect.shortId}: ${err.message}`);
+                suspectsWithDiffs.push({ ...suspect, diff: '(failed to fetch diff: ' + err.message + ')' });
+            }
+        }
+
+        const diffMs = Date.now() - t0;
+        console.log(`  Diffs fetched in ${diffMs}ms, sending to investigator...`);
+
+        // Run diff investigator agent
+        const result = await investigateDiffs(openaiClient, {
+            query: message,
+            suspects: suspectsWithDiffs,
+            history,
+        });
+
+        const totalMs = Date.now() - t0;
+        console.log(`  Investigation complete: ${totalMs}ms, confidence: ${result.confidence}, root cause: ${result.rootCauseCandidate || 'none'}`);
+
+        res.json({
+            reply: result.analysis,
+            type: 'investigation',
+            rootCauseCandidate: result.rootCauseCandidate,
+            rootCauseRepo: result.rootCauseRepo,
+            confidence: result.confidence,
+            mechanism: result.mechanism,
+            nextSteps: result.nextSteps || [],
+            suspectsAnalyzed: result.suspectsAnalyzed,
+        });
+    } catch (err) {
+        console.error('Investigate error:', err);
         res.status(500).json({ error: err.message });
     }
 });
