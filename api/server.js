@@ -167,7 +167,13 @@ app.get('/api/releases', async (req, res) => {
         if (_releaseCache.data && now < _releaseCache.expiresAt) {
             return res.json(_releaseCache.data);
         }
-        const releases = await fetchReleaseList(14);
+        const all = await fetchReleaseList(14);
+        const releases = all.filter(r => {
+            const result = (r.build.result ?? '').toLowerCase();
+            const status = (r.build.status ?? '').toLowerCase();
+            return result !== 'canceled' && result !== 'cancelled'
+                && status !== 'canceled' && status !== 'cancelled';
+        });
         _releaseCache = { data: releases, expiresAt: now + 5 * 60 * 1000 };
         res.json(releases);
     } catch (err) {

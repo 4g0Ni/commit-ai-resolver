@@ -266,7 +266,13 @@ async function modeReleaseList() {
     console.log(`${'='.repeat(80)}`);
 
     try {
-        const releases = await fetchReleaseList(7);
+        const allReleases = await fetchReleaseList(7);
+        const releases = allReleases.filter(r => {
+            const result = (r.build.result ?? '').toLowerCase();
+            const status = (r.build.status ?? '').toLowerCase();
+            return result !== 'canceled' && result !== 'cancelled'
+            && status !== 'canceled' && status !== 'cancelled';
+        });
 
         if (releases.length === 0) {
             console.log('  No release builds found in the last 7 days.');
