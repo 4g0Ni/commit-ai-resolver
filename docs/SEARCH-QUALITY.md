@@ -4,7 +4,7 @@
 
 This document defines the fundamental search use cases for the Commit AI Resolver's agentic search pipeline, a quality scoring rubric, and baseline/post-improvement test results. It serves as the single source of truth for what the search system must accomplish and how quality is measured.
 
-**Architecture:** 3-agent pipeline (Intent Extractor (with self-validation) → RAG Search → Answer Synthesizer → Answer Evaluator), LanceDB vector store with `text-embedding-3-large` embeddings (3072 dimensions).
+**Architecture:** 3-agent pipeline (Intent Extractor (with self-validation) → Multi-Query RAG Search (with RRF fusion) → Answer Synthesizer (multimodal) → Answer Evaluator), LanceDB vector store with `text-embedding-3-large` embeddings (3072 dimensions). Max 3 iterations per query. Supports ADO work item URL input with automatic bug context fetching, screenshot extraction, and date anchoring.
 
 **Data scope:** 31 days (2026-03-11 to 2026-04-10), 2,165 commits across 3 repos.
 
@@ -421,3 +421,38 @@ Each test query is scored on 6 dimensions (0-3 each, max 18 total):
 | S-14 | Low | Author LIKE filter is substring-based | "Chen" matches multiple authors. Acceptable for now |
 | S-15 | Low | Conversation history limited to last 4 messages | Multi-turn context can be lost in long conversations |
 | S-16 | Info | UC-04 returns 2 results because only 2 HIGH risk commits exist this week | Correct behavior, not a bug |
+
+---
+
+## Multi-Query Search & Work Item Integration
+
+### Multi-Query RRF Fusion
+
+For queries involving work items (bugs), the search runs up to 3 parallel queries:
+
+| Query | Source | Weight | Purpose |
+|-------|--------|--------|---------|
+| Primary | LLM-crafted `searchQuery` | 1 | Semantic match against bug description |
+| Secondary | LLM-crafted `secondarySearchQuery` | 1 | Different angle — fix mechanisms, component names, routing |
+| Title | Bug title verbatim | 5 | Direct semantic overlap with fix commit titles |
+
+Results are merged using **Reciprocal Rank Fusion (RRF)**: `score = Σ weight / (k + rank + 1)` where k=60 (standard constant). Commits appearing in multiple lists get boosted.
+
+**`broadSearchOpts`**: Secondary and title queries skip `riskLevel` and `changeType` post-filters to cast a wider net. This prevents relevant commits with different metadata classifications from being filtered out (e.g., a bug fix classified as `changeType: mixed` wouldn't be found by a search filtered to `changeType: code`).
+
+### Work Item URL Input
+
+When a user pastes an ADO work item URL:
+
+1. **URL detection** — `workitem-detector.js` extracts the work item ID from various URL formats
+2. **Fetch bug context** — `ado-git-client.js` calls ADO REST API to get title, description, repro steps, area path, state
+3. **Image extraction** — Parses `<img>` tags from raw HTML before stripping. Fetches each image with Bearer token auth. Caps: 5 images max, 2MB per image, supported formats: PNG, JPEG, WebP, GIF
+4. **Date anchoring** — Sets `dateFrom` to 2 days before bug creation date, `dateTo` to creation date
+5. **Multi-query search** — Generates primary + secondary search queries from bug context, plus title search
+6. **Multimodal synthesis** — Passes screenshots as `image_url` content blocks to the Answer Synthesizer LLM
+
+### Search Quality Impact
+
+The multi-query RRF approach significantly improves recall for work item queries. For example, bug 10552393 ("The grid is missing for Products."):
+- **Primary query alone** — fix commit `519cdc3f` did not appear in results (semantic gap between bug description and fix)
+- **With title search (weight 5)** — fix commit appeared at RRF rank 8, correctly identified as a suspect

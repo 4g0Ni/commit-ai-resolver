@@ -63,26 +63,31 @@ A dark-themed React dashboard with a timeline chart, risk metrics, and drill-dow
 
 ### 2. AI Chat — Agentic Search Pipeline
 
-The chat panel uses a multi-agent pipeline that goes beyond simple keyword search:
+The chat panel uses a 3-agent pipeline that goes beyond simple keyword search:
 
 ```
 User Question
     │
-    ├── Agent 1: Intent Extractor
+    ├── Agent 1: Intent Extractor (with self-validation)
     │   Parses dates, repos, authors, risk levels, and rewrites the query
-    │   for semantic search. Applies a 2-day release buffer for incidents.
+    │   for semantic search. Generates a secondary search query for work items.
+    │   Self-validates extraction quality (replaces separate Analyzer agent).
+    │   Applies a 2-day release buffer for incidents.
     │
-    ├── RAG Search (LanceDB Vector Store)
-    │   Semantic similarity search over 2,000+ commit embeddings with
-    │   structured filters (repo, author, date range, risk level).
+    ├── Multi-Query RAG Search (LanceDB Vector Store)
+    │   Up to 3 parallel searches merged via Reciprocal Rank Fusion (RRF):
+    │     1. Primary LLM-crafted query (weight 1)
+    │     2. Secondary query — different angle on the same bug (weight 1)
+    │     3. Bug title verbatim — high semantic overlap with fix commits (weight 5)
     │
     ├── Agent 2: Answer Synthesizer
     │   Ranks results by relevance, generates actionable answer with
     │   commit SHAs, ADO links, and suggested next steps.
+    │   Supports multimodal input — bug screenshots passed as images.
     │
     ├── Agent 3: Answer Evaluator
     │   Checks answer quality. If insufficient, refines the search query
-    │   and loops (up to 3-5 iterations).
+    │   and loops (up to 3 iterations).
     │
     └── Response with confidence score, metadata, and suggested follow-ups
 ```
@@ -91,6 +96,26 @@ User Question
 
 > **User:** "something broke"
 > **System:** "Could you be more specific? Which page or feature is affected? When did the issue start?"
+
+### 2.1 Work Item Integration
+
+Paste an **ADO work item URL** (bug, task, etc.) directly into the chat, and the system will:
+
+1. **Detect** the work item ID from the URL (supports multiple ADO URL formats)
+2. **Fetch** the full work item from ADO (title, description, repro steps, area path, state)
+3. **Extract screenshots** embedded in the Description/ReproSteps HTML fields (up to 5 images, max 2MB each)
+4. **Anchor search dates** to the bug's creation date with a 2-day release buffer
+5. **Run multi-query RRF search** using the bug title, description-derived queries, and fix-mechanism queries
+6. **Pass screenshots** to the Answer Synthesizer as multimodal content so the LLM can correlate visual symptoms with code changes
+
+```
+You:    https://msasg.visualstudio.com/Bing_Ads/_workitems/edit/10552393
+System: [Fetches bug "The grid is missing for Products."]
+        [Extracts 2 screenshots from bug description]
+        [Runs 3 parallel searches: primary query, secondary query, bug title]
+        [Merges results via RRF, passes images to LLM]
+        → Ranked suspect commits with visual correlation
+```
 
 ### 3. Deep Investigation — Commit Diff Analysis
 
@@ -268,6 +293,7 @@ npx vite --host
 | "Latency spike starting March 28" | Incident correlation with 2-day release buffer |
 | "What did Beina Zhang work on?" | Author-specific commit search |
 | "Show pilot flag changes" | Config/feature-flag focused search |
+| `https://msasg.visualstudio.com/.../edit/10552393` | Paste ADO work item URL — fetches bug, extracts screenshots, runs multi-query search |
 
 ---
 
@@ -299,7 +325,7 @@ npx vite --host
 ┌─────────────────────────────────────────────────────────────────────┐
 │                      Node.js Backend (port 4399)                    │
 │                                                                     │
-│  POST /api/chat        → Agentic Search Pipeline (4 agents)        │
+│  POST /api/chat        → Agentic Search Pipeline (3 agents)        │
 │  POST /api/investigate → Deep Diff Investigation                    │
 │  GET  /api/days        → Daily Summary Data                         │
 │  GET  /api/days/:date  → Single Day Detail                          │
