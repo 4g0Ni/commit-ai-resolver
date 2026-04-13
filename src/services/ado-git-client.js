@@ -557,6 +557,53 @@ function formatCommit(commit) {
     };
 }
 
+/**
+ * Strip HTML tags from a string, preserving basic structure as plain text.
+ */
+function stripHtml(html) {
+    if (!html) return null;
+    return html
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<\/?(p|div|li|tr|td|th|h[1-6])[^>]*>/gi, '\n')
+        .replace(/<[^>]+>/g, '')
+        .replace(/&nbsp;/g, ' ')
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+}
+
+/**
+ * Fetch an Azure DevOps work item by ID.
+ *
+ * @param {number|string} workItemId - Work item ID
+ * @returns {Promise<object|null>} Normalized work item, or null if not found
+ */
+async function fetchWorkItem(workItemId) {
+    const url = `https://dev.azure.com/${ADO_ORG}/${ADO_PROJECT}/_apis/wit/workitems/${workItemId}?api-version=7.1&$expand=all`;
+    try {
+        const data = await adoGet(url);
+        const fields = data.fields || {};
+        return {
+            id: data.id,
+            url: data._links?.html?.href || `https://dev.azure.com/${ADO_ORG}/${ADO_PROJECT}/_workitems/edit/${data.id}`,
+            title: fields['System.Title'] || '',
+            description: stripHtml(fields['System.Description']),
+            state: fields['System.State'] || '',
+            type: fields['System.WorkItemType'] || '',
+            createdDate: fields['System.CreatedDate'] || '',
+            assignedTo: fields['System.AssignedTo']?.displayName || null,
+            reproSteps: stripHtml(fields['Microsoft.VSTS.TCM.ReproSteps']),
+            areaPath: fields['System.AreaPath'] || null,
+        };
+    } catch (err) {
+        if (err.message?.includes('404')) return null;
+        throw err;
+    }
+}
+
 export {
     fetchLatestCommits,
     fetchRefs,
@@ -570,4 +617,5 @@ export {
     fetchFileContent,
     fetchFileContentBatch,
     minifyContent,
+    fetchWorkItem,
 };

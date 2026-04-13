@@ -75,8 +75,9 @@ import { agenticSearch } from './agents/orchestrator.js';
 
 // --- Deep investigation ---
 import { investigateDiffs } from './agents/diff-investigator.js';
-import { fetchCommitChanges, fetchCommitDiff } from '../src/services/ado-git-client.js';
+import { fetchCommitChanges, fetchCommitDiff, fetchWorkItem } from '../src/services/ado-git-client.js';
 import { REPOSITORIES } from '../src/config/repositories.js';
+import { detectWorkItemUrls } from '../src/services/workitem-detector.js';
 
 /** Generate a query embedding using the embedding client (with LRU cache). */
 const _embeddingCache = new Map();
@@ -250,6 +251,21 @@ app.post('/api/chat', async (req, res) => {
         const useVectors = await isVectorStoreAvailable();
         console.log(`  Chat query: "${message.slice(0, 100)}${message.length > 100 ? '...' : ''}"`);
 
+        // --- Work item detection & fetching ---
+        let workItemContext = null;
+        const detected = detectWorkItemUrls(message);
+        if (detected.workItemIds.length > 0) {
+            try {
+                const wi = await fetchWorkItem(detected.workItemIds[0]);
+                if (wi) {
+                    workItemContext = wi;
+                    console.log(`  Work item ${wi.id}: "${wi.title}" (${wi.type}, ${wi.state}, created ${wi.createdDate})`);
+                }
+            } catch (err) {
+                console.warn(`  Failed to fetch work item ${detected.workItemIds[0]}: ${err.message}`);
+            }
+        }
+
         if (useVectors) {
             // --- Agentic pipeline ---
             const t0 = Date.now();
@@ -261,6 +277,7 @@ app.post('/api/chat', async (req, res) => {
                 query: message,
                 history,
                 maxIterations: 5,
+                workItemContext,
                 onProgress: (iteration, stage, details) => {
                     // Log progress server-side
                 },
@@ -277,6 +294,7 @@ app.post('/api/chat', async (req, res) => {
                 suggestedActions: result.suggestedActions || [],
                 resultCount: result.resultCount,
                 suspects: result.suspects || [],
+                workItem: result.workItem || undefined,
                 ...(result.type === 'clarification' ? { question: result.question } : {}),
             });
         } else {

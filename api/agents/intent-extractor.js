@@ -20,7 +20,7 @@ function daysAgo(n, today) {
  * @returns {Promise<object>} Structured intent
  */
 export async function extractIntent(llm, context) {
-    const { query, history = [], feedback } = context;
+    const { query, history = [], feedback, workItemContext } = context;
     const today = new Date().toISOString().slice(0, 10);
     const repoList = 'AdsAppsCampaignUI, AdsAppsMT, AdsAppUI';
 
@@ -45,6 +45,7 @@ Return ONLY a JSON object with these fields (use null for missing):
 - "dateFrom": start date YYYY-MM-DD if a time range is mentioned. For incident/regression queries ("spike", "broke", "error", "crash", "regression"), expand the start date 2 days earlier to account for release buffer. For "this week", use Monday of the current week. (null if open-ended)
 - "dateTo": end date YYYY-MM-DD if a time range is mentioned (null if open-ended)
 - "searchQuery": a rewritten version optimized for semantic search against commit summaries. Remove person names and date references. Keep the technical intent specific. For author queries, include broad technical terms like "feature implementation configuration API change". For broad queries like "what changed", use "code changes features configuration deployment updates".
+- "secondarySearchQuery": (only when a work item/bug context is provided) a SECOND, DIFFERENT semantic query focusing on the fix mechanism — component names, template changes, routing, configuration keys, data model, CSS/layout. Use different terms from searchQuery. (null if no work item context)
 - "riskLevel": "HIGH", "MEDIUM", or "LOW" if the user is asking about a specific risk level (null if not risk-specific)
 - "changeType": "config", "code", or "mixed" if the user is asking about config/pilot/flag changes vs code changes (null if not type-specific)
 - "keywords": array of 3-6 specific technical keywords for fallback text matching
@@ -65,7 +66,21 @@ User: "what pilot flags were changed recently"
 
 User: "something broke"
 {"author":null,"repo":null,"dateFrom":null,"dateTo":null,"searchQuery":"bug error crash broken regression","riskLevel":null,"changeType":null,"keywords":["bug","error","crash","broken","regression"],"confidence":0.3,"ambiguities":["which page or feature is affected?","when did the issue start?","what kind of breakage — errors, crashes, or slowness?"],"verdict":"ASK_USER","clarificationQuestion":"What exactly broke, in which feature or area, and roughly when did it start happening?"}
-${feedbackBlock}
+${feedbackBlock}${workItemContext ? `
+
+WORK ITEM CONTEXT — The user is asking about this Azure DevOps ${workItemContext.type}:
+ID: ${workItemContext.id}
+Title: ${workItemContext.title}
+State: ${workItemContext.state}
+Created: ${workItemContext.createdDate}
+Area: ${workItemContext.areaPath || 'N/A'}
+Description: ${(workItemContext.description || '').slice(0, 500)}
+${workItemContext.reproSteps ? `Repro Steps: ${workItemContext.reproSteps.slice(0, 300)}` : ''}
+
+IMPORTANT: Use the bug title and description to craft a highly targeted searchQuery with specific technical terms, feature names, error messages, and affected areas from the bug. Set dateFrom to 2 days before the bug creation date (${workItemContext.createdDate.slice(0, 10)}) and dateTo to the bug creation date. Your verdict MUST be "GOOD" since the work item provides sufficient context.
+
+ALSO produce a "secondarySearchQuery" — a DIFFERENT semantic query that focuses on the FIX MECHANISM rather than the symptom. Think about what a developer would change to fix this bug: component names, template files, configuration keys, routing changes, data model changes, CSS/layout changes. The secondary query should use DIFFERENT terms from searchQuery to maximize coverage.
+Example: if the bug is "grid is missing on campaign page", searchQuery might be "campaign grid missing data display", but secondarySearchQuery should be "grid template component render view reset filters hide show".` : ''}
 
 Now extract from:
 User: "${query.replace(/"/g, '\\"')}"`;
@@ -89,6 +104,7 @@ User: "${query.replace(/"/g, '\\"')}"`;
             dateFrom: parsed.dateFrom || null,
             dateTo: parsed.dateTo || null,
             searchQuery: parsed.searchQuery || query,
+            secondarySearchQuery: parsed.secondarySearchQuery || null,
             riskLevel: parsed.riskLevel || null,
             changeType: parsed.changeType || null,
             keywords: parsed.keywords || [],

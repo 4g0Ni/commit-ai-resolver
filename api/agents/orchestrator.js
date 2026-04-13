@@ -33,6 +33,7 @@ export async function agenticSearch({
     query,
     history = [],
     maxIterations = 3,
+    workItemContext,
     onProgress,
 }) {
     let bestAnswer = null;
@@ -48,13 +49,27 @@ export async function agenticSearch({
         console.log(`  [Agent ${iteration}/${maxIterations}] ${stage}${detailStr}`);
     };
 
-    let context = { query, history, feedback: null };
+    let context = { query, history, feedback: null, workItemContext };
+
+    // If a work item is provided, anchor dates to its creation date
+    if (workItemContext?.createdDate) {
+        const bugDate = new Date(workItemContext.createdDate);
+        const searchFrom = new Date(bugDate);
+        searchFrom.setDate(searchFrom.getDate() - 2); // 2-day release buffer
+        context.dateOverrides = {
+            dateFrom: searchFrom.toISOString().slice(0, 10),
+            dateTo: bugDate.toISOString().slice(0, 10),
+        };
+        log(0, 'work-item', { id: workItemContext.id, title: workItemContext.title, createdDate: workItemContext.createdDate });
+    }
 
     for (let i = 1; i <= maxIterations; i++) {
         // --- Agent 1: Intent Extraction (includes self-validation) ---
         log(i, 'intent-extractor', { status: 'running' });
         const intent = await extractIntent(llm, context);
         log(i, 'intent-extractor', { status: 'done', confidence: intent.confidence, verdict: intent.verdict, elapsed: intent._elapsed });
+        console.log(`  [Intent] searchQuery: "${intent.searchQuery}"`);
+        if (intent.secondarySearchQuery) console.log(`  [Intent] secondarySearchQuery: "${intent.secondarySearchQuery}"`);
 
         if (intent.verdict === 'ASK_USER') {
             // Pause pipeline — return clarification question to user
@@ -81,9 +96,8 @@ export async function agenticSearch({
         const effectiveDateFrom = context.dateOverrides?.dateFrom || intent.dateFrom || undefined;
         const effectiveDateTo = context.dateOverrides?.dateTo || intent.dateTo || undefined;
 
-        const t1 = Date.now();
-        const results = await searchVectors(queryEmbedding, {
-            topK: hasMetadataFilters ? 50 : 30,
+        const searchOpts = {
+            topK: workItemContext ? 50 : (hasMetadataFilters ? 50 : 30),
             minScore: intent.author ? 0.01 : (hasFilters ? 0.05 : 0.15),
             author: intent.author || undefined,
             repo: intent.repo || undefined,
@@ -91,8 +105,60 @@ export async function agenticSearch({
             dateTo: effectiveDateTo,
             riskLevel: intent.riskLevel || undefined,
             changeType: intent.changeType || undefined,
-        });
+        };
+
+        // Broad search opts: no riskLevel/changeType filters for secondary and title queries
+        // to avoid filtering out relevant commits with different metadata classifications
+        const broadSearchOpts = {
+            topK: searchOpts.topK,
+            minScore: searchOpts.minScore,
+            author: searchOpts.author,
+            repo: searchOpts.repo,
+            dateFrom: searchOpts.dateFrom,
+            dateTo: searchOpts.dateTo,
+        };
+
+        const t1 = Date.now();
+        const primaryResults = await searchVectors(queryEmbedding, searchOpts);
         const searchMs = Date.now() - t1;
+
+        // Collect all result lists for multi-query fusion
+        // Each entry: { results, weight } — title search gets higher weight
+        // because it's deterministic and directly matches bug symptoms
+        const allResultLists = [{ results: primaryResults, weight: 1 }];
+
+        // Second search using LLM secondary query — may bridge semantic gap
+        if (intent.secondarySearchQuery) {
+            log(i, 'rag-search-secondary', { status: 'running', query: intent.secondarySearchQuery.slice(0, 80) });
+            const t2 = Date.now();
+            const secondaryEmbedding = await embedQuery(intent.secondarySearchQuery);
+            const secondaryResults = await searchVectors(secondaryEmbedding, broadSearchOpts);
+            const secondaryMs = Date.now() - t2;
+            log(i, 'rag-search-secondary', { status: 'done', resultCount: secondaryResults.length, elapsed: secondaryMs });
+            allResultLists.push({ results: secondaryResults, weight: 1 });
+        }
+
+        // Third search using the bug title directly — the title's natural language
+        // often has better semantic overlap with commit summaries than LLM rewrites
+        if (workItemContext?.title) {
+            const cleanTitle = workItemContext.title.replace(/\[[^\]]*\]\s*/g, '').trim();
+            log(i, 'rag-search-title', { status: 'running', query: cleanTitle.slice(0, 80) });
+            const t3 = Date.now();
+            const titleEmbedding = await embedQuery(cleanTitle);
+            const titleResults = await searchVectors(titleEmbedding, { ...broadSearchOpts, minScore: 0.05 });
+            const titleMs = Date.now() - t3;
+            log(i, 'rag-search-title', { status: 'done', resultCount: titleResults.length, elapsed: titleMs });
+            allResultLists.push({ results: titleResults, weight: 5 });
+        }
+
+        // Merge results using Reciprocal Rank Fusion when multiple queries were used
+        let results;
+        if (allResultLists.length > 1) {
+            results = fuseResults(allResultLists);
+        } else {
+            results = primaryResults;
+        }
+
         log(i, 'rag-search', { status: 'done', resultCount: results.length, embeddingMs, searchMs });
 
         // If vector search returned nothing and this is the first iteration, try full context
@@ -135,11 +201,11 @@ export async function agenticSearch({
         });
 
         if (evaluation.verdict === 'PASS') {
-            return formatAnswer(synthesis, 'agentic', i, iterationLog, null, results);
+            return formatAnswer(synthesis, 'agentic', i, iterationLog, null, results, workItemContext);
         }
 
         if (evaluation.verdict === 'PARTIAL') {
-            return formatAnswer(synthesis, 'agentic', i, iterationLog, 'Results may be incomplete — I searched with the best available context.', results);
+            return formatAnswer(synthesis, 'agentic', i, iterationLog, 'Results may be incomplete — I searched with the best available context.', results, workItemContext);
         }
 
         // RETRY — prepare feedback for next iteration
@@ -168,7 +234,8 @@ export async function agenticSearch({
             maxIterations,
             iterationLog,
             bestScore < 0.5 ? 'I wasn\'t fully confident in these results after multiple search attempts. Consider refining your question with more specific details.' : null,
-            bestResults
+            bestResults,
+            workItemContext
         );
     }
 
@@ -182,14 +249,49 @@ export async function agenticSearch({
     };
 }
 
-function formatAnswer(synthesis, searchMethod, iterations, iterationLog, disclaimer, results) {
+/**
+ * Merge multiple ranked result lists using Reciprocal Rank Fusion (RRF).
+ * Commits appearing in multiple lists get boosted. Preserves the original
+ * result object (from the list where it scored highest).
+ *
+ * RRF score = sum over lists of weight * 1/(k + rank), where k=60 (standard constant).
+ * @param {Array<{results: Array, weight: number}>} weightedLists
+ */
+function fuseResults(weightedLists, k = 60) {
+    const scoreMap = new Map(); // id → { rrfScore, bestResult }
+
+    for (const { results: list, weight = 1 } of weightedLists) {
+        for (let rank = 0; rank < list.length; rank++) {
+            const r = list[rank];
+            const rrfContribution = weight * (1 / (k + rank + 1));
+            const existing = scoreMap.get(r.id);
+            if (existing) {
+                existing.rrfScore += rrfContribution;
+                // Keep the result object with the higher original score
+                if (r.score > existing.bestResult.score) {
+                    existing.bestResult = r;
+                }
+            } else {
+                scoreMap.set(r.id, { rrfScore: rrfContribution, bestResult: r });
+            }
+        }
+    }
+
+    // Sort by RRF score descending, attach RRF score to result for transparency
+    return [...scoreMap.values()]
+        .sort((a, b) => b.rrfScore - a.rrfScore)
+        .map(entry => ({ ...entry.bestResult, score: entry.bestResult.score, _rrfScore: entry.rrfScore }));
+}
+
+function formatAnswer(synthesis, searchMethod, iterations, iterationLog, disclaimer, results, workItemContext) {
     let reply = synthesis.answer;
     if (disclaimer) {
         reply += `\n\n---\n*⚠️ ${disclaimer}*`;
     }
 
-    // Extract top suspects for deep investigation
-    const suspects = (results || []).slice(0, 5).map(r => ({
+    // Extract top suspects for deep investigation — more for work item queries
+    const suspectCount = workItemContext ? 20 : 10;
+    const suspects = (results || []).slice(0, suspectCount).map(r => ({
         commitId: r.commitId,
         shortId: r.id,
         repo: r.repo,
@@ -211,6 +313,14 @@ function formatAnswer(synthesis, searchMethod, iterations, iterationLog, disclai
         suggestedActions: synthesis.suggestedActions || [],
         resultCount: synthesis.resultCount,
         suspects,
+        workItem: workItemContext ? {
+            id: workItemContext.id,
+            title: workItemContext.title,
+            url: workItemContext.url,
+            type: workItemContext.type,
+            state: workItemContext.state,
+            createdDate: workItemContext.createdDate,
+        } : undefined,
         iterations,
         iterationLog,
     };

@@ -13,9 +13,10 @@
  * @returns {Promise<object>} Structured answer with suspects and confidence
  */
 export async function synthesizeAnswer(llm, results, intent, context) {
-    const { query, history = [] } = context;
+    const { query, history = [], workItemContext } = context;
 
-    const commitContext = results.slice(0, 10).map(r =>
+    const topN = workItemContext ? 30 : 10;
+    const commitContext = results.slice(0, topN).map(r =>
         `[${r.date}] ${r.repo} | ${r.metadata.riskLevel} | ${r.id} by ${r.metadata.author}\n` +
         `  URL: ${r.metadata.url || 'N/A'}\n` +
         `  Title: ${r.metadata.title}\n` +
@@ -36,10 +37,27 @@ export async function synthesizeAnswer(llm, results, intent, context) {
         ? `\nConversation context:\n${history.slice(-4).map(h => `${h.role}: ${h.content?.slice(0, 200)}`).join('\n')}\n`
         : '';
 
+    const bugContextSection = workItemContext ? `
+BUG CONTEXT — The user is investigating this work item:
+Title: ${workItemContext.title}
+Type: ${workItemContext.type} | State: ${workItemContext.state}
+Created: ${workItemContext.createdDate}
+Description: ${(workItemContext.description || '').slice(0, 500)}
+${workItemContext.reproSteps ? `Repro Steps: ${workItemContext.reproSteps.slice(0, 300)}` : ''}
+
+When ranking suspects, consider ALL categories of changes that could cause the bug:
+- Navigation/routing changes that could prevent a page or component from loading
+- Template/rendering changes that could hide, remove, or break UI elements
+- Data-fetching changes that could return empty or incorrect data
+- Config/pilot changes that could gate or disable features
+- Shared component changes (grid, table, layout) that could affect the affected area
+Explain specifically how each suspect's changes relate to the bug symptom.
+` : '';
+
     const systemPrompt = `You are an expert change analysis assistant for the Microsoft Advertising engineering team.
 Analyze the search results and generate a comprehensive answer to the user's question.
 ${conversationContext}
-
+${bugContextSection}
 SEARCH METADATA:
 - Results found: ${scoreStats.count}
 - Score range: ${scoreStats.minScore} – ${scoreStats.maxScore} (avg: ${scoreStats.avgScore})

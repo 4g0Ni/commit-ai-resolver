@@ -74,12 +74,16 @@ async function searchVectors(queryEmbedding, opts = {}) {
 
     // Build WHERE clauses for LanceDB pre-filtering
     const whereClauses = [];
-    if (repo) whereClauses.push(`repo = '${repo.replace(/'/g, "''")}' `);
+    if (repo) whereClauses.push(`repo = '${repo.replace(/'/g, "''")}'`);
     if (author) whereClauses.push(`lower(author) LIKE '%${author.toLowerCase().replace(/'/g, "''")}%'`);
     if (dateFrom) whereClauses.push(`date >= '${dateFrom}'`);
     if (dateTo) whereClauses.push(`date <= '${dateTo}'`);
 
-    let query = table.vectorSearch(queryEmbedding).distanceType('cosine').limit(topK * 2);
+    // When WHERE filters are used, we need a larger pre-filter limit because
+    // LanceDB applies vector search limit BEFORE WHERE filtering. Without enough
+    // candidates, relevant results get cut off before date/repo filtering.
+    const preFilterLimit = whereClauses.length > 0 ? Math.max(topK * 5, 200) : topK * 2;
+    let query = table.vectorSearch(queryEmbedding).distanceType('cosine').limit(preFilterLimit);
     if (whereClauses.length > 0) {
         query = query.where(whereClauses.join(' AND '));
     }
