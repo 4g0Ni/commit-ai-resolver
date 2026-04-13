@@ -1,9 +1,14 @@
 /**
- * DateRangePicker — Select a date range with presets.
- * Default: last 7 days ending today.
+ * DateRangePicker — Select a date range with presets, or switch to Release Mode
+ * to pick from/to release builds instead.
  */
 
-function DateRangePicker({ fromDate, toDate, onChange }) {
+function DateRangePicker({
+    fromDate, toDate, onChange,
+    releaseMode, onReleaseModeChange,
+    releases, releasesLoading,
+    fromRelease, toRelease, onReleaseChange,
+}) {
     const today = new Date().toISOString().substring(0, 10);
 
     const presets = [
@@ -24,44 +29,113 @@ function DateRangePicker({ fromDate, toDate, onChange }) {
         return r.from === fromDate && r.to === toDate;
     });
 
+    const fromIdx = fromRelease ? releases.indexOf(fromRelease) : '';
+    const toIdx = toRelease ? releases.indexOf(toRelease) : '';
+
     return (
         <div className="date-range-picker">
-            <div className="date-inputs">
-                <label>
-                    From
+            <div className="release-mode-toggle">
+                <label className="toggle-switch">
                     <input
-                        type="date"
-                        value={fromDate}
-                        max={toDate}
-                        onChange={e => onChange(e.target.value, toDate)}
+                        type="checkbox"
+                        checked={releaseMode}
+                        onChange={e => onReleaseModeChange(e.target.checked)}
                     />
+                    <span className="toggle-slider"></span>
                 </label>
-                <span className="date-separator">→</span>
-                <label>
-                    To
-                    <input
-                        type="date"
-                        value={toDate}
-                        min={fromDate}
-                        max={today}
-                        onChange={e => onChange(fromDate, e.target.value)}
-                    />
-                </label>
+                <span className="toggle-label">Release</span>
             </div>
-            <div className="date-presets">
-                {presets.map(p => (
-                    <button
-                        key={p.days}
-                        className={`preset-btn ${activePreset?.days === p.days ? 'active' : ''}`}
-                        onClick={() => {
-                            const r = getPresetRange(p.days);
-                            onChange(r.from, r.to);
-                        }}
-                    >
-                        {p.label}
-                    </button>
-                ))}
-            </div>
+
+            {releaseMode ? (
+                <div className="release-inputs">
+                    {releasesLoading ? (
+                        <span className="release-loading">Loading releases...</span>
+                    ) : (
+                        <>
+                            <label>
+                                From
+                                <select
+                                    value={fromIdx === '' ? '' : fromIdx}
+                                    onChange={e => {
+                                        const idx = parseInt(e.target.value, 10);
+                                        onReleaseChange(
+                                            isNaN(idx) ? null : releases[idx],
+                                            toRelease
+                                        );
+                                    }}
+                                >
+                                    <option value="">Select release...</option>
+                                    {releases.map((r, i) => (
+                                        <option key={r.build.id} value={i}>
+                                            {r.build.buildNumber}
+                                        </option>
+                                    ))}
+                                </select>
+                            </label>
+                            <span className="date-separator">→</span>
+                            <label>
+                                To
+                                <select
+                                    value={toIdx === '' ? '' : toIdx}
+                                    onChange={e => {
+                                        const idx = parseInt(e.target.value, 10);
+                                        onReleaseChange(
+                                            fromRelease,
+                                            isNaN(idx) ? null : releases[idx]
+                                        );
+                                    }}
+                                >
+                                    <option value="">Select release...</option>
+                                    {releases.map((r, i) => (
+                                        <option key={r.build.id} value={i}>
+                                            {r.build.buildNumber}
+                                        </option>
+                                    ))}
+                                </select>
+                            </label>
+                        </>
+                    )}
+                </div>
+            ) : (
+                <>
+                    <div className="date-inputs">
+                        <label>
+                            From
+                            <input
+                                type="date"
+                                value={fromDate}
+                                max={toDate}
+                                onChange={e => onChange(e.target.value, toDate)}
+                            />
+                        </label>
+                        <span className="date-separator">→</span>
+                        <label>
+                            To
+                            <input
+                                type="date"
+                                value={toDate}
+                                min={fromDate}
+                                max={today}
+                                onChange={e => onChange(fromDate, e.target.value)}
+                            />
+                        </label>
+                    </div>
+                    <div className="date-presets">
+                        {presets.map(p => (
+                            <button
+                                key={p.days}
+                                className={`preset-btn ${activePreset?.days === p.days ? 'active' : ''}`}
+                                onClick={() => {
+                                    const r = getPresetRange(p.days);
+                                    onChange(r.from, r.to);
+                                }}
+                            >
+                                {p.label}
+                            </button>
+                        ))}
+                    </div>
+                </>
+            )}
         </div>
     );
 }
