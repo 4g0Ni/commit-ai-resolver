@@ -44,7 +44,7 @@ Type: ${workItemContext.type} | State: ${workItemContext.state}
 Created: ${workItemContext.createdDate}
 Description: ${(workItemContext.description || '').slice(0, 500)}
 ${workItemContext.reproSteps ? `Repro Steps: ${workItemContext.reproSteps.slice(0, 300)}` : ''}
-
+${workItemContext.images?.length ? `\nAttached screenshots from the bug report are included as images in this message. Use them to understand the visual symptom and correlate with suspect commits.` : ''}
 When ranking suspects, consider ALL categories of changes that could cause the bug:
 - Navigation/routing changes that could prevent a page or component from loading
 - Template/rendering changes that could hide, remove, or break UI elements
@@ -96,10 +96,25 @@ Rules for searchCoverage:
 
     const t0 = Date.now();
     try {
+        // Build user message: plain text or multimodal with bug screenshots
+        const bugImages = workItemContext?.images || [];
+        let userContent;
+        if (bugImages.length > 0) {
+            userContent = [
+                { type: 'text', text: query },
+                ...bugImages.map(img => ({
+                    type: 'image_url',
+                    image_url: { url: img.base64DataUrl, detail: 'auto' },
+                })),
+            ];
+        } else {
+            userContent = query;
+        }
+
         const result = await llm.chat.completions.create({
             messages: [
                 { role: 'system', content: systemPrompt },
-                { role: 'user', content: query },
+                { role: 'user', content: userContent },
             ],
             temperature: 0.3,
             max_completion_tokens: 2048,

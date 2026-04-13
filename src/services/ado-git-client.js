@@ -576,6 +576,72 @@ function stripHtml(html) {
 }
 
 /**
+ * Extract image URLs from HTML content (e.g., ADO work item description).
+ * @param {string} html - Raw HTML string
+ * @returns {string[]} Array of unique image URLs
+ */
+function extractImageUrls(html) {
+    if (!html) return [];
+    const urls = [];
+    const regex = /<img[^>]+src=["']([^"']+)["']/gi;
+    let match;
+    while ((match = regex.exec(html)) !== null) {
+        const url = match[1];
+        // Skip tiny inline images (tracking pixels, spacers) and data URIs
+        if (!url.startsWith('data:') && !urls.includes(url)) {
+            urls.push(url);
+        }
+    }
+    return urls;
+}
+
+/**
+ * Fetch an image from ADO with authentication and return as a base64 data URL.
+ * @param {string} imageUrl - The image URL (must be under dev.azure.com or visualstudio.com)
+ * @param {number} maxBytes - Maximum image size in bytes (default 2MB)
+ * @returns {Promise<string|null>} base64 data URL, or null on failure
+ */
+async function fetchAdoImage(imageUrl, maxBytes = 2 * 1024 * 1024) {
+    try {
+        const token = await getCredentialToken();
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 15000);
+        const response = await fetch(imageUrl, {
+            method: 'GET',
+            headers: { Authorization: `Bearer ${token}` },
+            signal: controller.signal,
+        });
+        clearTimeout(timer);
+        if (!response.ok) return null;
+
+        const contentLength = response.headers.get('content-length');
+        if (contentLength && parseInt(contentLength, 10) > maxBytes) return null;
+
+        const buf = await response.arrayBuffer();
+        if (buf.byteLength > maxBytes) return null;
+
+        // Normalize content type — API only accepts png, jpeg, webp, gif
+        let contentType = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+
+        // Infer from URL extension if content-type is generic
+        if (!contentType || contentType === 'application/octet-stream') {
+            const ext = imageUrl.split('?')[0].split('.').pop()?.toLowerCase();
+            const extMap = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' };
+            contentType = extMap[ext] || 'image/png';
+        }
+
+        // Skip unsupported formats
+        const supported = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+        if (!supported.includes(contentType)) return null;
+
+        const base64 = Buffer.from(buf).toString('base64');
+        return `data:${contentType};base64,${base64}`;
+    } catch {
+        return null;
+    }
+}
+
+/**
  * Fetch an Azure DevOps work item by ID.
  *
  * @param {number|string} workItemId - Work item ID
@@ -586,6 +652,30 @@ async function fetchWorkItem(workItemId) {
     try {
         const data = await adoGet(url);
         const fields = data.fields || {};
+
+        // Extract image URLs from raw HTML before stripping tags
+        const descHtml = fields['System.Description'] || '';
+        const reproHtml = fields['Microsoft.VSTS.TCM.ReproSteps'] || '';
+        const descImageUrls = extractImageUrls(descHtml);
+        const reproImageUrls = extractImageUrls(reproHtml);
+
+        // Fetch images (cap at 5 total)
+        const allImageEntries = [
+            ...descImageUrls.map(u => ({ url: u, source: 'description' })),
+            ...reproImageUrls.filter(u => !descImageUrls.includes(u)).map(u => ({ url: u, source: 'reproSteps' })),
+        ].slice(0, 5);
+
+        const images = [];
+        for (const entry of allImageEntries) {
+            const base64DataUrl = await fetchAdoImage(entry.url);
+            if (base64DataUrl) {
+                images.push({ url: entry.url, base64DataUrl, source: entry.source });
+            }
+        }
+        if (images.length > 0) {
+            console.log(`  Work item ${workItemId}: fetched ${images.length}/${allImageEntries.length} image(s)`);
+        }
+
         return {
             id: data.id,
             url: data._links?.html?.href || `https://dev.azure.com/${ADO_ORG}/${ADO_PROJECT}/_workitems/edit/${data.id}`,
@@ -597,6 +687,7 @@ async function fetchWorkItem(workItemId) {
             assignedTo: fields['System.AssignedTo']?.displayName || null,
             reproSteps: stripHtml(fields['Microsoft.VSTS.TCM.ReproSteps']),
             areaPath: fields['System.AreaPath'] || null,
+            images,
         };
     } catch (err) {
         if (err.message?.includes('404')) return null;
