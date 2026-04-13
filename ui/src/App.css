@@ -714,6 +714,25 @@
   border-bottom: 1px solid var(--border);
   font-weight: 600;
   font-size: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.new-chat-btn {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 12px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.new-chat-btn:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
 }
 
 .chat-messages {
@@ -1066,4 +1085,75 @@
 
 .metric-card.config .metric-value {
   color: #bb80ff;
+}
+
+/* Suggested Actions */
+.suggested-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.suggested-action-chip {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 4px 12px;
+  color: var(--accent);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-align: left;
+  line-height: 1.4;
+}
+
+.suggested-action-chip:hover {
+  background: rgba(88, 166, 255, 0.12);
+  border-color: var(--accent);
+}
+
+/* Investigate Button */
+.investigate-section {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.investigate-btn {
+  background: rgba(88, 166, 255, 0.15);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 8px 16px;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.investigate-btn:hover:not(:disabled) {
+  background: var(--accent);
+  color: white;
+}
+
+.investigate-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.investigate-hint {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.chat-message.assistant.investigation {
+  border-color: var(--accent);
+  background: rgba(88, 166, 255, 0.06);
 }

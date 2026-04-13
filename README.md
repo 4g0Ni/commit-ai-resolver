@@ -13,7 +13,8 @@
 | Config/pilot change detection | ✅ Done | changeType + configChanges fields |
 | React dashboard | ✅ Done | Dark theme, chart, filters, metrics |
 | LLM chat interface | ✅ Done | Markdown rendering, context-aware |
-| Vector search (RAG) | ✅ Done | LanceDB embedded vector DB, text-embedding-3-large, LLM-based query intent extraction |
+| Vector search (RAG) | ✅ Done | LanceDB embedded vector DB, text-embedding-3-large, LLM-based query intent extraction, multi-query RRF fusion |
+| Work item integration | ✅ Done | Paste ADO work item URL → fetch bug → extract screenshots → anchor search dates |
 | Daily data generation (cached) | ✅ Done | Incremental, skip cached commits, --from/--to date range |
 | C2C Cosmos DB pilot tracker | ❌ Planned | DB-level pilot ramp tracking |
 | Queryable DB storage | ❌ Planned | Currently JSON files |
@@ -336,8 +337,8 @@ WHERE ABS(new_percentage - old_percentage) > 10 AND date = '2026-03-30';
 
 | Work Item | Description | ADO |
 |---|---|---|
-| Chat interface | Web-based chat UI for engineers to describe incidents and ask questions. | [10544301](https://msasg.visualstudio.com/Bing_Ads/_workitems/edit/10544301) |
-| Retrieval layer (RAG) | Given a user query, retrieve relevant daily report segments by date range, repo, page/component keywords. Apply the 2-day release buffer automatically. | [10544206](https://msasg.visualstudio.com/Bing_Ads/_workitems/edit/10544206) |
+| Chat interface | Web-based chat UI for engineers to describe incidents and ask questions. Supports pasting ADO work item URLs for automatic bug context fetching. | [10544301](https://msasg.visualstudio.com/Bing_Ads/_workitems/edit/10544301) |
+| Retrieval layer (RAG) | Given a user query, retrieve relevant daily report segments by date range, repo, page/component keywords. Apply the 2-day release buffer automatically. Multi-query RRF fusion for work item searches. | [10544206](https://msasg.visualstudio.com/Bing_Ads/_workitems/edit/10544206) |
 | Prompt engineering | System prompts that instruct the model to correlate user-described symptoms with retrieved change data and produce ranked suspect lists with links. | [10544208](https://msasg.visualstudio.com/Bing_Ads/_workitems/edit/10544208) |
 | Context window management | Handle large report windows (multiple days × multiple repos) within token limits — summarize or paginate as needed. | [10544209](https://msasg.visualstudio.com/Bing_Ads/_workitems/edit/10544209) |
 | Response formatting | Structured output: ranked suspects, links, risk assessment, suggested next steps. | [10544210](https://msasg.visualstudio.com/Bing_Ads/_workitems/edit/10544210) |
@@ -354,24 +355,39 @@ User Query
     ├──── LLM Intent Extraction ──┐
     │     (extract author, repo,  │
     │      date range, rewritten  │
-    │      search query via LLM)  │
+    │      search query + secondary│
+    │      query via LLM)          │
     ▼                             ▼
 ┌─────────────────┐     ┌───────────────────┐
-│  Embed Query    │────▶│  LanceDB Search   │
+│  Embed Queries   │────▶│  LanceDB Search   │
 │  (text-embed-   │     │  (cosine + WHERE  │
 │   3-large)      │     │   pre-filters)    │
 └─────────────────┘     └───────────────────┘
                                 │
+            Up to 3 parallel searches:
+            1. Primary query (weight 1)
+            2. Secondary query (weight 1)
+            3. Bug title verbatim (weight 5)
+                                │
+                                ▼
+                        ┌───────────────────┐
+                        │  RRF Fusion       │
+                        │  Merge & re-rank  │
+                        └───────────────────┘
+                                │
                                 ▼
                         ┌───────────────────┐
                         │  Build Context    │
-                        │  (top 30 commits) │
+                        │  (top 30-50       │
+                        │   commits)        │
                         └───────────────────┘
                                 │
                                 ▼
                         ┌───────────────────┐
                         │  LLM Chat         │
                         │  (GPT-5.4)        │
+                        │  + bug screenshots│
+                        │  (multimodal)     │
                         └───────────────────┘
 ```
 
@@ -384,17 +400,27 @@ The LLM extracts a JSON object with:
 - `repo` — exact repo name if mentioned (recognizes aliases like "campaignui", "cmui")
 - `dateFrom` / `dateTo` — date range if time is mentioned (resolves relative dates like "last week", "yesterday")
 - `searchQuery` — a rewritten version optimized for embedding similarity search (stripped of filter terms)
+- `secondarySearchQuery` — a second, different semantic query focusing on fix mechanisms (only for work item queries). Uses different terms than the primary query to bridge the semantic gap between bug descriptions and fix commits.
+- `riskLevel` — filter by risk level (HIGH, MEDIUM, LOW) when explicitly requested
+- `changeType` — filter by change type (code, config, mixed) when explicitly requested
+- `keywords` — fallback keywords for text matching (3-6 terms)
+- `confidence` — self-assessed extraction quality (0-1)
+- `verdict` — self-validation result: `GOOD` (proceed) or `ASK_USER` (request clarification). Replaces the separate Extraction Analyzer agent.
 
-When any filter is active, `minScore` is lowered to 0.05 so filtering dominates over semantic ranking.
+When any filter is active, `minScore` is lowered to 0.05 so filtering dominates over semantic ranking. Author queries use `minScore` 0.01 for maximum recall.
+
+**Secondary queries bypass metadata filters** (riskLevel, changeType) via `broadSearchOpts` to cast a wider net and avoid filtering out relevant commits with different metadata classifications.
 
 #### Components
 
 | Component | File | Description |
 |---|---|---|
 | Embedding client | `src/services/embedding-client.js` | Azure OpenAI `text-embedding-3-large` client (3072 dimensions), uses `DefaultAzureCredential`, same endpoint as the LLM |
-| Vector store | `src/services/vector-store.js` | LanceDB embedded vector DB (`data/lancedb/`). Cosine similarity search with SQL pre-filtering on author, repo, and date columns |
+| Vector store | `src/services/vector-store.js` | LanceDB embedded vector DB (`data/lancedb/`). Cosine similarity search with SQL pre-filtering on author, repo, and date columns. Post-filters on riskLevel and changeType metadata. Pre-filter limit scales up for filtered queries (`topK * 5` or 200) |
+| Work item detector | `src/services/workitem-detector.js` | Detects ADO work item IDs from URL patterns in user messages |
+| ADO Git client | `src/services/ado-git-client.js` | Azure DevOps REST API client. Fetches commits, diffs, and work items. Extracts and fetches images from work item HTML fields (Description, ReproSteps) |
 | Embedding generator | `src/scripts/generate-embeddings.js` | Reads daily JSON files, builds searchable text per commit, generates embeddings in batches of 16, upserts into vector store. Incremental (skips already-embedded commits) |
-| Chat API (RAG) | `api/server.js` | LLM intent extraction (author, repo, date, search query) → embeds optimized search query → searches LanceDB with pre-filters → sends relevant commits as LLM context. Falls back to full-context if no vector store |
+| Chat API (RAG) | `api/server.js` | LLM intent extraction → embeds optimized search query → multi-query LanceDB search with RRF fusion → sends relevant commits + bug screenshots as LLM context. Falls back to full-context if no vector store. Embedding LRU cache (100 entries) |
 
 #### Embedding Model
 
@@ -503,82 +529,78 @@ The chat API gracefully degrades:
 
 ### 11.1 Motivation
 
-The current search flow is single-pass: extract intent → embed → vector search → LLM answer. This works for straightforward queries but produces suboptimal results when:
+The current search flow uses an agentic loop with multi-query search: extract intent → multi-query embed → vector search with RRF fusion → LLM answer → evaluate → retry if needed. This handles:
 
-- The user's query is vague or ambiguous ("something broke last week")
-- Intent extraction misidentifies filters (wrong repo, wrong date range)
-- The RAG results don't contain enough relevant commits to form a good answer
-- The LLM answer is low-confidence or too generic
-
-An **agentic loop** adds self-evaluation and iterative refinement, allowing the system to retry with better queries, request clarification from the user, and validate answer quality before responding.
+- Vague or ambiguous queries ("something broke last week") — asks for clarification
+- Work item URL input — fetches bug context, anchors dates, runs 3 parallel searches
+- Intent extraction with self-validation — no separate analyzer agent needed
+- Answer quality evaluation with iterative refinement
 
 ### 11.2 Architecture Overview
 
 ```
                           ┌─────────────────────────────────┐
                           │         User Query               │
+                          │   (or ADO work item URL)          │
                           └────────────┬────────────────────┘
+                                       │
+                            (if URL detected, fetch work item
+                             + extract screenshots from HTML)
                                        │
                           ┌────────────▼────────────────────┐
                           │   Agent 1: Intent Extractor      │
                           │   (extract filters + search      │
-                          │    query from natural language)   │
-                          └────────────┬────────────────────┘
-                                       │
-                          ┌────────────▼────────────────────┐
-                          │   Agent 2: Extraction Analyzer   │
-                          │   (evaluate extraction quality,  │
-                          │    detect ambiguity, check        │
-                          │    filter coherence)              │
+                          │    query + secondary query        │
+                          │    + self-validation)             │
                           └──────┬───────────┬──────────────┘
                                  │           │
                         ┌────────▼──┐   ┌────▼──────────────┐
-                        │  GOOD     │   │  BAD / AMBIGUOUS   │
-                        │           │   │  → reformulate OR  │
-                        │           │   │  → ask user for    │
-                        │           │   │    clarification    │
-                        └────┬──────┘   └───────┬───────────┘
-                             │                  │ (loop back to
-                             │                  │  Intent Extractor
-                             │                  │  with feedback)
+                        │  GOOD     │   │  ASK_USER          │
+                        │           │   │  → return           │
+                        │           │   │  clarification      │
+                        │           │   │  question to user   │
+                        └────┬──────┘   └───────────────────┘
+                             │
                           ┌──▼──────────────────────────────┐
-                          │   RAG Search Pipeline            │
-                          │   (embed query → LanceDB →       │
-                          │    retrieve top-K commits)        │
+                          │   Multi-Query RAG Search          │
+                          │   1. Primary query (weight 1)     │
+                          │   2. Secondary query (weight 1)   │
+                          │   3. Bug title search (weight 5)  │
+                          │   → Reciprocal Rank Fusion (RRF)  │
                           └────────────┬────────────────────┘
                                        │
                           ┌────────────▼────────────────────┐
-                          │   Agent 3: Answer Synthesizer    │
-                          │   (analyze results, rank         │
-                          │    suspects, generate answer     │
-                          │    with commit links + ratings)   │
+                          │   Agent 2: Answer Synthesizer    │
+                          │   (analyze results, rank          │
+                          │    suspects, generate answer      │
+                          │    with commit links + ratings)    │
+                          │   (multimodal: bug screenshots)   │
                           └────────────┬────────────────────┘
                                        │
                           ┌────────────▼────────────────────┐
-                          │   Agent 4: Answer Evaluator      │
+                          │   Agent 3: Answer Evaluator      │
                           │   (rate confidence, check         │
                           │    grounding, validate links)     │
                           └──────┬───────────┬──────────────┘
                                  │           │
                         ┌────────▼──┐   ┌────▼──────────────┐
-                        │  GOOD     │   │  LOW CONFIDENCE    │
+                        │  PASS     │   │  RETRY             │
                         │  → return │   │  → refine query    │
                         │  to user  │   │    (add keywords,  │
-                        │           │   │     broaden dates,  │
-                        │           │   │     try other repo) │
+                        │           │   │     broaden dates)  │
                         └───────────┘   └───────┬───────────┘
                                                 │ (loop back to
-                                                │  RAG Search with
-                                                │  enriched query)
+                                                │  Intent Extractor
+                                                │  with feedback)
                                                 │
-                                        max 5 iterations
+                                        max 3 iterations
 ```
 
 ### 11.3 Agent Definitions
 
-#### Agent 1: Intent Extractor
+#### Agent 1: Intent Extractor (with Self-Validation)
 
-**Input:** Raw user query + conversation history + (optional) feedback from Analyzer on previous attempt.
+**Input:** Raw user query + conversation history + (optional) feedback from Evaluator on previous attempt + (optional) work item context.
 
 **Output:** Structured JSON:
 ```json
@@ -588,62 +610,36 @@ An **agentic loop** adds self-evaluation and iterative refinement, allowing the 
   "dateFrom": "2026-03-25" | null,
   "dateTo": "2026-03-31" | null,
   "searchQuery": "store page crash error in campaign editor",
+  "secondarySearchQuery": "grid template rendering no-data view filter reset",
+  "riskLevel": "HIGH" | null,
+  "changeType": "config" | null,
   "keywords": ["crash", "store page", "campaign editor"],
   "confidence": 0.85,
-  "ambiguities": []
+  "ambiguities": [],
+  "verdict": "GOOD" | "ASK_USER",
+  "clarificationQuestion": null
 }
 ```
 
-**Enhancements over current `extractQueryIntent`:**
-- Adds `confidence` score (0–1) for the extraction quality
-- Adds `keywords` array for fallback keyword matching if vector search underperforms
-- Adds `ambiguities` array listing parts of the query that are unclear
-- Accepts feedback from the Analyzer to reformulate on retry
+**Key capabilities:**
+- Adds `secondarySearchQuery` for work item queries — uses different terms from the primary query to bridge the semantic gap between bug descriptions and fix commits
+- Self-validates extraction quality via `verdict` field — replaces the separate Extraction Analyzer agent (saves one LLM round-trip, ~8-12s)
+- Adds `riskLevel` and `changeType` fields for structured filtering
+- Accepts feedback from the Evaluator to reformulate on retry
+- When a work item is provided, crafts highly targeted queries from bug title, description, and repro steps
 
-#### Agent 2: Extraction Analyzer
+#### Agent 2: Answer Synthesizer
 
-**Input:** The Intent Extractor's structured output + the original user query.
-
-**Output:**
-```json
-{
-  "verdict": "GOOD" | "REFORMULATE" | "ASK_USER",
-  "issues": ["date range too broad — 30+ days", "repo name ambiguous"],
-  "suggestions": ["narrow to last 7 days", "ask user which repo"],
-  "reformulatedQuery": "...",       // if verdict = REFORMULATE
-  "clarificationQuestion": "..."    // if verdict = ASK_USER
-}
-```
-
-**Evaluation criteria:**
-- **Filter coherence:** Do the extracted filters make sense together? (e.g., author + repo that never had commits from that author)
-- **Date range reasonableness:** Is the date range too wide (>14 days) or missing when the query implies recency?
-- **Search query quality:** Is the rewritten search query specific enough for embedding similarity? (e.g., "code changes" is too generic)
-- **Confidence threshold:** If Intent Extractor confidence < 0.6, recommend reformulation
-- **Ambiguity check:** If ambiguities were flagged, determine if they're resolvable or need user input
-
-#### Agent 3: Answer Synthesizer
-
-**Input:** RAG search results (top-K commits with metadata) + original query + extracted intent.
+**Input:** RAG search results (top-K commits with metadata) + original query + extracted intent + (optional) bug screenshots as multimodal content.
 
 **Output:**
 ```json
 {
   "answer": "Based on the commits from March 27–29, the most likely cause...",
-  "suspects": [
-    {
-      "commitId": "abc123",
-      "repo": "AdsAppsCampaignUI",
-      "author": "...",
-      "title": "...",
-      "relevanceScore": 0.92,
-      "reasoning": "This commit modified the store page rendering path...",
-      "commitUrl": "https://msasg.visualstudio.com/..."
-    }
-  ],
   "confidence": 0.78,
   "suggestedActions": ["revert flag X", "check perf traces for commit abc123"],
-  "searchCoverage": "partial"    // "full" | "partial" | "insufficient"
+  "searchCoverage": "partial",
+  "suspectCount": 5
 }
 ```
 
@@ -652,8 +648,10 @@ An **agentic loop** adds self-evaluation and iterative refinement, allowing the 
 - Include direct commit links (ADO URLs) for each suspect
 - Assess confidence based on how well the results match the query
 - Flag when search coverage is insufficient (too few results, poor similarity scores)
+- **Multimodal:** When bug screenshots are available, pass them as image content blocks alongside the text query so the LLM can correlate visual symptoms with code changes
+- Confidence is clamped against objective metrics — if ≤2 results with avg score < 0.3, confidence is capped at 0.5
 
-#### Agent 4: Answer Evaluator
+#### Agent 3: Answer Evaluator
 
 **Input:** The Answer Synthesizer's output + original query + search metadata (result count, score distribution).
 
@@ -676,39 +674,38 @@ An **agentic loop** adds self-evaluation and iterative refinement, allowing the 
 - **Grounding check:** Are all cited commits actually present in the search results? (prevent hallucination)
 - **Relevance score:** Average relevance of cited suspects (threshold: > 0.5)
 - **Answer completeness:** Does the answer address all aspects of the user's query?
-- **Confidence threshold:** If Answer Synthesizer confidence < 0.5, trigger retry
+- **Confidence threshold:** Fast-path PASS when confidence ≥ 0.65 with ≥ 3 results
 - **Result coverage:** If search returned < 5 results or all scores < 0.3, recommend broadening
+- **Date expansion:** When retrying, can suggest expanded date ranges applied to next iteration's RAG search
 
 ### 11.4 Iteration Loop
 
-The agentic flow runs in a loop with a **maximum of 5 iterations** per user query:
+The agentic flow runs in a loop with a **maximum of 3 iterations** per user query:
 
 ```
-Iteration 1: Extract → Analyze → Search → Synthesize → Evaluate
+Iteration 1: Extract (+ self-validate) → Multi-Query Search → Synthesize → Evaluate
 Iteration 2: (if eval = RETRY) Refine query → Search → Synthesize → Evaluate
 Iteration 3: (if eval = RETRY) Broaden filters → Search → Synthesize → Evaluate
-...
-Iteration 5: Force return best answer so far (even if low confidence)
+             Force return best answer so far
 ```
 
 **Iteration budget tracking:**
 
 | Iteration | Focus | Typical Action |
 |---|---|---|
-| 1 | Initial attempt | Full pipeline with extracted intent |
-| 2 | Query refinement | Add keywords from result analysis, adjust date range |
-| 3 | Filter broadening | Remove restrictive filters (e.g., drop repo filter, widen dates) |
-| 4 | Alternative search | Try keyword-based search alongside vector, combine results |
-| 5 | Best-effort | Return highest-confidence answer accumulated across iterations, with a disclaimer if confidence is still low |
+| 1 | Initial attempt | Full pipeline with extracted intent, multi-query RRF |
+| 2 | Query refinement | Add keywords from result analysis, adjust date range, apply evaluator date overrides |
+| 3 | Best-effort | Return highest-confidence answer accumulated across iterations, with disclaimer if confidence is still low |
 
 **Early exit conditions:**
-- Answer Evaluator returns `PASS` (qualityScore ≥ 0.7) → return immediately
-- Extraction Analyzer returns `ASK_USER` → pause loop, send clarification question to user, resume on user response
-- All 5 iterations exhausted → return best answer with confidence disclaimer
+- Answer Evaluator returns `PASS` (qualityScore ≥ 0.65 with ≥ 3 results) → return immediately
+- Intent Extractor returns `ASK_USER` → pause loop, send clarification question to user, resume on user response
+- Answer Evaluator returns `PARTIAL` → return answer with "results may be incomplete" disclaimer
+- All 3 iterations exhausted → return best answer with confidence disclaimer
 
 ### 11.5 Clarification Protocol (ASK_USER)
 
-When the Extraction Analyzer determines the query is too ambiguous to proceed:
+When the Intent Extractor's self-validation determines the query is too ambiguous to proceed:
 
 1. The pipeline pauses and returns a **clarification question** to the user via the chat interface
 2. The UI renders this as a system message (distinct from a final answer)
@@ -730,31 +727,42 @@ The agents are **not** a traditional message queue system. They are implemented 
 
 ```javascript
 // Pseudocode for the orchestrator
-async function agenticSearch(userQuery, history, maxIterations = 5) {
+async function agenticSearch(userQuery, history, workItemContext, maxIterations = 3) {
     let bestAnswer = null;
-    let context = { query: userQuery, history, feedback: null };
+    let context = { query: userQuery, history, feedback: null, workItemContext };
+
+    // If work item provided, anchor dates to bug creation
+    if (workItemContext?.createdDate) {
+        context.dateOverrides = { dateFrom: bugDate - 2days, dateTo: bugDate };
+    }
 
     for (let i = 0; i < maxIterations; i++) {
-        // Agent 1: Extract intent
+        // Agent 1: Extract intent (with self-validation)
         const intent = await intentExtractor(context);
 
-        // Agent 2: Analyze extraction
-        const analysis = await extractionAnalyzer(intent, context);
-        if (analysis.verdict === 'ASK_USER') {
-            return { type: 'clarification', question: analysis.clarificationQuestion };
-        }
-        if (analysis.verdict === 'REFORMULATE') {
-            context.feedback = analysis;
-            continue; // re-extract with feedback
+        if (intent.verdict === 'ASK_USER') {
+            return { type: 'clarification', question: intent.clarificationQuestion };
         }
 
-        // RAG search
-        const results = await ragSearch(intent);
+        // Multi-query RAG search with RRF fusion
+        const primaryResults = await ragSearch(intent.searchQuery, searchOpts);
+        const allLists = [{ results: primaryResults, weight: 1 }];
 
-        // Agent 3: Synthesize answer
+        if (intent.secondarySearchQuery) {
+            const secondaryResults = await ragSearch(intent.secondarySearchQuery, broadSearchOpts);
+            allLists.push({ results: secondaryResults, weight: 1 });
+        }
+        if (workItemContext?.title) {
+            const titleResults = await ragSearch(workItemContext.title, broadSearchOpts);
+            allLists.push({ results: titleResults, weight: 5 });
+        }
+
+        const results = fuseResults(allLists); // Reciprocal Rank Fusion
+
+        // Agent 2: Synthesize answer (with bug screenshots if available)
         const answer = await answerSynthesizer(results, intent, context);
 
-        // Agent 4: Evaluate answer
+        // Agent 3: Evaluate answer
         const evaluation = await answerEvaluator(answer, context, results);
 
         if (evaluation.qualityScore > (bestAnswer?.qualityScore || 0)) {
@@ -765,9 +773,11 @@ async function agenticSearch(userQuery, history, maxIterations = 5) {
             return { type: 'answer', ...bestAnswer };
         }
 
-        // Prepare retry context
+        // Apply evaluator feedback (date expansion, new keywords) for next iteration
         context.feedback = evaluation.retryStrategy;
-        context.previousResults = results;
+        if (evaluation.retryStrategy.expandedDateFrom) {
+            context.dateOverrides = { dateFrom: evaluation.retryStrategy.expandedDateFrom };
+        }
     }
 
     // Max iterations reached — return best effort
@@ -787,33 +797,37 @@ Each iteration adds LLM calls. Target latencies per agent:
 
 | Agent | Target Latency | LLM Calls |
 |---|---|---|
-| Intent Extractor | 500ms | 1 (lightweight, low temperature) |
-| Extraction Analyzer | 500ms | 1 (lightweight evaluation) |
-| RAG Search | 300ms | 0 (embedding + LanceDB) |
-| Answer Synthesizer | 2000ms | 1 (full analysis, higher token output) |
+| Intent Extractor (+ self-validation) | 500ms | 1 (lightweight, low temperature) |
+| RAG Search (multi-query + RRF) | 300-500ms | 0 (embedding + LanceDB, up to 3 searches) |
+| Answer Synthesizer | 2000ms | 1 (full analysis, higher token output, optional multimodal) |
 | Answer Evaluator | 500ms | 1 (lightweight evaluation) |
 
-**Per-iteration budget:** ~3.8 seconds
-**Worst case (5 iterations):** ~19 seconds
-**Typical case (1–2 iterations):** ~4–8 seconds
+**Per-iteration budget:** ~3.3 seconds (down from ~3.8s with separate Analyzer)
+**Worst case (3 iterations):** ~10 seconds
+**Typical case (1 iteration):** ~3-4 seconds + network latency
+**Observed average:** ~34 seconds (dominated by LLM API latency, not local compute)
 
 To stay within acceptable chat response times:
-- Use `gpt-5.4` (fast) for lightweight agents (Extractor, Analyzer, Evaluator)
-- Reserve higher token budgets only for the Synthesizer
+- Use `gpt-5.4` (fast) for lightweight agents (Extractor, Evaluator)
+- Reserve higher token budgets only for the Synthesizer (2048 max tokens, 10 results)
+- Embedding LRU cache (100 entries) avoids re-embedding repeated queries
 - Stream the final answer to the UI (show partial response while generating)
-- Show iteration progress in the UI ("Refining search... attempt 2/5")
+- Show iteration progress in the UI ("Refining search... attempt 2/3")
 
 ### 11.8 Work Items
 
-| Work Item | Description | ADO |
+| Work Item | Description | Status |
 |---|---|---|
-| Agent orchestrator | Implement the iteration loop with agent coordination, budget tracking, and early exit logic | TBD |
-| Intent Extractor v2 | Upgrade `extractQueryIntent` with confidence scoring, keywords, ambiguity detection, and feedback acceptance | TBD |
-| Extraction Analyzer agent | New LLM-based agent that evaluates intent extraction quality and decides next action | TBD |
-| Answer Synthesizer agent | New agent that ranks suspects, generates structured answers with commit links and confidence | TBD |
-| Answer Evaluator agent | New agent that evaluates answer quality, grounding, and decides pass/retry/refine | TBD |
-| Clarification UI | Chat UI support for system clarification questions (distinct from answers) and user responses that resume the pipeline | TBD |
-| Iteration progress UI | Show "Searching... attempt N/5" progress indicator in the chat interface | TBD |
+| Agent orchestrator | Iteration loop with agent coordination, budget tracking, and early exit logic | ✅ Done |
+| Intent Extractor v2 | Confidence scoring, keywords, ambiguity detection, self-validation, secondary search query, work item context | ✅ Done |
+| ~~Extraction Analyzer agent~~ | ~~Evaluate intent extraction quality~~ | Eliminated — merged into Intent Extractor as self-validation |
+| Answer Synthesizer agent | Ranks suspects, generates structured answers with commit links, confidence, and multimodal support | ✅ Done |
+| Answer Evaluator agent | Evaluates answer quality, grounding, confidence; decides pass/retry/partial | ✅ Done |
+| Work item integration | Detect ADO URLs, fetch bug context, extract images, anchor search dates | ✅ Done |
+| Multi-query RRF search | Primary + secondary + title queries with Reciprocal Rank Fusion | ✅ Done |
+| Bug screenshot support | Extract images from work item HTML, fetch with auth, pass as multimodal content | ✅ Done |
+| Clarification UI | Chat UI support for system clarification questions (distinct from answers) | ✅ Done |
+| Iteration progress UI | Show "Searching... attempt N/3" progress indicator in the chat interface | TBD |
 | Streaming support | Stream the final answer to the UI for perceived latency improvement | TBD |
 
 ---

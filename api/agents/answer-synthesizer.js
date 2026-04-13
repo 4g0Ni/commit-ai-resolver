@@ -13,9 +13,10 @@
  * @returns {Promise<object>} Structured answer with suspects and confidence
  */
 export async function synthesizeAnswer(llm, results, intent, context) {
-    const { query, history = [] } = context;
+    const { query, history = [], workItemContext } = context;
 
-    const commitContext = results.map(r =>
+    const topN = workItemContext ? 30 : 10;
+    const commitContext = results.slice(0, topN).map(r =>
         `[${r.date}] ${r.repo} | ${r.metadata.riskLevel} | ${r.id} by ${r.metadata.author}\n` +
         `  URL: ${r.metadata.url || 'N/A'}\n` +
         `  Title: ${r.metadata.title}\n` +
@@ -36,10 +37,27 @@ export async function synthesizeAnswer(llm, results, intent, context) {
         ? `\nConversation context:\n${history.slice(-4).map(h => `${h.role}: ${h.content?.slice(0, 200)}`).join('\n')}\n`
         : '';
 
+    const bugContextSection = workItemContext ? `
+BUG CONTEXT — The user is investigating this work item:
+Title: ${workItemContext.title}
+Type: ${workItemContext.type} | State: ${workItemContext.state}
+Created: ${workItemContext.createdDate}
+Description: ${(workItemContext.description || '').slice(0, 500)}
+${workItemContext.reproSteps ? `Repro Steps: ${workItemContext.reproSteps.slice(0, 300)}` : ''}
+${workItemContext.images?.length ? `\nAttached screenshots from the bug report are included as images in this message. Use them to understand the visual symptom and correlate with suspect commits.` : ''}
+When ranking suspects, consider ALL categories of changes that could cause the bug:
+- Navigation/routing changes that could prevent a page or component from loading
+- Template/rendering changes that could hide, remove, or break UI elements
+- Data-fetching changes that could return empty or incorrect data
+- Config/pilot changes that could gate or disable features
+- Shared component changes (grid, table, layout) that could affect the affected area
+Explain specifically how each suspect's changes relate to the bug symptom.
+` : '';
+
     const systemPrompt = `You are an expert change analysis assistant for the Microsoft Advertising engineering team.
 Analyze the search results and generate a comprehensive answer to the user's question.
 ${conversationContext}
-
+${bugContextSection}
 SEARCH METADATA:
 - Results found: ${scoreStats.count}
 - Score range: ${scoreStats.minScore} – ${scoreStats.maxScore} (avg: ${scoreStats.avgScore})
@@ -78,15 +96,44 @@ Rules for searchCoverage:
 
     const t0 = Date.now();
     try {
+        // Build user message: plain text or multimodal with bug screenshots
+        const bugImages = workItemContext?.images || [];
+        let userContent;
+        if (bugImages.length > 0) {
+            userContent = [
+                { type: 'text', text: query },
+                ...bugImages.map(img => ({
+                    type: 'image_url',
+                    image_url: { url: img.base64DataUrl, detail: 'auto' },
+                })),
+            ];
+        } else {
+            userContent = query;
+        }
+
         const result = await llm.chat.completions.create({
             messages: [
                 { role: 'system', content: systemPrompt },
-                { role: 'user', content: query },
+                { role: 'user', content: userContent },
             ],
             temperature: 0.3,
             max_completion_tokens: 2048,
         });
         const fullText = result.choices?.[0]?.message?.content ?? '';
+
+        // Guard: if LLM returned empty, return a meaningful fallback
+        if (!fullText.trim()) {
+            return {
+                answer: `I found ${results.length} commits matching your query but was unable to generate a summary. The top results were from ${[...new Set(results.slice(0, 5).map(r => r.repo))].join(', ')}.`,
+                confidence: 0.3,
+                searchCoverage: results.length >= 10 ? 'partial' : 'insufficient',
+                suspectCount: 0,
+                suggestedActions: ['Try a more specific query'],
+                resultCount: results.length,
+                scoreStats,
+                _elapsed: Date.now() - t0,
+            };
+        }
 
         // Parse out the JSON metadata block
         let answer = fullText;
@@ -101,9 +148,17 @@ Rules for searchCoverage:
             } catch { /* keep defaults */ }
         }
 
+        // Clamp confidence based on objective metrics to prevent inflated scores
+        let confidence = metadata.confidence;
+        if (results.length === 0) {
+            confidence = 0;
+        } else if (results.length <= 2 && parseFloat(scoreStats.avgScore) < 0.3) {
+            confidence = Math.min(confidence, 0.5);
+        }
+
         return {
             answer,
-            confidence: metadata.confidence,
+            confidence,
             searchCoverage: metadata.searchCoverage,
             suspectCount: metadata.suspectCount,
             suggestedActions: metadata.suggestedActions,

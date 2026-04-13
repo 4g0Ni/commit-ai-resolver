@@ -63,21 +63,27 @@ function cosineSimilarity(a, b) {
  * @param {string} opts.author - Filter by author name, case-insensitive substring (optional)
  * @param {string} opts.dateFrom - Filter by start date (optional)
  * @param {string} opts.dateTo - Filter by end date (optional)
+ * @param {string} opts.riskLevel - Filter by risk level: HIGH, MEDIUM, LOW (optional)
+ * @param {string} opts.changeType - Filter by change type: code, config, mixed (optional)
  * @returns {Promise<Array>} Ranked results with score and metadata
  */
 async function searchVectors(queryEmbedding, opts = {}) {
-    const { topK = 10, minScore = 0.3, repo, author, dateFrom, dateTo } = opts;
+    const { topK = 10, minScore = 0.3, repo, author, dateFrom, dateTo, riskLevel, changeType } = opts;
     const table = await getTable();
     if (!table) return [];
 
     // Build WHERE clauses for LanceDB pre-filtering
     const whereClauses = [];
-    if (repo) whereClauses.push(`repo = '${repo.replace(/'/g, "''")}' `);
+    if (repo) whereClauses.push(`repo = '${repo.replace(/'/g, "''")}'`);
     if (author) whereClauses.push(`lower(author) LIKE '%${author.toLowerCase().replace(/'/g, "''")}%'`);
     if (dateFrom) whereClauses.push(`date >= '${dateFrom}'`);
     if (dateTo) whereClauses.push(`date <= '${dateTo}'`);
 
-    let query = table.vectorSearch(queryEmbedding).distanceType('cosine').limit(topK * 2);
+    // When WHERE filters are used, we need a larger pre-filter limit because
+    // LanceDB applies vector search limit BEFORE WHERE filtering. Without enough
+    // candidates, relevant results get cut off before date/repo filtering.
+    const preFilterLimit = whereClauses.length > 0 ? Math.max(topK * 5, 200) : topK * 2;
+    let query = table.vectorSearch(queryEmbedding).distanceType('cosine').limit(preFilterLimit);
     if (whereClauses.length > 0) {
         query = query.where(whereClauses.join(' AND '));
     }
@@ -99,6 +105,18 @@ async function searchVectors(queryEmbedding, opts = {}) {
             metadata: JSON.parse(row.metadata),
         };
     });
+
+    // Post-filter by metadata fields not available as top-level columns
+    if (riskLevel) {
+        results = results.filter(r => r.metadata.riskLevel === riskLevel);
+    }
+    if (changeType) {
+        if (changeType === 'config') {
+            results = results.filter(r => r.metadata.changeType === 'config' || r.metadata.changeType === 'mixed');
+        } else {
+            results = results.filter(r => r.metadata.changeType === changeType);
+        }
+    }
 
     return results
         .filter(r => r.score >= minScore)

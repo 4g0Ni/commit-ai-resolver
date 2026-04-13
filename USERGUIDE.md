@@ -106,7 +106,8 @@ Runs on `http://localhost:3001` with request logging (method, URL, status, durat
 | `GET /api/days` | List available dates |
 | `GET /api/days/:date` | Summary for a specific date |
 | `GET /api/days?from=&to=` | Date range query |
-| `POST /api/chat` | LLM chat with RAG vector search (body: `{ message, history }`) |
+| `POST /api/chat` | LLM chat with RAG vector search (body: `{ message, history }`). Supports ADO work item URLs — automatically fetches bug context, extracts screenshots, and runs multi-query search. |
+| `POST /api/investigate` | Deep diff investigation for suspect commits |
 | `GET /api/vectors/stats` | Vector store stats (commit count, repos, date range) |
 
 Chat requests log: query text, extracted filters, embedding time, search results count, LLM time, and token usage.
@@ -124,28 +125,34 @@ Runs on `http://localhost:5173` (or next available port).
 
 ## Vector Search & Agentic Search Pipeline
 
-The chat uses an **agentic multi-step RAG pipeline** that iteratively refines queries for better results. Instead of a single-pass search, the system coordinates 4 LLM-based agents in a loop (max 5 iterations):
+The chat uses an **agentic multi-step RAG pipeline** that iteratively refines queries for better results. Instead of a single-pass search, the system coordinates 3 LLM-based agents in a loop (max 3 iterations):
 
 ### Pipeline Flow
 
 ```
-User Query → Intent Extractor → Extraction Analyzer → RAG Search → Answer Synthesizer → Answer Evaluator
-                    ↑                    │                                                      │
-                    │    (REFORMULATE)   │                                         (RETRY)      │
-                    └────────────────────┘                                ┌──────────────────────┘
-                                                                         │ (refine query, add
-                                                                         │  keywords, broaden)
-                                                                         └──→ back to Intent Extractor
+User Query (or ADO work item URL)
+    │
+    ├── (if URL) Fetch work item + extract screenshots
+    │
+    ├── Agent 1: Intent Extractor (+ self-validation)
+    │       ↓
+    ├── Multi-Query RAG Search (up to 3 queries + RRF fusion)
+    │       ↓
+    ├── Agent 2: Answer Synthesizer (+ bug screenshots)
+    │       ↓
+    └── Agent 3: Answer Evaluator
+                │                          │
+         (PASS/PARTIAL)              (RETRY → refine
+          → return answer              query, loop back)
 ```
 
 ### Agent Roles
 
 | Agent | Purpose | Output |
 |---|---|---|
-| **Intent Extractor** | Extracts structured filters (author, repo, dates, search query) + confidence score + keywords | JSON with filters + `confidence` 0–1 |
-| **Extraction Analyzer** | Evaluates extraction quality. Decides: proceed, reformulate, or ask user for clarification | `GOOD` / `REFORMULATE` / `ASK_USER` |
-| **Answer Synthesizer** | Analyzes RAG results, ranks suspect commits, generates answer with commit links | Markdown answer + confidence + coverage |
-| **Answer Evaluator** | Rates answer quality and grounding. Decides: return to user or retry with different query | `PASS` / `RETRY` / `PARTIAL` |
+| **Intent Extractor** | Extracts structured filters (author, repo, dates, risk level, change type, search query, secondary search query) + confidence score + keywords. Self-validates quality (GOOD / ASK_USER). | JSON with filters + `confidence` 0–1 + `verdict` |
+| **Answer Synthesizer** | Analyzes RAG results, ranks suspect commits, generates answer with commit links. Supports multimodal input (bug screenshots). | Markdown answer + confidence + coverage |
+| **Answer Evaluator** | Rates answer quality and grounding. Decides: return to user (PASS/PARTIAL) or retry with different query (RETRY). | `PASS` / `RETRY` / `PARTIAL` |
 
 ### Clarification Flow
 
@@ -164,12 +171,11 @@ You: "the campaign editor page is crashing since yesterday"
 
 | Iteration | Strategy |
 |---|---|
-| 1 | Full pipeline with initial extraction |
+| 1 | Full pipeline with initial extraction + multi-query RRF search |
 | 2 | Refine query with evaluator feedback (add keywords, adjust dates) |
-| 3 | Broaden filters (remove restrictive constraints) |
-| 4–5 | Alternative search strategies, then best-effort return |
+| 3 | Best-effort return with disclaimer if needed |
 
-The pipeline exits early when the Answer Evaluator scores quality ≥ 0.7 (typically on iteration 1 for clear queries).
+The pipeline exits early when the Answer Evaluator scores quality ≥ 0.65 with ≥ 3 results (typically on iteration 1 for clear queries).
 
 ### API Response Format
 
@@ -181,7 +187,18 @@ The `POST /api/chat` response now includes agentic metadata:
   "type": "answer",           // "answer" or "clarification"
   "searchMethod": "agentic",  // "agentic", "fallback-full", or "full"
   "iterations": 1,            // Number of pipeline iterations used
-  "confidence": 0.91          // Answer confidence 0–1
+  "confidence": 0.91,         // Answer confidence 0–1
+  "suggestedActions": ["Check commit abc123", ...],
+  "resultCount": 30,
+  "suspects": [...],          // Top suspect commits for deep investigation
+  "workItem": {               // Present when a work item URL was used
+    "id": 10552393,
+    "title": "The grid is missing for Products.",
+    "url": "...",
+    "type": "Bug",
+    "state": "Active",
+    "createdDate": "2026-04-07T..."
+  }
 }
 ```
 
@@ -203,11 +220,17 @@ The Intent Extractor agent extracts:
 - **repo** — exact repo name (recognizes aliases like "campaignui", "cmui", "appui")
 - **dateFrom / dateTo** — date range (resolves "yesterday", "last week", "March 30", etc.)
 - **searchQuery** — a rewritten query optimized for embedding search (filter terms stripped)
+- **secondarySearchQuery** — a second, different semantic query for work item searches (different angle on the bug)
+- **riskLevel** — filter by risk level (HIGH, MEDIUM, LOW) when explicitly requested
+- **changeType** — filter by change type (code, config, mixed) when explicitly requested
 - **keywords** — fallback keywords for text matching
 - **confidence** — self-assessed extraction quality (0–1)
+- **verdict** — self-validation: `GOOD` (proceed) or `ASK_USER` (request clarification)
 - **ambiguities** — parts of the query that are unclear
 
-The rewritten `searchQuery` is embedded for vector similarity, while extracted filters become SQL WHERE clauses in LanceDB. When any filter is active, the similarity threshold drops to 0.05 to return all matching commits.
+The rewritten `searchQuery` is embedded for vector similarity, while extracted filters become SQL WHERE clauses in LanceDB. When any filter is active, the similarity threshold drops to 0.05 (or 0.01 for author queries) to return all matching commits.
+
+**Multi-query search:** For work item queries, up to 3 separate searches are run (primary, secondary, bug title) and merged via Reciprocal Rank Fusion (RRF). The bug title gets a 5x weight because its natural language often has better semantic overlap with fix commits.
 
 ### Fallback Behavior
 
@@ -411,12 +434,13 @@ commit-ai-resolver/
 │   │   ├── generate-embeddings.js    # Embed commit summaries into LanceDB
 │   │   └── extend-sample-data.js     # Generate synthetic historical data
 │   ├── services/
-│   │   ├── ado-git-client.js         # Azure DevOps REST API client
+│   │   ├── ado-git-client.js         # Azure DevOps REST API client (commits, diffs, work items, image extraction)
 │   │   ├── llm-helper.js             # Azure OpenAI client (retry, auth)
 │   │   ├── commit-summarizer.js      # LLM summarization with diff filtering
 │   │   ├── diff-filter.js            # File classification & skip rules
 │   │   ├── vector-store.js           # LanceDB vector database (search, upsert, stats)
-│   │   └── embedding-client.js       # Azure OpenAI text-embedding-3-large client
+│   │   ├── embedding-client.js       # Azure OpenAI text-embedding-3-large client
+│   │   └── workitem-detector.js      # ADO work item URL detection
 │   ├── tests/
 │   │   ├── test-search-e2e.js        # E2E tests (74 tests, 13 suites)
 │   │   ├── test-vector-store.js      # Unit tests for vector store
@@ -425,11 +449,11 @@ commit-ai-resolver/
 ├── api/                              # Express backend API
 │   ├── server.js                     # REST endpoints + agentic chat pipeline
 │   ├── agents/                       # Agentic search pipeline agents
-│   │   ├── orchestrator.js           # Agent loop coordinator (max 5 iterations)
-│   │   ├── intent-extractor.js       # Agent 1: Extract filters + confidence from query
-│   │   ├── extraction-analyzer.js    # Agent 2: Evaluate extraction quality
-│   │   ├── answer-synthesizer.js     # Agent 3: Generate ranked answer with commit links
-│   │   └── answer-evaluator.js       # Agent 4: Rate answer quality, decide pass/retry
+│   │   ├── orchestrator.js           # Agent loop coordinator (max 3 iterations, multi-query RRF)
+│   │   ├── intent-extractor.js       # Agent 1: Extract filters + confidence + self-validation
+│   │   ├── extraction-analyzer.js    # (Legacy — functionality merged into intent-extractor)
+│   │   ├── answer-synthesizer.js     # Agent 2: Generate ranked answer with commit links (multimodal)
+│   │   └── answer-evaluator.js       # Agent 3: Rate answer quality, decide pass/retry
 │   └── package.json
 ├── ui/                               # React dashboard (Vite 5)
 │   ├── src/

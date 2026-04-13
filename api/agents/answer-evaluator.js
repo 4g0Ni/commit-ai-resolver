@@ -15,8 +15,8 @@
 export async function evaluateAnswer(llm, synthesis, context, results) {
     const { query, iteration = 1 } = context;
 
-    // Fast-path: if synthesizer is very confident and has good coverage, skip LLM eval
-    if (synthesis.confidence >= 0.8 && synthesis.searchCoverage === 'full' && synthesis.resultCount >= 5) {
+    // Fast-path: if synthesizer is confident with enough results, skip LLM eval
+    if (synthesis.confidence >= 0.65 && synthesis.resultCount >= 3) {
         return {
             verdict: 'PASS',
             qualityScore: synthesis.confidence,
@@ -28,9 +28,9 @@ export async function evaluateAnswer(llm, synthesis, context, results) {
     }
 
     // Fast-path: if this is the last iteration, just return what we have
-    if (iteration >= 5) {
+    if (iteration >= 3) {
         return {
-            verdict: synthesis.confidence >= 0.4 ? 'PARTIAL' : 'PASS',
+            verdict: synthesis.confidence >= 0.4 ? 'PASS' : 'PARTIAL',
             qualityScore: synthesis.confidence,
             issues: ['max iterations reached'],
             retryStrategy: null,

@@ -36,3 +36,13 @@ export async function sendChatMessage(message, history = []) {
     if (!res.ok) throw new Error(`Chat error: ${res.statusText}`);
     return res.json();
 }
+
+export async function investigateCommits(message, suspects, history = []) {
+    const res = await fetch(`${API_BASE}/investigate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message, suspects, history }),
+    });
+    if (!res.ok) throw new Error(`Investigation error: ${res.statusText}`);
+    return res.json();
+}
