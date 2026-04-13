@@ -7,11 +7,33 @@ import { fetchCommitDiff, fetchCommitChanges, fetchFileContent, fetchFileContent
 import { classifyChanges, buildSkippedFilesSummary, MAX_FILES_FOR_DIFF, MAX_DIFF_SIZE } from './diff-filter.js';
 import { createPatch } from 'diff';
 import { writeFile, mkdir } from 'fs/promises';
+import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DIFFS_DIR = join(__dirname, '..', '..', 'data', 'diffs');
+const DOMAIN_DIR = join(__dirname, '..', '..', 'docs', 'domain');
+
+// Cache domain knowledge per repo (loaded once per process)
+const domainKnowledgeCache = new Map();
+
+/**
+ * Load domain knowledge doc for a repository.
+ * @param {string} repoName
+ * @returns {string} Domain knowledge text, or empty string if not found
+ */
+function loadDomainKnowledge(repoName) {
+    if (domainKnowledgeCache.has(repoName)) return domainKnowledgeCache.get(repoName);
+    try {
+        const content = readFileSync(join(DOMAIN_DIR, `${repoName}.md`), 'utf-8');
+        domainKnowledgeCache.set(repoName, content);
+        return content;
+    } catch {
+        domainKnowledgeCache.set(repoName, '');
+        return '';
+    }
+}
 
 /** Save the full LLM input for a commit to disk for inspection. */
 async function saveLlmInput(repoName, commitId, systemPrompt, userMessage) {
@@ -44,8 +66,8 @@ For each commit diff provided, produce a JSON response with EXACTLY these fields
 }
 
 FIELD RULES:
-- "title": Max 80 chars. Start with a verb. Bad: "Updates to campaign grid component". Good: "Add bulk edit drawer to campaign grid".
-- "summary": Max 3 sentences. Focus on WHAT behavior changed and WHO is affected. Skip listing files.
+- "title": Max 80 chars. Start with a verb. Expand key acronyms. Bad: "Updates to campaign grid component". Good: "Add bulk edit drawer to campaign grid". Bad: "Add PMax support". Good: "Add Performance Max (PMax) Xbox campaign subtype".
+- "summary": Max 3 sentences. MUST include: (1) WHAT behavior changed, (2) WHO is affected (advertisers, agencies, internal teams, specific geo users — never omit this), (3) potential failure mode for MEDIUM+ risk. Skip listing files.
 - "riskLevel": See criteria below. When in doubt between MEDIUM and LOW, prefer LOW. When in doubt between MEDIUM and HIGH, prefer MEDIUM.
 - "affectedAreas": Max 4 items. Use feature names (e.g. "Campaign Grid", "Budget API"), not file paths.
 - "flags": ONLY include flag/pilot names that appear LITERALLY as string constants in the diff. If no flags exist, use empty array []. NEVER output "TBD", "unknown", or guessed names.
@@ -63,6 +85,16 @@ IMPORTANT:
 - If the diff is a lock file or auto-generated code, say so briefly and mark LOW
 - Do NOT speculate about intent or future plans
 - Do NOT invent flag names that don't appear in the code
+
+SUMMARY QUALITY RULES:
+- TITLE: Always expand acronyms in the title. Bad: "Add PMax Xbox subtype". Good: "Add Performance Max (PMax) Xbox campaign subtype support".
+- WHO: Every MEDIUM+ summary MUST name who is affected: "advertisers", "internal DRI team", "agency users", "India billing users", "Shopping campaign advertisers", etc. Be specific — "users" alone is too vague.
+- SCOPE: For config/pilot changes, ALWAYS state rollout scope: "5% rollout in prod", "SI only", "behind EnableFoo flag", "GA'd to 100%". Never leave scope ambiguous.
+- FAILURE: For MEDIUM+ risk, include a concrete failure scenario: "could cause the inline budget suggestion table to disappear" not just "could break things".
+- ACRONYMS: Always explain domain acronyms on first use in the summary (e.g., "OMS (Order Management System)", "PMax (Performance Max)", "UET (Universal Event Tracking)", "FDP (Fast Data Pipeline)").
+- FEATURES: Use user-facing feature names, not file paths or component names. "Campaign Grid budget editing" not "FluentCampaignsPage budget repo".
+- FLAGS: Briefly state what each flag gates (e.g., "EnablePMaxGoals — gates PMax goal-based bidding"). If a flag is being removed/GA'd, say "ships to all users".
+- BREAKING: Specify what callers or contracts are affected and the blast radius.
 
 Respond with valid JSON only, no markdown fencing.`;
 
@@ -93,15 +125,21 @@ async function summarizeCommit(repoConfig, commit) {
         // Step 3: If nothing needs LLM, auto-summarize
         if (needsDiff.length === 0) {
             const reasons = [...new Set(autoSummary.map(f => f.reason))];
+            // Use commit message for context instead of generic "lock file update (2 files)"
+            const commitMsg = commit.message.replace(/^Merged PR \d+:\s*/i, '').trim();
+            const autoTitle = commitMsg.length > 10 && commitMsg.length <= 80
+                ? commitMsg
+                : `${reasons.join(', ')} (${autoSummary.length + ignored.length} files)`;
+            const filePaths = autoSummary.map(f => f.path).slice(0, 5).join(', ');
             return {
                 ...commit,
                 llmSummary: {
-                    title: `${reasons.join(', ')} (${autoSummary.length + ignored.length} files)`,
-                    summary: `Auto-classified commit: ${reasons.join(', ')}. ${autoSummary.length} auto-summarized, ${ignored.length} ignored files.`,
+                    title: autoTitle,
+                    summary: `Auto-classified: ${reasons.join(', ')}. ${autoSummary.length} file(s) updated: ${filePaths}${autoSummary.length > 5 ? '...' : ''}.`,
                     riskLevel: 'LOW',
-                    affectedAreas: [],
+                    affectedAreas: reasons.length <= 3 ? reasons : reasons.slice(0, 3),
                     flags: [],
-                    changeType: 'code',
+                    changeType: reasons.some(r => r.includes('config')) ? 'config' : 'code',
                     configChanges: [],
                     breakingChange: false,
                     _autoClassified: true,
@@ -152,10 +190,14 @@ async function summarizeCommit(repoConfig, commit) {
         ].join('\n');
 
         // Save LLM input for inspection
-        await saveLlmInput(repoConfig.name, commit.commitId, COMMIT_SUMMARY_PROMPT, userMessage);
+        const domainContext = loadDomainKnowledge(repoConfig.name);
+        const systemPrompt = domainContext
+            ? `${COMMIT_SUMMARY_PROMPT}\n\nDOMAIN KNOWLEDGE FOR ${repoConfig.name}:\n${domainContext}`
+            : COMMIT_SUMMARY_PROMPT;
+        await saveLlmInput(repoConfig.name, commit.commitId, systemPrompt, userMessage);
 
         const tLlm = Date.now();
-        const response = await llmHelper(COMMIT_SUMMARY_PROMPT, [
+        const response = await llmHelper(systemPrompt, [
             { role: 'user', content: userMessage },
         ]);
         const llmMs = Date.now() - tLlm;

@@ -213,13 +213,33 @@ Azure DevOps (3 repos)
   Fetch commits + diffs (ADO REST API v7.1)
         │
         ▼
-  Filter noise (lock files, binaries, auto-generated code)
+  Diff Filter (diff-filter.js)
+  • 15+ universal patterns: lock files, binaries, .csproj, .cscfg,
+    appsettings, DynamicConfig, sharedfeatures.config, .xsd, etc.
+  • Per-repo rules: CampaignUI (loc, cloud-test, build/yaml),
+    MT (Datamart, ADF triggers, Helm, SCOPE scripts),
+    AdsAppUI (loc, Helm netcore, Razor views)
+  • 3-way classification: needsDiff → LLM | autoSummary → skip LLM | ignored
+  • Auto-classified commits use PR title instead of generic "lock file (N files)"
+        │
+        ▼
+  Domain Knowledge Injection (docs/domain/*.md)
+  • Per-repo business context loaded at startup and cached
+  • AdsAppsCampaignUI.md — 25+ business terms, 30+ folder mappings,
+    5 feature flag patterns, SPA architecture
+  • AdsAppsMT.md — 20+ terms, 18 folder mappings, 25+ services,
+    5 API contract types, infrastructure components
+  • AdsAppUI.md — dual-stack architecture, 7 shared platform libs,
+    flighting framework, auth pipeline, DRI investigation tips
+  • Injected into LLM system prompt for domain-aware summarization
         │
         ▼
   LLM Summarization (Azure OpenAI GPT-5.4)
   • Title, summary, risk level (HIGH/MEDIUM/LOW)
   • Affected areas, feature flags, config changes
-  • 10 concurrent LLM calls with retry logic
+  • 25 concurrent LLM calls with retry logic and 3-min timeout
+  • Summary quality rules enforce: acronym expansion, WHO-is-affected,
+    rollout scope, concrete failure scenarios, flag descriptions
         │
         ▼
   Store daily JSON (data/daily/YYYY-MM-DD.json)
@@ -235,9 +255,9 @@ Azure DevOps (3 repos)
 
 | Repository | Description | Tag Strategy |
 |-----------|-------------|--------------|
-| AdsAppsCampaignUI | Campaign management frontend | Date-sorted LKG tags |
-| AdsAppsMT | Middle-tier services | Rolling gate tags (STAGING/LKG) |
-| AdsAppUI | Shared UI platform | SHA-versioned tags |
+| AdsAppsCampaignUI | Campaign management frontend (CMUI + CCUI SPAs) | Date-sorted LKG tags |
+| AdsAppsMT | Middle-tier services (25+ WCF/REST services) | Rolling gate tags (STAGING/LKG) |
+| AdsAppUI | Shared UI platform (dual-stack: net472 + .NET 10) | SHA-versioned tags |
 
 ### Risk Assessment Criteria
 
@@ -297,6 +317,45 @@ npx vite --host
 
 ---
 
+## Domain Knowledge System
+
+Per-repo domain knowledge files in `docs/domain/` are loaded at startup and injected into the LLM system prompt, giving the summarizer business context it cannot derive from code alone.
+
+| File | Key Content |
+|------|-------------|
+| `AdsAppsCampaignUI.md` | CMUI/CCUI SPA architecture, 25+ business terms (PMax, OMS, UET, ROAS, BAE, UCM, UFL...), 30+ folder-to-domain mappings, 5 feature flag patterns (Traditional, Dynamic/UFL, GA Allowlist, URL override, Legacy Pilot IDs) |
+| `AdsAppsMT.md` | 20+ business terms, 18 folder mappings, 25+ service inventory with replica counts, 5 API contract types (V13 SOAP, OData REST, Reporting, FDP protobuf, OMS REST), infrastructure components |
+| `AdsAppUI.md` | Dual-stack architecture (net472 + .NET 10), 17+ folder mappings, 7 shared platform libraries, flighting framework (sharedfeatures.config, allocator types, T4 generation), auth pipeline (3 login methods), DRI investigation tips |
+
+### Diff Filter Expansion
+
+`diff-filter.js` classifies every file in a commit before sending anything to the LLM:
+
+| Category | Action | Example Patterns |
+|----------|--------|-----------------|
+| **Ignored** | Dropped entirely | `.snap`, `.Designer.cs`, binary assets (png/jpg/svg/woff) |
+| **Auto-summary** | Skipped LLM, uses PR title | Lock files, `.csproj`, `.cscfg`, `appsettings*.json`, `DynamicConfig*`, `sharedfeatures.config`, `.resx`, `.xsd` |
+| **Needs diff** | Sent to LLM | All other source code files |
+
+Per-repo rules add domain-specific filters (e.g., CampaignUI `cloud-test/TestDefinitions`, MT `Datamart` auto-generated code, AdsAppUI `helm-netcore`).
+
+### Summary Quality Rules
+
+The LLM prompt enforces 8 quality rules validated through automated metrics:
+
+| Rule | Enforcement | Measured Result |
+|------|-------------|-----------------|
+| **WHO** | Every MEDIUM+ summary must name affected persona | 99% compliance (1/186 missing — a 429 error, not prompt failure) |
+| **Acronyms** | Expand on first use in summary body | Domain terms explained in 85%+ of summaries |
+| **Scope** | Config changes must state rollout scope | Applied to all config/mixed commits |
+| **Failure scenario** | MEDIUM+ must include concrete failure mode | Included in all MEDIUM+ summaries |
+| **Auto-titles** | Use PR title instead of generic file-type label | 97% reduction in generic titles (108 → 3) |
+| **Feature names** | Use user-facing names, not file paths | Enforced via prompt |
+| **Flag descriptions** | State what each flag gates | Enforced via prompt |
+| **Breaking changes** | Specify affected callers and blast radius | Enforced via prompt |
+
+---
+
 ## Tech Stack
 
 | Layer | Technology |
@@ -325,6 +384,10 @@ npx vite --host
 ┌─────────────────────────────────────────────────────────────────────┐
 │                      Node.js Backend (port 4399)                    │
 │                                                                     │
+│  Ingestion Pipeline:                                                │
+│    Diff Filter ──► Domain Knowledge ──► LLM Summarizer              │
+│    (diff-filter.js)  (docs/domain/*.md)  (commit-summarizer.js)    │
+│                                                                     │
 │  POST /api/chat        → Agentic Search Pipeline (3 agents)        │
 │  POST /api/investigate → Deep Diff Investigation                    │
 │  GET  /api/days        → Daily Summary Data                         │
@@ -350,3 +413,7 @@ npx vite --host
 | Config change audit | Manual search across repos | Instant filtered view |
 | Cross-repo correlation | Requires tribal knowledge | AI handles automatically |
 | Diff-level root cause | Manual ADO navigation | One-click investigation |
+| Summary WHO coverage (MEDIUM+) | 56% | 99% |
+| Generic auto-classified titles | ~108 | 3 (97% reduction) |
+| Domain acronym expansion | Not done | Explained in 85%+ of summaries |
+| LLM calls saved by diff filter | N/A | ~13% of commits auto-classified |

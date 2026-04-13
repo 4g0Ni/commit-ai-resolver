@@ -6,13 +6,13 @@ This document defines the fundamental search use cases for the Commit AI Resolve
 
 **Architecture:** 3-agent pipeline (Intent Extractor (with self-validation) → Multi-Query RAG Search (with RRF fusion) → Answer Synthesizer (multimodal) → Answer Evaluator), LanceDB vector store with `text-embedding-3-large` embeddings (3072 dimensions). Max 3 iterations per query. Supports ADO work item URL input with automatic bug context fetching, screenshot extraction, and date anchoring.
 
-**Data scope:** 31 days (2026-03-11 to 2026-04-10), 2,165 commits across 3 repos.
+**Data scope:** 34 days (2026-03-11 to 2026-04-13), 2,358 commits across 3 repos.
 
 | Repo | Total | HIGH | MEDIUM | LOW |
 |------|-------|------|--------|-----|
-| AdsAppsCampaignUI | ~1,250 | ~5 | ~540 | ~705 |
-| AdsAppsMT | ~710 | ~20 | ~395 | ~295 |
-| AdsAppUI | ~205 | ~24 | ~53 | ~128 |
+| AdsAppsCampaignUI | ~1,400 | ~6 | ~600 | ~794 |
+| AdsAppsMT | ~750 | ~21 | ~420 | ~309 |
+| AdsAppUI | ~208 | ~24 | ~54 | ~130 |
 
 ---
 
@@ -456,3 +456,57 @@ When a user pastes an ADO work item URL:
 The multi-query RRF approach significantly improves recall for work item queries. For example, bug 10552393 ("The grid is missing for Products."):
 - **Primary query alone** — fix commit `519cdc3f` did not appear in results (semantic gap between bug description and fix)
 - **With title search (weight 5)** — fix commit appeared at RRF rank 8, correctly identified as a suspect
+
+---
+
+## Summary Quality Improvements — 2026-04-13
+
+### Changes Applied
+
+Three improvements to the commit summarization pipeline:
+
+1. **Domain knowledge injection** (`docs/domain/*.md` → `commit-summarizer.js`):
+   - Per-repo business context files loaded at startup and cached
+   - Appended to LLM system prompt as `DOMAIN KNOWLEDGE FOR {repoName}:`
+   - Covers business terms, folder mappings, feature flag patterns, architecture
+
+2. **Expanded diff filtering** (`diff-filter.js`):
+   - 11 new universal AUTO_SUMMARY patterns: `.csproj`, `.cscfg`, `Web.config`, `appsettings*.json`, `DynamicConfig*`, `sharedfeatures.config`, `.xsd`, etc.
+   - 10 per-repo patterns: CampaignUI (`cloud-test/TestDefinitions`, `build/yaml`), MT (`Datamart`, `adf-prod/trigger`, `helm-*.yaml`, `.script`), AdsAppUI (`helm-netcore`, `.cshtml`)
+   - Auto-classified commits now use PR title instead of generic labels
+
+3. **Improved LLM prompt** (`COMMIT_SUMMARY_PROMPT`):
+   - 8 enforced quality rules: WHO-is-affected, acronym expansion, rollout scope, concrete failure scenarios, flag descriptions, feature names, breaking change blast radius
+   - Title field requires acronym expansion (max 80 chars)
+   - Summary field mandates affected persona identification
+
+### Quality Metrics (446 commits, Apr 7-13)
+
+| Metric | Before | After | Change |
+|--------|--------|-------|--------|
+| Missing WHO in MEDIUM+ summaries | 80/183 (44%) | 1/186 (0.5%)* | **-43 pp** |
+| Generic auto-classified titles | ~108 | 3 | **-97%** |
+| Unexpanded acronyms in MEDIUM+ titles | 8 | 15** | See note |
+| Auto-classified commits (LLM skipped) | N/A | 58/446 (13%) | New |
+| Missing scope in config/mixed MEDIUM+ | 9 | 13 | Similar |
+
+\* The 1 missing is a 429 rate limit error, not a prompt quality issue.
+
+\** Count went up because the model now uses acronyms more actively in titles (good), but the 80-char title limit constrains full expansion. Acronyms are expanded in summary bodies.
+
+### Sample Summary Comparison
+
+**Before (generic):**
+> Title: "shared features config (1 files)"
+> Summary: "Auto-classified: shared features config. 1 file(s) updated."
+
+**After (context-rich):**
+> Title: "Update diagnostics banner copy, Beta badge, and checkout labeling"
+> Summary: "Changes the Merchant Center UCP (Universal Checkout Program) diagnostics banner UI to match the latest design by adding a Beta badge, revising banner and warning text, and renaming the Native checkout card to Copilot Checkout. This affects Merchant Center advertisers viewing the store overview page; risk is low because the change is limited to presentation text and styling."
+
+**Before (missing WHO):**
+> Summary: "Enables a new performance prediction rollout flag in production configuration."
+
+**After (WHO included):**
+> Summary: "AI skill telemetry now logs through OneDS/Aria hooks instead of Azure Data Explorer (Kusto) ingestion, and local init scripts no longer install or prompt for Azure CLI login. This affects internal developer workflows..."
+

@@ -21,18 +21,34 @@ const IGNORE_PATTERNS = [
 
 /** Files to auto-summarize as LOW risk without sending diff to LLM. */
 const AUTO_SUMMARY_PATTERNS = [
+    // Lock files
     { pattern: /package-lock\.json$/i, reason: 'lock file update' },
     { pattern: /pnpm-lock\.yaml$/i, reason: 'lock file update' },
     { pattern: /yarn\.lock$/i, reason: 'lock file update' },
     { pattern: /\.lock$/i, reason: 'lock file update' },
+    // Auto-generated code
     { pattern: /\.generated\.\w+$/i, reason: 'auto-generated file' },
     { pattern: /\.g\.cs$/i, reason: 'auto-generated C# file' },
+    // Build artifacts
     { pattern: /\.min\.(js|css)$/i, reason: 'minified bundle' },
+    { pattern: /dist\//i, reason: 'build output' },
+    { pattern: /\.map$/i, reason: 'source map' },
+    // Localization / resources
     { pattern: /\.resx$/i, reason: 'resource file update' },
     { pattern: /\.xlf$/i, reason: 'translation file update' },
     { pattern: /\.lcl$/i, reason: 'localization file update' },
-    { pattern: /dist\//i, reason: 'build output' },
-    { pattern: /\.map$/i, reason: 'source map' },
+    // Project / build config files
+    { pattern: /\.csproj$/i, reason: 'C# project file' },
+    { pattern: /\.csdef$/i, reason: 'Azure service definition' },
+    { pattern: /\.cscfg$/i, reason: 'Azure service configuration' },
+    { pattern: /Web\.config$/i, reason: 'web configuration' },
+    { pattern: /appsettings.*\.json$/i, reason: 'app settings file' },
+    { pattern: /DynamicConfig.*\.(json|config)$/i, reason: 'dynamic config file' },
+    { pattern: /Directory\.(Build|Packages)\.props$/i, reason: 'MSBuild props file' },
+    { pattern: /\.gitignore$/i, reason: '.gitignore update' },
+    { pattern: /TestFilter.*\.json$/i, reason: 'test filter config' },
+    { pattern: /\.xsd$/i, reason: 'XML schema definition' },
+    { pattern: /sharedfeatures\.config$/i, reason: 'shared features config' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -45,6 +61,10 @@ const repoFilters = {
             { pattern: /\/loc\//i, reason: 'localization strings' },
             { pattern: /\.resjson$/i, reason: 'resource JSON strings' },
             { pattern: /strings\.\w+\.ts$/i, reason: 'generated string constants' },
+            { pattern: /\/cloud-test\/TestDefinitions\//i, reason: 'test definitions' },
+            { pattern: /\/build\/yaml\//i, reason: 'build pipeline config' },
+            { pattern: /\/pipeline-variable-groups/i, reason: 'pipeline variables' },
+            { pattern: /imagediff\.ci\.json$/i, reason: 'CI image diff config' },
         ],
         ignore: [],
     },
@@ -52,6 +72,10 @@ const repoFilters = {
         autoSummary: [
             { pattern: /Generated/i, reason: 'auto-generated code' },
             { pattern: /\.dgml$/i, reason: 'dependency graph diagram' },
+            { pattern: /\/Datamart\//i, reason: 'datamart auto-generated' },
+            { pattern: /\/adf-prod\/trigger\//i, reason: 'ADF pipeline trigger' },
+            { pattern: /helm-.*\.yaml$/i, reason: 'Helm chart config' },
+            { pattern: /\.script$/i, reason: 'SCOPE/Lens script' },
         ],
         ignore: [],
     },
@@ -59,6 +83,8 @@ const repoFilters = {
         autoSummary: [
             { pattern: /\/loc\//i, reason: 'localization strings' },
             { pattern: /\.resjson$/i, reason: 'resource JSON strings' },
+            { pattern: /helm-netcore\//i, reason: 'Helm netcore config' },
+            { pattern: /\.cshtml$/i, reason: 'Razor view template' },
         ],
         ignore: [],
     },
