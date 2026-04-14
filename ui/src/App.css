@@ -594,7 +594,7 @@
 }
 
 .repo-section {
-  margin-bottom: 16px;
+  margin-bottom: 8px;
 }
 
 .repo-section:last-child {
@@ -1085,6 +1085,262 @@
 
 .metric-card.config .metric-value {
   color: #bb80ff;
+}
+
+/* Day Detail Tabs */
+.day-detail-tabs {
+  display: flex;
+  gap: 0;
+  margin-top: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.day-detail-tab {
+  background: none;
+  border: none;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color 0.15s, border-color 0.15s;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.day-detail-tab:hover {
+  color: var(--text-primary);
+}
+
+.day-detail-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.tab-badge {
+  background: rgba(187, 128, 255, 0.2);
+  color: #bb80ff;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 10px;
+  min-width: 18px;
+  text-align: center;
+}
+
+/* Config Changes Panel */
+.config-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.day-detail-body .repo-name {
+  position: sticky;
+  top: -16px;
+  z-index: 5;
+  background: var(--bg-secondary);
+  padding: 8px 0 8px 0;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.config-panel-summary {
+  font-size: 14px;
+  font-weight: 500;
+  color: #bb80ff;
+  padding: 8px 12px;
+  background: rgba(187, 128, 255, 0.08);
+  border: 1px solid rgba(187, 128, 255, 0.2);
+  border-radius: 6px;
+}
+
+.config-commit-card {
+  background: var(--bg-tertiary);
+  border-radius: 6px;
+  padding: 12px 16px;
+  border-left: 3px solid #bb80ff;
+  margin-bottom: 8px;
+}
+
+.config-commit-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.config-commit-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.config-commit-author {
+  font-size: 12px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.config-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  table-layout: fixed;
+}
+
+.config-table th {
+  text-align: left;
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.config-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  color: var(--text-primary);
+  vertical-align: top;
+}
+
+.config-table tr:last-child td {
+  border-bottom: none;
+}
+
+.config-key-cell {
+  font-family: ui-monospace, Consolas, monospace;
+  color: #bb80ff;
+  font-weight: 500;
+  word-break: break-word;
+}
+
+.config-action-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.config-action-badge.added {
+  background: rgba(63, 185, 80, 0.15);
+  color: #3fb950;
+}
+
+.config-action-badge.modified {
+  background: rgba(210, 153, 34, 0.15);
+  color: #d29922;
+}
+
+.config-action-badge.removed {
+  background: rgba(248, 81, 73, 0.15);
+  color: #f85149;
+}
+
+.config-from-to {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+  word-break: break-all;
+  max-width: 400px;
+}
+
+.config-from {
+  color: var(--text-secondary);
+}
+
+.config-to {
+  color: var(--text-primary);
+}
+
+.config-na {
+  color: var(--text-secondary);
+  opacity: 0.5;
+}
+
+.config-detail-cell {
+  font-size: 11px;
+  color: var(--text-secondary);
+  max-width: 300px;
+}
+
+.config-env-cell {
+  vertical-align: middle;
+}
+
+.config-env-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.config-env-tag {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 500;
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: rgba(88, 166, 255, 0.12);
+  color: var(--accent);
+  border: 1px solid rgba(88, 166, 255, 0.25);
+  white-space: nowrap;
+}
+
+.config-per-env-values {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.config-per-env-row {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 3px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.config-per-env-row:last-child {
+  border-bottom: none;
+}
+
+.config-per-env-label {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--accent);
+  opacity: 0.8;
+}
+
+.config-per-env-change {
+  font-size: 12px;
+}
+
+.config-no-details {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-style: italic;
+  padding: 4px 0;
+}
+
+.config-empty {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--text-secondary);
+  font-size: 14px;
 }
 
 /* Suggested Actions */

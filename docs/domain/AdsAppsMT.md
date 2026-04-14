@@ -19,9 +19,17 @@
 - **DirectBI**: ClickHouse SQL report layer in `private/Campaign/MT/Source/DirectBI/` used by aggregatorservice.
 - **BCP (Business Continuity Plan)**: Disaster recovery and failover procedures for FDP/CDR data pipelines.
 - **NCA (New Customer Acquisition)**: Campaign feature for targeting new customers (`CustomerLifecycleGoal`).
-- **MISE (Microsoft Identity Security Experience)**: AAD-based S2S auth replacing Hypernet.
+- **MISE (Microsoft Identity Security Experience)**: AAD-based S2S auth middleware (`Microsoft.Identity.ServiceEssentials`) replacing legacy Hypernet VNET-isolation. Services expose port 8443 with MISE auth.
 - **MSClickId (Microsoft Click ID)**: Unique click identifier for attribution tracking in performance reports.
 - **MAU/MAD (MultiAccountUpload/Download)**: Bulk CSV operations via `multiaccountupload`/`multiaccountdownload` services.
+- **3PSSP (Third-Party Supply-Side Platform)**: External SSP entity support in OMS MediaPlan/Line. When disabled, defaults to built-in Xandr/Monetize SSP.
+- **TVP (Table-Valued Parameters)**: SQL Server pattern passing DataTable to stored procedures. Used in OMS (conditional columns per 3PSSP feature) and CampaignService (OICountryRejectionReason migration).
+- **OI (OrderItem)**: Internal entity name for Keywords. `OICountryRejectionReason` table stores per-country editorial rejection reasons; being migrated to JSON column format (`OICountryRRJSON`).
+- **Xandr**: DSP/ad-exchange integration for guaranteed/programmatic direct deals in OMS. MediaPlan commit creates Xandr InsertionOrder/LineItem. FastDataPipeline_Xandr streams C2C entity changes.
+- **Flight Allocation**: A/B test allocation service (`FlightAllocationSvc`) based on Litmus SDK. Reads partner blob files from Azure Blob Storage with ManagedIdentity.
+- **Cosmos 11**: Migrated Cosmos cluster for MRC (Microsoft Reporting Cosmos) data. cosmos11 uses `local/...` path prefix, flat date-prefixed filenames, reordered TSV columns vs legacy cosmos08.
+- **Performance Prediction Score**: AI-generated ad quality score from AggregationService (AIGC). Online path: real-time via `GetPerformancePredictionScore()`. Offline path: `OfflinePerformancePredictionScoreTaskManager` backfills ads without scores.
+- **Portfolio Bid Strategy**: SharedEntity automated bidding strategy (Target CPA, Target ROAS, Maximize Clicks) applied across multiple campaigns. Exposed via CampaignManagement API and OData with per-account authorization.
 
 ## Folder-to-Domain Mapping
 
@@ -43,7 +51,7 @@
 | `CampaignServiceData/EO/` | Entity Operations — business logic layer |
 | `CampaignServiceData/Dao/` | Data Access Objects — stored procedure wrappers |
 | `Generated/` | Auto-generated API contracts and models |
-| `AKS/`, `helm-*/` | Kubernetes deployment configs |
+| `AKS/`, `helm-*/` | Kubernetes deployment configs (infrastructure, NOT feature config) |
 | `CloudTest/` | Integration test infrastructure |
 | `adf-prod/` | Azure Data Factory pipelines and triggers |
 
@@ -111,11 +119,14 @@
 
 ## Feature Flag Patterns
 
-- `Enable*` prefix — Feature enablement in service layer (e.g., `EnableDualWrite`)
+- `Enable*` prefix — Feature enablement in service layer
 - `Permissions.*` prefix — Account/user permission checks
-- `DynamicConfig*.json` — Runtime feature toggles (13,678-line `Dynamic.config` is the master config)
+- `DynamicConfig*.json` — Runtime feature toggles (`Dynamic.config` is the master config)
+- `DynamicConfigValues.cs` — Typed accessors for Dynamic.config keys
 - `appsettings*.json` — Environment-specific service configuration
 - CCDB pilot slots — Account/Customer feature flags with percentage ramps
+
+**Not feature config:** `helm-*.yaml`, `values.yaml` (Kubernetes deployment infrastructure), `agent/*.json` / `agent/*.md` (AI workflow definitions), AKS packaging artifacts, Dependabot image digest bumps. These are auto-skipped or classified as `code`, not `config`.
 
 ## Key Risk Signals
 

@@ -701,6 +701,16 @@ function minifyContent(content, filePath) {
     const MAX_CONTENT_LENGTH = 200 * 1024;
     let minified = content.trim();
 
+    // For XML config files, preserve structure by splitting on tag boundaries
+    // so diffs are line-level granular instead of one massive blob
+    const isXmlConfig = /\.(config|cscfg|csdef)$/i.test(filePath);
+    if (isXmlConfig) {
+        // Split dense XML into one element per line for granular diffs.
+        // Don't truncate — the diff output from createPatch will be compact
+        // even if the source file is large (only changed lines appear).
+        return minified.replace(/>\s*</g, '>\n<');
+    }
+
     // Strip single-line and multi-line comments
     minified = minified
         .replace(/\/\/.*$/gm, '')

@@ -68,7 +68,7 @@ app.use((req, res, next) => {
 });
 
 // --- Vector store ---
-import { searchVectors, getVectorStats } from '../src/services/vector-store.js';
+import { searchVectors, lookupByCommitIds, getVectorStats } from '../src/services/vector-store.js';
 
 // --- Release list ---
 import { fetchReleaseList } from '../src/services/ado-git-client.js';
@@ -298,6 +298,7 @@ app.post('/api/chat', async (req, res) => {
                 llm: openaiClient,
                 embedQuery,
                 searchVectors,
+                lookupByCommitIds,
                 buildFullContext,
                 query: message,
                 history,

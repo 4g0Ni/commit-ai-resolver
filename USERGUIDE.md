@@ -328,9 +328,9 @@ Before sending diffs to the LLM, each commit's changed files are classified:
 | **Needs diff** | Full diff sent to LLM | Everything else |
 
 **Per-repo rules** in `src/services/diff-filter.js`:
-- **CampaignUI:** `/loc/` dirs, `.resjson` files, generated string constants
-- **MT:** `Generated` paths, `.dgml` files
-- **AdsAppUI:** `/loc/` dirs, `.resjson` files
+- **CampaignUI:** `/loc/` dirs, `.resjson` files, generated string constants, `.cscfg`/`.csdef`/`Web.config` (deploy config only — pilots live in AdsAppUI)
+- **MT:** `Generated` paths, `.dgml` files, `Datamart/`, `adf-prod/trigger/`, `agent/` (AI workflow), `.script` (SCOPE/Lens)
+- **AdsAppUI:** `/loc/` dirs, `.resjson` files, `.cshtml` (Razor views)
 
 Commits with >50 files get file-list-only summary (no diff content). Max diff size: 200K chars.
 
@@ -417,7 +417,9 @@ Each commit is classified as one of:
 | `config` | Only config/pilot/flag/experiment changes |
 | `mixed` | Both code and config changes |
 
-Config changes include pilot flags, feature gates, experiment definitions, ramp percentages, dynamic config files (JSON/XML config files, files with names containing `config`, `pilot`, `flag`, `experiment`).
+Config changes include pilot flags, feature gates, experiment definitions, ramp percentages, and dynamic config files (`Dynamic.config`, `DynamicConfig*.json`, `sharedfeatures.config`, `appsettings*.json`).
+
+**Not classified as config:** Kubernetes/Helm infrastructure changes, agent/AI workflow files, Dependabot dependency bumps, build/deploy scripts, AKS packaging artifacts. Config keys use short flag names (e.g., `EnablePMaxLite`) not XPath paths.
 
 ---
 

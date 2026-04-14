@@ -65,7 +65,11 @@ function buildCommitText(commit, repoName, date) {
         parts.push(`Type: ${commit.summary.changeType}`);
     }
     if (commit.summary.configChanges?.length) {
-        const configs = commit.summary.configChanges.map(c => `${c.action} ${c.key}: ${c.detail}`).join('; ');
+        const configs = commit.summary.configChanges.map(c => {
+            let desc = `${c.action} ${c.key}: ${c.detail}`;
+            if (c.from || c.to) desc += ` (${c.from || '?'} → ${c.to || '?'})`;
+            return desc;
+        }).join('; ');
         parts.push(`Config: ${configs}`);
     }
     return parts.join('\n');

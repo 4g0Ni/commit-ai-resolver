@@ -25,6 +25,10 @@ AdsAppUI is the shared UI platform and infrastructure layer for Microsoft Advert
 - **MAP (Microsoft Advertising Platform)**: Broader platform name
 - **AIV (Ad Intelligence Verification)**: Pre-submission validation checks for ads
 - **DRI (Directly Responsible Individual)**: On-call engineer
+- **EVT (Environment Verification Tests)**: Post-deployment health checks — HTTP-based (PowerShell), Selenium C# browser tests, and JS/Mocha tests. Scripts in `private/CloudTest/Scripts/`
+- **BiData**: WCF proxy data contract class carrying runtime BI metrics (clicks, impressions, AveragePosition, spend, CPC, CPA). A partial class shim in `BiDataAveragePosition.cs` re-exposes `AveragePosition` after proxy regeneration broke the property.
+- **BCP (Business Continuity Planning)**: Central US (CUS) failover deployment. AKS Helm overrides control BCP pod replica counts independently from primary WestUS cluster. Under-scaled BCP = risk during WestUS outages.
+- **BI (Business Intelligence)**: Two systems — runtime `IBusinessIntelligenceData`/`BIData` powering campaign grid columns, and offline SCOPE scripts in `private/Tools/Metrics/` for operational dashboards.
 
 ## Dual-Stack Architecture
 

@@ -80,8 +80,14 @@ After your answer, output a JSON block on a new line starting with |||JSON||| co
   "confidence": 0.0-1.0,
   "searchCoverage": "full" | "partial" | "insufficient",
   "suspectCount": number,
+  "rankedSuspects": ["shortId1", "shortId2", ...],
   "suggestedActions": ["actionable next steps"]
 }
+
+Rules for rankedSuspects:
+- List the commit shortIds in order from most to least likely suspect
+- Include ALL commits you mentioned as suspects in your answer
+- The first entry should be your #1 suspect
 
 Rules for confidence:
 - 0.8-1.0: Strong match — multiple relevant commits found with high similarity scores
@@ -137,7 +143,7 @@ Rules for searchCoverage:
 
         // Parse out the JSON metadata block
         let answer = fullText;
-        let metadata = { confidence: 0.5, searchCoverage: 'partial', suspectCount: 0, suggestedActions: [] };
+        let metadata = { confidence: 0.5, searchCoverage: 'partial', suspectCount: 0, rankedSuspects: [], suggestedActions: [] };
 
         const jsonSplit = fullText.split('|||JSON|||');
         if (jsonSplit.length > 1) {
@@ -161,6 +167,7 @@ Rules for searchCoverage:
             confidence,
             searchCoverage: metadata.searchCoverage,
             suspectCount: metadata.suspectCount,
+            rankedSuspects: metadata.rankedSuspects || [],
             suggestedActions: metadata.suggestedActions,
             resultCount: results.length,
             scoreStats,

@@ -18,6 +18,7 @@ import { evaluateAnswer } from './answer-evaluator.js';
  * @param {AzureOpenAI} params.llm - OpenAI client for chat completions
  * @param {Function} params.embedQuery - Async function: (text) => embedding vector
  * @param {Function} params.searchVectors - Async function: (embedding, opts) => results[]
+ * @param {Function} params.lookupByCommitIds - Async function: (shortIds) => results[] (exact match)
  * @param {Function} params.buildFullContext - Async function: () => string (fallback)
  * @param {string} params.query - User's question
  * @param {Array} params.history - Conversation history
@@ -29,6 +30,7 @@ export async function agenticSearch({
     llm,
     embedQuery,
     searchVectors,
+    lookupByCommitIds,
     buildFullContext,
     query,
     history = [],
@@ -157,6 +159,22 @@ export async function agenticSearch({
             results = fuseResults(allResultLists);
         } else {
             results = primaryResults;
+        }
+
+        // Direct commit ID lookup — if the user referenced specific SHAs, ensure
+        // those commits are in the results regardless of vector similarity score
+        if (intent.commitIds?.length > 0 && lookupByCommitIds) {
+            log(i, 'commit-lookup', { status: 'running', commitIds: intent.commitIds });
+            const directMatches = await lookupByCommitIds(intent.commitIds);
+            if (directMatches.length > 0) {
+                // Prepend direct matches, dedup against existing results
+                const existingIds = new Set(results.map(r => r.id));
+                const newMatches = directMatches.filter(m => !existingIds.has(m.id));
+                results = [...newMatches, ...results];
+                log(i, 'commit-lookup', { status: 'done', found: directMatches.length, added: newMatches.length });
+            } else {
+                log(i, 'commit-lookup', { status: 'done', found: 0 });
+            }
         }
 
         log(i, 'rag-search', { status: 'done', resultCount: results.length, embeddingMs, searchMs });
@@ -303,6 +321,31 @@ function formatAnswer(synthesis, searchMethod, iterations, iterationLog, disclai
         url: r.metadata?.url,
         score: r.score,
     }));
+
+    // Reorder suspects so the LLM's ranked suspects come first.
+    // The LLM ranks by semantic relevance to the bug, which can differ
+    // from vector similarity score order. Without reordering, the
+    // investigate endpoint's slice(0, 5) may miss the LLM's top pick.
+    const rankedIds = synthesis.rankedSuspects || [];
+    if (rankedIds.length > 0) {
+        const suspectMap = new Map(suspects.map(s => [s.shortId, s]));
+        const reordered = [];
+        for (const id of rankedIds) {
+            const match = suspectMap.get(id);
+            if (match) {
+                reordered.push(match);
+                suspectMap.delete(id);
+            }
+        }
+        // Append remaining suspects not in the LLM ranking
+        for (const s of suspects) {
+            if (suspectMap.has(s.shortId)) {
+                reordered.push(s);
+            }
+        }
+        suspects.length = 0;
+        suspects.push(...reordered);
+    }
 
     return {
         type: 'answer',

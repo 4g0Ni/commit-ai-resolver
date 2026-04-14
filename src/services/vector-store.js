@@ -195,6 +195,34 @@ async function getVectorStats() {
 }
 
 /**
+ * Look up commits by their short IDs (exact match).
+ * Used when users query specific commit SHAs directly.
+ *
+ * @param {Array<string>} shortIds - Array of short commit IDs (e.g., ['519cdc3f', '7507bb7b'])
+ * @returns {Promise<Array>} Matching commits with score=1.0
+ */
+async function lookupByCommitIds(shortIds) {
+    if (!shortIds || shortIds.length === 0) return [];
+    const table = await getTable();
+    if (!table) return [];
+
+    // Build WHERE clause to match any of the short IDs
+    const idList = shortIds.map(id => `'${id.replace(/'/g, "''")}'`).join(', ');
+    const rows = await table.query().where(`id IN (${idList})`).toArray();
+
+    return rows.map(row => ({
+        id: row.id,
+        commitId: row.commitId,
+        repo: row.repo,
+        date: row.date,
+        author: row.author,
+        text: row.text,
+        score: 1.0, // exact match
+        metadata: JSON.parse(row.metadata),
+    }));
+}
+
+/**
  * Load the vector store (compatibility shim — returns stats-like object).
  */
 async function loadVectorStore() {
@@ -218,4 +246,4 @@ async function loadVectorStore() {
     };
 }
 
-export { loadVectorStore, searchVectors, upsertVectors, getVectorStats, cosineSimilarity };
+export { loadVectorStore, searchVectors, lookupByCommitIds, upsertVectors, getVectorStats, cosineSimilarity };

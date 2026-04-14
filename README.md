@@ -56,12 +56,19 @@ Each commit diff is analyzed by the LLM to detect config changes. The summarizer
 - `config` — Only changes to pilot flags, feature gates, experiment definitions, ramp percentages, or configuration files
 - `mixed` — Both code and config changes
 
-For `config` and `mixed` commits, a `configChanges` array captures each flag/config key with its action (added/modified/removed) and a brief description.
+For `config` and `mixed` commits, a `configChanges` array captures each flag/config key with its action (added/modified/removed) and a brief description. Config keys use **short flag names** (e.g., `NewGoogleLoginGSI`) rather than XPath paths.
 
-**Detection is based on:**
-- File names containing `config`, `pilot`, `flag`, `experiment`, `feature-gate`, `dynamic-config`
-- JSON/XML config files
-- The LLM prompt instructs the model to identify these patterns in diffs
+**What IS a config change:**
+- Pilot flag additions, removals, or ramp percentage changes
+- Feature gate / experiment definition changes
+- `Dynamic.config`, `DynamicConfig*.json`, `sharedfeatures.config`, `appsettings*.json` value changes
+- `.cscfg` / `.csdef` / `Web.config` pilot/flight settings (AdsAppUI only)
+
+**What is NOT a config change:**
+- Kubernetes / Helm infrastructure (`helm-*.yaml`, `values.yaml`, AKS packaging)
+- Agent / AI workflow files (`agent/*.json`, `agent/*.md`)
+- Dependabot dependency version bumps
+- Build/deploy scripts and CI pipeline config
 
 #### Diff Filtering (Noise Reduction)
 
@@ -73,7 +80,7 @@ Before sending diffs to the LLM, files are classified by `src/services/diff-filt
 | **Auto-summarized** | LOW risk, no LLM call | Lock files, `.min.js`, `.resx`, `.xlf`, `/dist/`, `.map` |
 | **Needs diff** | Full diff sent to LLM | Everything else |
 
-Per-repo custom rules exist for CampaignUI (localization), MT (generated code), and AdsAppUI (localization). Commits with >50 files get file-list-only summaries.
+Per-repo custom rules exist for CampaignUI (localization, deploy config), MT (generated code, agent/AI workflows, Datamart, SCOPE scripts), and AdsAppUI (localization, Razor views). Commits with >50 files get file-list-only summaries.
 
 #### Planned: C2C Cosmos DB Pilot Ramp Tracker
 

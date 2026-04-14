@@ -39,16 +39,15 @@ const AUTO_SUMMARY_PATTERNS = [
     { pattern: /\.lcl$/i, reason: 'localization file update' },
     // Project / build config files
     { pattern: /\.csproj$/i, reason: 'C# project file' },
-    { pattern: /\.csdef$/i, reason: 'Azure service definition' },
-    { pattern: /\.cscfg$/i, reason: 'Azure service configuration' },
-    { pattern: /Web\.config$/i, reason: 'web configuration' },
-    { pattern: /appsettings.*\.json$/i, reason: 'app settings file' },
-    { pattern: /DynamicConfig.*\.(json|config)$/i, reason: 'dynamic config file' },
+    // NOTE: .csdef and Web.config are NOT auto-skipped — they contain
+    // production-affecting pilot/config settings in AdsAppUI.
     { pattern: /Directory\.(Build|Packages)\.props$/i, reason: 'MSBuild props file' },
     { pattern: /\.gitignore$/i, reason: '.gitignore update' },
     { pattern: /TestFilter.*\.json$/i, reason: 'test filter config' },
     { pattern: /\.xsd$/i, reason: 'XML schema definition' },
-    { pattern: /sharedfeatures\.config$/i, reason: 'shared features config' },
+    // NOTE: appsettings*.json, DynamicConfig*, sharedfeatures.config, .cscfg
+    // are NOT auto-skipped — they contain production-affecting config/pilot values
+    // and must go through LLM for structured configChanges extraction.
 ];
 
 // ---------------------------------------------------------------------------
@@ -65,6 +64,11 @@ const repoFilters = {
             { pattern: /\/build\/yaml\//i, reason: 'build pipeline config' },
             { pattern: /\/pipeline-variable-groups/i, reason: 'pipeline variables' },
             { pattern: /imagediff\.ci\.json$/i, reason: 'CI image diff config' },
+            // Pilot/config controls for CampaignUI live in AdsAppUI server-side,
+            // so .cscfg/.csdef/Web.config/.config files here are build/deploy config only.
+            { pattern: /\.cscfg$/i, reason: 'deploy config (pilots in AdsAppUI)' },
+            { pattern: /\.csdef$/i, reason: 'service definition (pilots in AdsAppUI)' },
+            { pattern: /Web\.config$/i, reason: 'web config (pilots in AdsAppUI)' },
         ],
         ignore: [],
     },
@@ -74,8 +78,10 @@ const repoFilters = {
             { pattern: /\.dgml$/i, reason: 'dependency graph diagram' },
             { pattern: /\/Datamart\//i, reason: 'datamart auto-generated' },
             { pattern: /\/adf-prod\/trigger\//i, reason: 'ADF pipeline trigger' },
-            { pattern: /helm-.*\.yaml$/i, reason: 'Helm chart config' },
             { pattern: /\.script$/i, reason: 'SCOPE/Lens script' },
+            { pattern: /\/agent\//i, reason: 'agent/AI workflow config' },
+            // NOTE: Dynamic.config, *Dynamic.config NOT auto-skipped —
+            // they control feature flags in production.
         ],
         ignore: [],
     },
@@ -83,8 +89,10 @@ const repoFilters = {
         autoSummary: [
             { pattern: /\/loc\//i, reason: 'localization strings' },
             { pattern: /\.resjson$/i, reason: 'resource JSON strings' },
-            { pattern: /helm-netcore\//i, reason: 'Helm netcore config' },
             { pattern: /\.cshtml$/i, reason: 'Razor view template' },
+            // NOTE: .cscfg, .csdef, Web.config, appsettings*.json, sharedfeatures.config,
+            // AllowedFeature.cs, PermissionProvider.cs are NOT auto-skipped —
+            // they are the primary pilot/config control files for AdsAppUI.
         ],
         ignore: [],
     },

@@ -126,7 +126,7 @@ Each test query is scored on 6 dimensions (0-3 each, max 18 total):
 **Query:** "What pilot flags were changed recently?"
 
 **Ground truth:**
-- 685 config/mixed commits across the dataset
+- Config/mixed commits across the dataset (count reduced after narrowing config definition to exclude k8s/Helm, agent/AI workflows, Dependabot bumps)
 - Top affected flags include: FluentUetTags, Permissions.NielsenThirdPartyTracking, AdsCopilotEntityIdSelector, BrandCampaign, UXRefreshWave2
 - Config changes include: pilot ramp percentage changes, feature gate additions/removals, flight allocations
 
@@ -472,7 +472,7 @@ Three improvements to the commit summarization pipeline:
 
 2. **Expanded diff filtering** (`diff-filter.js`):
    - 11 new universal AUTO_SUMMARY patterns: `.csproj`, `.cscfg`, `Web.config`, `appsettings*.json`, `DynamicConfig*`, `sharedfeatures.config`, `.xsd`, etc.
-   - 10 per-repo patterns: CampaignUI (`cloud-test/TestDefinitions`, `build/yaml`), MT (`Datamart`, `adf-prod/trigger`, `helm-*.yaml`, `.script`), AdsAppUI (`helm-netcore`, `.cshtml`)
+   - 11 per-repo patterns: CampaignUI (`cloud-test/TestDefinitions`, `build/yaml`, deploy config), MT (`Datamart`, `adf-prod/trigger`, `agent/` AI workflows, `.script`), AdsAppUI (`.cshtml`)
    - Auto-classified commits now use PR title instead of generic labels
 
 3. **Improved LLM prompt** (`COMMIT_SUMMARY_PROMPT`):

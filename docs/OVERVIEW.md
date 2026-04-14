@@ -216,9 +216,9 @@ Azure DevOps (3 repos)
   Diff Filter (diff-filter.js)
   • 15+ universal patterns: lock files, binaries, .csproj, .cscfg,
     appsettings, DynamicConfig, sharedfeatures.config, .xsd, etc.
-  • Per-repo rules: CampaignUI (loc, cloud-test, build/yaml),
-    MT (Datamart, ADF triggers, Helm, SCOPE scripts),
-    AdsAppUI (loc, Helm netcore, Razor views)
+  • Per-repo rules: CampaignUI (loc, cloud-test, build/yaml, deploy config),
+    MT (Datamart, ADF triggers, agent/AI workflows, SCOPE scripts),
+    AdsAppUI (loc, Razor views)
   • 3-way classification: needsDiff → LLM | autoSummary → skip LLM | ignored
   • Auto-classified commits use PR title instead of generic "lock file (N files)"
         │
@@ -334,10 +334,12 @@ Per-repo domain knowledge files in `docs/domain/` are loaded at startup and inje
 | Category | Action | Example Patterns |
 |----------|--------|-----------------|
 | **Ignored** | Dropped entirely | `.snap`, `.Designer.cs`, binary assets (png/jpg/svg/woff) |
-| **Auto-summary** | Skipped LLM, uses PR title | Lock files, `.csproj`, `.cscfg`, `appsettings*.json`, `DynamicConfig*`, `sharedfeatures.config`, `.resx`, `.xsd` |
+| **Auto-summary** | Skipped LLM, uses PR title | Lock files, `.csproj`, `.resx`, `.xsd`, `.gitignore`, test filter configs |
 | **Needs diff** | Sent to LLM | All other source code files |
 
-Per-repo rules add domain-specific filters (e.g., CampaignUI `cloud-test/TestDefinitions`, MT `Datamart` auto-generated code, AdsAppUI `helm-netcore`).
+Per-repo rules add domain-specific filters (e.g., CampaignUI `cloud-test/TestDefinitions` and deploy config, MT `Datamart` auto-generated code and `agent/` AI workflows, AdsAppUI Razor views).
+
+**Note:** `.cscfg`, `appsettings*.json`, `DynamicConfig*`, `sharedfeatures.config` are NOT auto-skipped — they are sent to LLM for structured `configChanges` extraction. Kubernetes/Helm files, agent/AI workflows, and Dependabot bumps are not classified as config changes.
 
 ### Summary Quality Rules
 

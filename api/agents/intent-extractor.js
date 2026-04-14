@@ -5,6 +5,14 @@
  * Accepts optional feedback from the Extraction Analyzer for reformulation.
  */
 
+/** Extract commit SHA patterns (7-40 hex chars) from query text. */
+function extractCommitIds(query) {
+    // Match 7-40 character hex strings that look like git SHAs
+    // Avoid matching common hex words/numbers by requiring 7+ chars
+    const matches = query.match(/\b[0-9a-f]{7,40}\b/gi) || [];
+    return [...new Set(matches.map(m => m.toLowerCase()))];
+}
+
 function daysAgo(n, today) {
     const d = new Date(today);
     d.setDate(d.getDate() - n);
@@ -107,6 +115,7 @@ User: "${query.replace(/"/g, '\\"')}"`;
             secondarySearchQuery: parsed.secondarySearchQuery || null,
             riskLevel: parsed.riskLevel || null,
             changeType: parsed.changeType || null,
+            commitIds: extractCommitIds(query),
             keywords: parsed.keywords || [],
             confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.5,
             ambiguities: parsed.ambiguities || [],

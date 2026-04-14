@@ -35,6 +35,21 @@ Navigating between them triggers a full-page refresh. Long-term goal is to merge
 - **FAC (Feature-Action Coupons)**: Recommendation display config
 - **Copilot**: AI-powered campaign creation assistant (MSA Copilot, Ads Copilot Chat UI)
 - **DRI (Deployment Response Incident)**: On-call engineer role
+- **UCP (Universal Checkout Program)**: Merchant native-checkout integration — merchants expose `/.well-known/ucp` endpoint for seamless checkout on their storefront
+- **OCV (Office Customer Voice)**: Microsoft's in-app feedback framework (`@ms/centro-hvc-loader`), powers thumbs-up/down feedback in Ads Copilot chat
+- **Amplify / MSAN Boost**: Extending Search campaigns to Microsoft Audience Network (MSAN) for additional audience reach
+- **MMA (Multimedia Ads)**: Responsive ad format combining headlines, descriptions, and images for search/audience placements
+- **EDM (Entity Data Model)**: OData schema/type layer for client-side data stack (overreact, js-data) — foundational infrastructure all data-fetching packages depend on
+- **UHF (Universal Header & Footer)**: Microsoft's standard site-wide header/nav/footer for public-facing marketing pages (`ads.microsoft.com`)
+- **SSG (Static Site Generation)**: Build-time HTML generation pipeline for ads.microsoft.com marketing landing page (38 locales, ~5KB vanilla JS)
+- **Experiments V2**: Redesigned campaign experimentation framework — supports Uplift, Upgrade, Optimization, and Incrementality experiment types
+- **Asset Performance Prediction**: AI/ML component predicting individual ad asset performance (Low/Medium/High) in RSA and display ads
+- **Google Import**: Full-featured Google Ads campaign importer — OAuth login, campaign selection, one-time or scheduled import, smart import
+- **Combined Conversion Wizard**: Unified multi-step wizard combining UET base tag setup with conversion goal creation in a single flow
+- **CPC (Cost Per Click)**: Advertiser bid type — pay per click on ad
+- **CPV (Cost Per View)**: Advertiser bid type — pay per video view
+- **CPM (Cost Per Mille)**: Advertiser bid type — pay per thousand impressions
+- **TAPI (Test API)**: End-to-end test infrastructure for Selenium-based automated testing
 
 ## Folder-to-Domain Mapping
 
@@ -70,6 +85,14 @@ Navigating between them triggers a full-page refresh. Long-term goal is to merge
 | `private/shared-client/` | Shared client infra (grid, filters, etc.) |
 | `private/cloud-test/` | E2E test infrastructure |
 | `private/loc/` | Localization string files |
+| `private/merchant-store-settings/` | Merchant Center UCP settings and store configuration |
+| `private/merchant-center-store-overview/` | Merchant Center store overview page and UCP diagnostics |
+| `private/ads-copilot/` | Ads Copilot chat UI, OCV feedback integration |
+| `private/mkt-landing/` | Marketing landing page SSG template (UHF, 38 locales) |
+| `private/experiments-v2-*/` | Experiments V2 — create, edit, results pages |
+| `private/client-import/` | Google/platform import packages |
+| `private/survey/` | Survey exporting tools (OCV responses) |
+| `private/shared-client-data/` | EDM core, OData data layer infrastructure |
 
 ## Environments
 
@@ -119,7 +142,6 @@ Any recommendation type force-enabled via query param:
 - `_treatment` / `_control` suffixes — A/B test arms
 - `Enable*` prefix — Feature enablement flags
 - `is*Enabled` pattern — Boolean feature checks
-- Pilot ramp percentages: 10% = limited, 50% = broad, 100% = fully shipped
 
 ## Key Risk Signals
 
@@ -131,3 +153,4 @@ Any recommendation type force-enabled via query param:
 - Shared component library (BAE) changes cascade to all consuming SPAs
 - CCUI/CMUI SPA boundary: changes must consider which SPA they affect
 - Recommendation gating changes via `GA_NO_PILOTING_TYPES` array have immediate global effect
+- EDM schema changes affect all data-fetching packages across the app

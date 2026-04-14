@@ -61,7 +61,7 @@ For each commit diff provided, produce a JSON response with EXACTLY these fields
   "affectedAreas": ["Max 3-4 areas. Use the most specific component name, not generic paths."],
   "flags": ["Only ACTUAL flag/pilot names found literally in the diff. Never guess or invent flag names."],
   "changeType": "code | config | mixed",
-  "configChanges": [{"key": "flag name", "action": "added|modified|removed", "detail": "brief description"}],
+  "configChanges": [{"key": "config key name", "action": "added|modified|removed", "from": "previous value if modified", "to": "new value", "detail": "behavioral impact"}],
   "breakingChange": false
 }
 
@@ -72,7 +72,7 @@ FIELD RULES:
 - "affectedAreas": Max 4 items. Use feature names (e.g. "Campaign Grid", "Budget API"), not file paths.
 - "flags": ONLY include flag/pilot names that appear LITERALLY as string constants in the diff. If no flags exist, use empty array []. NEVER output "TBD", "unknown", or guessed names.
 - "changeType": "config" = ONLY config/pilot/flag files changed. "mixed" = both code + config. "code" = everything else.
-- "configChanges": Only when changeType is "config" or "mixed". Each entry must reference a real key name from the diff.
+- "configChanges": Required when changeType is "config" or "mixed". Each entry: key (the SHORT flag/setting name — e.g., "NewGoogleLoginGSI" not "/Configuration/Flights/FlightSet[@name='NewGoogleLoginGSI']/Flight/@allocation"), action (added|modified|removed), from (old value if modified, omit if added), to (new value, omit if removed), detail (what this change does to production behavior). When multiple XML elements reference the same flag (feature declaration, flight set, ap-config override), emit ONE row with the flag name as key, not separate rows with XPath keys.
 - "breakingChange": true if the commit removes public APIs, changes function signatures used by other packages, alters DB schemas, removes feature gates without replacement, or changes shared contracts/interfaces. false otherwise.
 
 RISK LEVEL CRITERIA:
@@ -95,6 +95,41 @@ SUMMARY QUALITY RULES:
 - FEATURES: Use user-facing feature names, not file paths or component names. "Campaign Grid budget editing" not "FluentCampaignsPage budget repo".
 - FLAGS: Briefly state what each flag gates (e.g., "EnablePMaxGoals — gates PMax goal-based bidding"). If a flag is being removed/GA'd, say "ships to all users".
 - BREAKING: Specify what callers or contracts are affected and the blast radius.
+
+CONFIG/PILOT CHANGE EXTRACTION:
+- "config" changeType means PRODUCTION FEATURE FLAGS and PILOT SETTINGS that control user-facing behavior. It does NOT mean any YAML/JSON/XML file.
+- For config files (DynamicConfig, sharedfeatures.config, appsettings, .cscfg):
+  - Extract EVERY feature flag/pilot key that was added, modified, or removed
+  - For modified keys: include "from" (old value) and "to" (new value) — e.g., from "0" to "50", from "false" to "true"
+  - For pilot/feature ramp changes: state the percentage change and who it affects
+  - changeType MUST be "config" or "mixed" for these files
+- Config changes that increase rollout (0→50%, false→true, adding new flag) = higher risk
+- Config changes that decrease rollout (50%→0%, true→false, removing flag) = note as rollback
+- Deployment scripts (PowerShell, bash) that programmatically modify Web.config or other config files at deploy time ALSO count as config changes. If a script updates keys like CampaignResourcesContainer, NewWebUIResourceContainer, etc., include them in configChanges with action "modified" and detail explaining the deployment-time behavior change. Use "set at deploy time" for from/to when values are dynamic.
+
+WHAT IS NOT A CONFIG CHANGE (do NOT use changeType "config" or "mixed" for these):
+- Kubernetes/Helm infrastructure: AFD custom domains, ingress rules, replica counts, resource limits, image digests/tags, pod specs, service definitions, Helm chart values. These are INFRASTRUCTURE, not feature flags. Use changeType "code".
+- Agent/AI workflow files: project-config.json, pipeline-config.json, instruction.md, skill definitions, agentic workflow prompts. These are DEVELOPER TOOLING, not production config. Use changeType "code".
+- AKS packaging artifacts: serviceConfig.ini, build dependencies, package folder layouts, config flattener file lists. These are BUILD/DEPLOY scaffolding, not feature flags. Use changeType "code".
+- Dependabot or automated dependency bumps (image digests, package versions). Use changeType "code".
+
+CONFIG KEY NAMING:
+- Use the SHORT flag/setting name, not XPath or XML path. Example: use "NewGoogleLoginGSI" not "/Configuration/Features/NewGoogleLoginGSI/@value" or "FlightSet[@name='NewGoogleLoginGSI']".
+- When a commit adds or removes a feature flag that has multiple XML elements (feature declaration + flight set + ap-config override), emit ONE configChange row with the flag name as key, not separate rows per XML element.
+- For sharedfeatures.config: the key is the Feature name attribute (e.g., "NewGoogleLoginGSI", "AdsCopilotProtocolMigration").
+- For Dynamic.config: the key is the setting name attribute.
+- For .cscfg: the key is the Setting name attribute.
+
+REPO-SPECIFIC CONFIG DETECTION RULES:
+- AdsAppUI: Config/pilot files are .cscfg, .csdef, Web.config, appsettings*.json, sharedfeatures.config, AllowedFeature.cs, PermissionProvider.cs, IPermissionProvider.cs. These control pilot flags and feature rollout for the UI. NOT config: serviceConfig.ini, build packaging scripts, AKS deployment artifacts.
+- AdsAppsMT: Config/pilot files are ONLY Dynamic.config, *Dynamic.config, DynamicConfigValues.cs. These control backend feature flags. NOT config: helm-*.yaml, values.yaml, Kubernetes manifests, Dockerfiles, agent/*.json, agent/*.md — these are infrastructure/tooling, not feature flags. Use changeType "code" for Helm/k8s/agent changes.
+- AdsAppsCampaignUI: Do NOT classify changes as "config" or "mixed" changeType. This repo does NOT contain pilot/config controls — pilots are managed in AdsAppUI server-side. Always use changeType "code" for this repo.
+
+ENVIRONMENT-SPECIFIC CONFIG EXTRACTION:
+- When .cscfg filenames contain environment info (e.g., "ServiceConfiguration.EastUS.SI.cscfg", "ServiceConfiguration.WestUS.Prod.cscfg"), include the environment in each configChange's "detail" field — e.g., "Enabled in EastUS SI environment".
+- When multiple environments are changed for the same key, emit one configChange row PER environment (not one combined row).
+- For Dynamic.config XML files: these may be minified on a single line. Look for XML attribute changes like enabled="true/false", value="...", rollout="...". Extract the full key name and per-environment overrides.
+- Common environment naming: SI = System Integration (staging), Prod = Production. Filename patterns: EastUS.SI, WestUS.Prod, EastUS2.Prod, NorthEurope.SI, etc.
 
 Respond with valid JSON only, no markdown fencing.`;
 
@@ -139,7 +174,8 @@ async function summarizeCommit(repoConfig, commit) {
                     riskLevel: 'LOW',
                     affectedAreas: reasons.length <= 3 ? reasons : reasons.slice(0, 3),
                     flags: [],
-                    changeType: reasons.some(r => r.includes('config')) ? 'config' : 'code',
+                    changeType: repoConfig.name === 'AdsAppsCampaignUI' ? 'code'
+                        : reasons.some(r => r.includes('config')) ? 'config' : 'code',
                     configChanges: [],
                     breakingChange: false,
                     _autoClassified: true,
@@ -241,11 +277,64 @@ async function summarizeCommit(repoConfig, commit) {
     }
 }
 
+/** XML config file patterns that may be minified. */
+const XML_CONFIG_PATTERNS = [
+    /Web\.config$/i,
+    /\.cscfg$/i,
+    /\.csdef$/i,
+    /Dynamic\.config$/i,
+    /sharedfeatures\.config$/i,
+    /\.config$/i,
+];
+
+/**
+ * If a file is minified XML (any line > 10KB), split on "><" to get
+ * one element per line so the diff is granular for LLM extraction.
+ */
+function prettifyMinifiedXml(content, path) {
+    if (!content) return content;
+    if (!XML_CONFIG_PATTERNS.some(p => p.test(path))) return content;
+    // Check if any single line exceeds 10KB — indicates minified XML
+    const lines = content.split('\n');
+    const hasLongLine = lines.some(l => l.length > 10000);
+    if (!hasLongLine) return content;
+    // Split on >< and > < boundaries, preserving the brackets
+    return content.replace(/>\s*</g, '>\n<');
+}
+
+/** Patterns for config/pilot files that should be prioritized in diff ordering. */
+const CONFIG_FILE_PATTERNS = [
+    /\.cscfg$/i,
+    /\.csdef$/i,
+    /Web\.config$/i,
+    /Dynamic\.config$/i,
+    /DynamicConfigValues\.cs$/i,
+    /appsettings.*\.json$/i,
+    /sharedfeatures\.config$/i,
+    /AllowedFeature\.cs$/i,
+    /PermissionProvider\.cs$/i,
+    /IPermissionProvider\.cs$/i,
+    // NOTE: helm-*.yaml and values.yaml are NOT config files — they are k8s infrastructure
+];
+
+function isConfigFile(path) {
+    return CONFIG_FILE_PATTERNS.some(p => p.test(path));
+}
+
 /**
  * Fetch diffs only for specific files (not the full commit).
  * Uses batch API to fetch all file contents in 2 calls instead of 2N.
+ * Config/pilot files are prioritized first in the diff ordering so they
+ * survive truncation at MAX_DIFF_SIZE.
  */
 async function fetchFilteredDiffs(repoConfig, commitId, filteredChanges) {
+    // Sort config/pilot files first so they survive MAX_DIFF_SIZE truncation
+    filteredChanges = [...filteredChanges].sort((a, b) => {
+        const aConfig = isConfigFile(a.path) ? 0 : 1;
+        const bConfig = isConfigFile(b.path) ? 0 : 1;
+        return aConfig - bConfig;
+    });
+
     // We need the parent to produce diffs
     const { fetchCommitById } = await import('./ado-git-client.js');
     const commitInfo = await fetchCommitById(repoConfig, commitId);
@@ -271,8 +360,12 @@ async function fetchFilteredDiffs(repoConfig, commitId, filteredChanges) {
 
     // Build diffs from fetched contents
     const diffs = filteredChanges.map(change => {
-        const currentContent = currentContents.get(change.path) ?? null;
-        const parentContent = parentContents.get(change.path) ?? null;
+        let currentContent = currentContents.get(change.path) ?? null;
+        let parentContent = parentContents.get(change.path) ?? null;
+
+        // Prettify minified XML config files for better diff granularity
+        currentContent = prettifyMinifiedXml(currentContent, change.path);
+        parentContent = prettifyMinifiedXml(parentContent, change.path);
 
         if (change.changeType === 'edit' && parentContent && currentContent) {
             const patch = createPatch(change.path, parentContent, currentContent, 'Parent', 'Current');
