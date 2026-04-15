@@ -1,5 +1,5 @@
-import { useState, useMemo, useEffect } from 'react';
-import { fetchReleases } from '../api';
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { fetchReleases, fetchDayRange } from '../api';
 import DateRangePicker from './DateRangePicker';
 import RepoFilter from './RepoFilter';
 import MetricsBoard from './MetricsBoard';
@@ -54,13 +54,49 @@ function filterDayByRepos(data, selectedRepos) {
     };
 }
 
-function Timeline({ dates, dayData }) {
+function Timeline({ dates }) {
     const defaultRange = getDefaultRange();
     const [fromDate, setFromDate] = useState(defaultRange.from);
     const [toDate, setToDate] = useState(defaultRange.to);
 
+    // Day data loaded on demand per date range, with cache
+    const [dayData, setDayData] = useState({});
+    const [dataLoading, setDataLoading] = useState(false);
+    const loadedRangeRef = useRef(null);
+
+    // Load day data when date range changes
+    const loadRangeData = useCallback(async (from, to) => {
+        const rangeKey = `${from}:${to}`;
+        if (loadedRangeRef.current === rangeKey) return;
+        loadedRangeRef.current = rangeKey;
+        setDataLoading(true);
+        try {
+            const results = await fetchDayRange(from, to);
+            const dataMap = {};
+            for (const day of results) {
+                if (day?.date) dataMap[day.date] = day;
+            }
+            setDayData(prev => ({ ...prev, ...dataMap }));
+        } catch (err) {
+            console.error('Failed to load range data:', err);
+        } finally {
+            setDataLoading(false);
+        }
+    }, []);
+
+    useEffect(() => {
+        loadRangeData(fromDate, toDate);
+    }, [fromDate, toDate, loadRangeData]);
+
     const allRepos = useMemo(() => getAllRepos(dayData), [dayData]);
-    const [selectedRepos, setSelectedRepos] = useState(allRepos);
+    const [selectedRepos, setSelectedRepos] = useState([]);
+
+    // Sync selectedRepos when allRepos changes (new repos appear after data loads)
+    useEffect(() => {
+        if (allRepos.length > 0 && selectedRepos.length === 0) {
+            setSelectedRepos(allRepos);
+        }
+    }, [allRepos]);
 
     // --- Release mode state ---
     const [releaseMode, setReleaseMode] = useState(false);
@@ -160,15 +196,18 @@ function Timeline({ dates, dayData }) {
                 onSelect={setSelectedDate}
             />
             <div className="timeline-body">
+                {dataLoading && <div className="loading">Loading commits...</div>}
                 <MetricsBoard dates={filteredDates} dayData={filteredDayData} />
                 <div className="timeline-detail">
                     {selectedData ? (
                         <DayDetail data={selectedData} />
                     ) : (
                         <div className="no-selection">
-                            {filteredDates.length === 0
-                                ? 'No data available for the selected date range'
-                                : 'Select a day from the chart above to view details'}
+                            {dataLoading
+                                ? 'Loading...'
+                                : filteredDates.length === 0
+                                    ? 'No data available for the selected date range'
+                                    : 'Select a day from the chart above to view details'}
                         </div>
                     )}
                 </div>

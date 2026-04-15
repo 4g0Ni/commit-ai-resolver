@@ -16,8 +16,7 @@ function DayDetail({ data }) {
     let configCommitCount = 0;
     for (const repoData of Object.values(repositories)) {
         for (const c of repoData.commits || []) {
-            const ct = c.summary?.changeType;
-            if (ct === 'config' || ct === 'mixed' || c.summary?.configChanges?.length > 0) {
+            if (c.summary?.configChanges?.length > 0) {
                 configCommitCount++;
             }
         }

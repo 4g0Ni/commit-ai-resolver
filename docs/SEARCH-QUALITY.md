@@ -126,7 +126,8 @@ Each test query is scored on 6 dimensions (0-3 each, max 18 total):
 **Query:** "What pilot flags were changed recently?"
 
 **Ground truth:**
-- Config/mixed commits across the dataset (count reduced after narrowing config definition to exclude k8s/Helm, agent/AI workflows, Dependabot bumps)
+- 719 config/mixed commits in pre-fix dataset (489 config + 230 mixed), ~6% suspected false positives
+- After config detection narrowing: 43 suspected FPs (25 infrastructure/helm/k8s, 17 Dependabot bumps, 1 agent/AI)
 - Top affected flags include: FluentUetTags, Permissions.NielsenThirdPartyTracking, AdsCopilotEntityIdSelector, BrandCampaign, UXRefreshWave2
 - Config changes include: pilot ramp percentage changes, feature gate additions/removals, flight allocations
 
@@ -509,4 +510,58 @@ Three improvements to the commit summarization pipeline:
 
 **After (WHO included):**
 > Summary: "AI skill telemetry now logs through OneDS/Aria hooks instead of Azure Data Explorer (Kusto) ingestion, and local init scripts no longer install or prompt for Azure CLI login. This affects internal developer workflows..."
+
+---
+
+## Config Detection Validation — 2026-04-14
+
+### Context
+
+Narrowed config change detection rules to exclude false positives: Kubernetes/Helm infrastructure, agent/AI workflow files, Dependabot version bumps, and AKS build artifacts. Also fixed config key extraction to use short flag names instead of XPath paths. Validated against the full 35-day pre-fix dataset using `src/scripts/validate-config-detection.js`.
+
+### Pre-Fix Baseline (35 days, 2,443 commits)
+
+| Metric | Count | % |
+|--------|------:|---:|
+| Total commits | 2,443 | 100% |
+| changeType: code | 1,724 | 70.6% |
+| changeType: config | 489 | 20.0% |
+| changeType: mixed | 230 | 9.4% |
+| **Suspected false positives** | **43** | **6.0% of config/mixed** |
+| XPath-style key issues | 0 | fixed |
+
+### False Positives by Category
+
+| Category | Count |
+|----------|------:|
+| Infrastructure (helm/k8s/AKS/AFD) | 25 |
+| Dependabot/version bump | 17 |
+| Agent/AI workflow | 1 |
+
+### By Repository
+
+| Repo | Config | Mixed | Total C/M | Suspected FP | FP Rate |
+|------|-------:|------:|----------:|-------------:|--------:|
+| AdsAppsCampaignUI | 204 | 136 | 340 | 9 | 3% |
+| AdsAppsMT | 138 | 75 | 213 | 24 | 11% |
+| AdsAppUI | 147 | 19 | 166 | 10 | 6% |
+
+### Changes Applied
+
+1. **LLM prompt** (`commit-summarizer.js`): Added explicit "WHAT IS NOT A CONFIG CHANGE" section — k8s/Helm infrastructure, agent/AI workflows, Dependabot bumps, AKS packaging
+2. **Config key naming**: Required SHORT flag names (e.g., `NewGoogleLoginGSI`) not XPath paths; consolidate duplicate XML element rows
+3. **Diff filter** (`diff-filter.js`): Added `/agent/` auto-summary pattern for AdsAppsMT
+4. **CONFIG_FILE_PATTERNS**: Removed `helm-*.yaml` and `values.yaml`
+5. **Per-repo rules**: MT config limited to `Dynamic.config`, `DynamicConfigValues.cs` only; AdsAppUI excludes `serviceConfig.ini` and build scripts
+
+### Expected Post-Fix Impact
+
+After regenerating with `--force`, the 43 suspected FPs should be reclassified as `code`, yielding ~676 true config/mixed commits (94% precision). The XPath key naming fix eliminates verbose multi-row extraction for feature flags with multiple XML references.
+
+### Validation script
+
+```bash
+cd src && node scripts/validate-config-detection.js       # markdown report
+cd src && node scripts/validate-config-detection.js --json # machine-readable
+```
 

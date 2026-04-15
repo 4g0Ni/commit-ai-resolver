@@ -8,18 +8,24 @@
 const ACTION_COLORS = { added: 'added', modified: 'modified', removed: 'removed' };
 
 /**
- * Extract an environment name from a config change's detail text.
- * Looks for common patterns like "in XYZ environment" or known env names.
+ * Extract environment names from a config change's detail text.
+ * Returns an array of all matched environments.
  */
-function extractEnvFromDetail(detail) {
-    if (!detail) return null;
-    // Match "in <Env> environment" or "from <Env> environment"
-    const envMatch = detail.match(/(?:in|from)\s+(?:the\s+)?([A-Za-z0-9_-]+(?:\s+[A-Za-z0-9_-]+)*?)\s+environment/i);
-    if (envMatch) return envMatch[1].trim();
+function extractEnvsFromDetail(detail) {
+    if (!detail) return [];
+    const envs = [];
     // Match known env patterns: EastUS SI, WestUS Prod, Local, INT, PROD-TIP, etc.
-    const knownEnv = detail.match(/\b((?:EastUS|WestUS|CentralUS|NorthEurope|WestEurope)\s+(?:SI|Prod|TIP)|Local|INT|PROD-TIP|PROD|BingAdsService\w+-(?:Prod|SI)-\w+|CampaignWeb\s+Web\.config|UICore\s+\w+)/i);
-    if (knownEnv) return knownEnv[1].trim();
-    return null;
+    const knownEnvRe = /\b((?:EastUS|WestUS|CentralUS|NorthEurope|WestEurope)\s+(?:SI|Prod|TIP)|Local|INT|PROD-TIP|PROD|BingAdsService\w+-(?:Prod|SI)-\w+|CampaignWeb\s+Web\.config|UICore\s+\w+)\b/gi;
+    let m;
+    while ((m = knownEnvRe.exec(detail)) !== null) {
+        const env = m[1].trim();
+        if (!envs.includes(env)) envs.push(env);
+    }
+    if (envs.length > 0) return envs;
+    // Fallback: "in <Env> environment" or "from <Env> environment"
+    const envMatch = detail.match(/(?:in|from)\s+(?:the\s+)?([A-Za-z0-9_-]+(?:\s+[A-Za-z0-9_-]+)*?)\s+environment/i);
+    if (envMatch) return [envMatch[1].trim()];
+    return [];
 }
 
 /**
@@ -60,8 +66,10 @@ function groupConfigChanges(changes) {
             });
         }
         const g = exactGroups.get(groupKey);
-        const env = extractEnvFromDetail(cfg.detail);
-        if (env && !g.envs.includes(env)) g.envs.push(env);
+        const envs = extractEnvsFromDetail(cfg.detail);
+        for (const env of envs) {
+            if (!g.envs.includes(env)) g.envs.push(env);
+        }
         if (cfg.detail) g.details.push(cfg.detail);
     }
     const phase1 = Array.from(exactGroups.values());
@@ -129,8 +137,7 @@ function ConfigChangesPanel({ repositories }) {
 
     for (const [repoName, repoData] of Object.entries(repositories)) {
         const configCommits = (repoData.commits || []).filter(c => {
-            const ct = c.summary?.changeType;
-            return ct === 'config' || ct === 'mixed' || c.summary?.configChanges?.length > 0;
+            return c.summary?.configChanges?.length > 0;
         });
         if (configCommits.length > 0) {
             repoConfigs.push({ repoName, commits: configCommits });

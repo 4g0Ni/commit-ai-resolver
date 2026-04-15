@@ -1,12 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { fetchDays, fetchDay } from './api';
+import { fetchDays } from './api';
 import Timeline from './components/Timeline';
 import ChatBox from './components/ChatBox';
 import './App.css';
 
 function App() {
     const [dates, setDates] = useState([]);
-    const [dayData, setDayData] = useState({});
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
 
@@ -15,17 +14,6 @@ function App() {
             try {
                 const { dates: availableDates } = await fetchDays();
                 setDates(availableDates);
-
-                // Load all days in parallel
-                const results = await Promise.all(
-                    availableDates.map(d => fetchDay(d).catch(() => null))
-                );
-
-                const dataMap = {};
-                results.forEach((data, i) => {
-                    if (data) dataMap[availableDates[i]] = data;
-                });
-                setDayData(dataMap);
             } catch (err) {
                 setError(err.message);
             } finally {
@@ -75,7 +63,6 @@ function App() {
                     {!loading && !error && (
                         <Timeline
                             dates={dates}
-                            dayData={dayData}
                         />
                     )}
                 </main>
