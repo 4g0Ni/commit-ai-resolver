@@ -34,9 +34,10 @@ const client = new AzureOpenAI({
  */
 async function llmHelper(systemPrompt, messages, opts = {}) {
     const maxRetries = opts.maxRetries ?? 3;
+    const absoluteMaxRetries = Math.max(maxRetries, 5); // upper bound for 429 retries
     let lastError;
 
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    for (let attempt = 1; attempt <= absoluteMaxRetries; attempt++) {
         try {
             const timeoutMs = opts.timeout ?? 120000; // 2 min timeout
             const controller = new AbortController();
@@ -67,11 +68,23 @@ async function llmHelper(systemPrompt, messages, opts = {}) {
             if (status && status >= 400 && status < 500 && status !== 429) {
                 throw err;
             }
-            if (attempt < maxRetries) {
-                const delay = Math.min(1000 * Math.pow(2, attempt - 1), 10000);
-                console.warn(`  LLM retry ${attempt}/${maxRetries} after ${delay}ms: ${err.message}`);
-                await new Promise(r => setTimeout(r, delay));
+            // For 429 rate limits, allow more retries since they're transient
+            const effectiveMaxRetries = (status === 429) ? absoluteMaxRetries : maxRetries;
+            if (attempt >= effectiveMaxRetries) {
+                throw err;
             }
+            const expDelay = Math.min(1000 * Math.pow(2, attempt - 1), 30000);
+            // Parse Retry-After header if available (seconds)
+            const retryAfter = err.headers?.['retry-after'] ?? err.error?.retry_after;
+            const baseDelay = retryAfter ? Math.max(Number(retryAfter) * 1000, expDelay) : expDelay;
+            // Add jitter ±30% to prevent thundering herd
+            const delay = Math.round(baseDelay * (0.7 + Math.random() * 0.6));
+            if (status === 429 && retryAfter) {
+                console.warn(`  LLM 429 retry ${attempt}/${effectiveMaxRetries} — Retry-After: ${retryAfter}s, waiting ${delay}ms`);
+            } else {
+                console.warn(`  LLM retry ${attempt}/${effectiveMaxRetries} after ${delay}ms: ${err.message}`);
+            }
+            await new Promise(r => setTimeout(r, delay));
         }
     }
     throw lastError;

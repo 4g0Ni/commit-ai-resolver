@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { fetchDays } from './api';
 import Timeline from './components/Timeline';
 import ChatBox from './components/ChatBox';
+import FeedbackPanel from './components/FeedbackPanel';
 import './App.css';
 
 function App() {
@@ -50,11 +51,29 @@ function App() {
         document.addEventListener('mouseup', onUp);
     }, [chatWidth]);
 
+    const [showFeedback, setShowFeedback] = useState(false);
+    const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
+
+    useEffect(() => {
+        document.documentElement.setAttribute('data-theme', theme);
+        localStorage.setItem('theme', theme);
+    }, [theme]);
+
+    const toggleTheme = () => setTheme(t => t === 'dark' ? 'light' : 'dark');
+
     return (
         <div className="app">
             <header className="app-header">
                 <h1>Commit AI Resolver</h1>
                 <span className="subtitle">Daily Change Tracking & Regression Analysis</span>
+                <div className="header-actions">
+                    <button className="feedback-header-btn" onClick={() => setShowFeedback(true)}>
+                        Feedback
+                    </button>
+                    <button className="theme-toggle-btn" onClick={toggleTheme} title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}>
+                        {theme === 'dark' ? '\u2600\uFE0F' : '\uD83C\uDF19'}
+                    </button>
+                </div>
             </header>
             <div className="app-body">
                 <main className="main-panel">
@@ -71,6 +90,7 @@ function App() {
                     <ChatBox />
                 </aside>
             </div>
+            {showFeedback && <FeedbackPanel onClose={() => setShowFeedback(false)} />}
         </div>
     );
 }

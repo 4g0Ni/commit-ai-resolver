@@ -30,7 +30,7 @@ function daysAgo(n, today) {
 export async function extractIntent(llm, context) {
     const { query, history = [], feedback, workItemContext } = context;
     const today = new Date().toISOString().slice(0, 10);
-    const repoList = 'AdsAppsCampaignUI, AdsAppsMT, AdsAppUI';
+    const repoList = 'AdsAppsCampaignUI, AdsAppsMT, AdsAppUI, AnB, AdsAppsDB';
 
     let feedbackBlock = '';
     if (feedback) {
@@ -49,7 +49,7 @@ ${feedback.newKeywords ? `Additional keywords to include: ${feedback.newKeywords
 ${conversationContext}
 Return ONLY a JSON object with these fields (use null for missing):
 - "author": full person name if asking about a specific person's commits (null if not person-specific)
-- "repo": exact repo name from [${repoList}] if mentioned. Recognize aliases: "campaignui"/"cmui" → AdsAppsCampaignUI, "mt"/"middle tier" → AdsAppsMT, "appui"/"shell" → AdsAppUI. (null if not repo-specific)
+- "repo": exact repo name from [${repoList}] if mentioned. Recognize aliases: "campaignui"/"cmui" → AdsAppsCampaignUI, "mt"/"middle tier" → AdsAppsMT, "appui"/"shell"/"uiserver" → AdsAppUI, "anb"/"ccdb"/"ccmt"/"client center db"/"client center mt" → AnB, "cmdb"/"campaign db"/"db"/"adsappsdb" → AdsAppsDB. (null if not repo-specific)
 - "dateFrom": start date YYYY-MM-DD if a time range is mentioned. For incident/regression queries ("spike", "broke", "error", "crash", "regression"), expand the start date 2 days earlier to account for release buffer. For "this week", use Monday of the current week. (null if open-ended)
 - "dateTo": end date YYYY-MM-DD if a time range is mentioned (null if open-ended)
 - "searchQuery": a rewritten version optimized for semantic search against commit summaries. Remove person names and date references. Keep the technical intent specific. For author queries, include broad technical terms like "feature implementation configuration API change". For broad queries like "what changed", use "code changes features configuration deployment updates".

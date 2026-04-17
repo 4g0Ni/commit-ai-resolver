@@ -85,6 +85,25 @@ const repoFilters = {
         ],
         ignore: [],
     },
+    AdsAppsDB: {
+        autoSummary: [
+            { pattern: /\.sql$/i, reason: 'SQL script' },
+            { pattern: /Generated/i, reason: 'auto-generated code' },
+            { pattern: /\/Migrations\//i, reason: 'database migration' },
+            { pattern: /StoredProcedures/i, reason: 'stored procedure definition' },
+            { pattern: /\/dacpac\//i, reason: 'DACPAC build artifact' },
+        ],
+        ignore: [],
+    },
+    AnB: {
+        autoSummary: [
+            { pattern: /Generated/i, reason: 'auto-generated code' },
+            { pattern: /\/loc\//i, reason: 'localization strings' },
+            { pattern: /\.resjson$/i, reason: 'resource JSON strings' },
+            { pattern: /\/build\//i, reason: 'build pipeline config' },
+        ],
+        ignore: [],
+    },
     AdsAppUI: {
         autoSummary: [
             { pattern: /\/loc\//i, reason: 'localization strings' },

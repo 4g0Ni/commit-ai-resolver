@@ -2,6 +2,14 @@
  * RepoFilter — Toggle which repositories are visible in the dashboard.
  */
 
+const DISPLAY_NAMES = {
+    AdsAppsCampaignUI: 'CMUI',
+    AdsAppsMT: 'MT',
+    AdsAppUI: 'UIServer',
+    AnB: 'AnB',
+    AdsAppsDB: 'CMDB',
+};
+
 function RepoFilter({ allRepos, selectedRepos, onChange }) {
     const toggle = (repo) => {
         if (selectedRepos.includes(repo)) {
@@ -26,7 +34,7 @@ function RepoFilter({ allRepos, selectedRepos, onChange }) {
                     onClick={() => toggle(repo)}
                     title={selectedRepos.includes(repo) ? `Hide ${repo}` : `Show ${repo}`}
                 >
-                    {repo.replace('AdsApps', '').replace('AdsApp', '')}
+                    {DISPLAY_NAMES[repo] || repo}
                 </button>
             ))}
             {selectedRepos.length < allRepos.length && (

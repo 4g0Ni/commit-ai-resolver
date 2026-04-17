@@ -26,8 +26,8 @@
 | AdsAppsCampaignUI | Campaign management UI | Date-sorted | ✅ Active |
 | AdsAppsMT | Middle-tier services | Rolling | ✅ Active |
 | AdsAppUI | Ads Apps UI shell | Versioned | ✅ Active |
-| AdsAppsDB | Database / data layer | Versioned | Commented out |
-| AnB | Ads & Billing platform | Versioned | Commented out |
+| AnB | Ads & Billing platform | Versioned | ✅ Active |
+| AdsAppsDB | Database / data layer | Versioned | ✅ Active |
 
 ---
 
@@ -163,7 +163,9 @@ Daily reports are stored as JSON files in `data/daily/YYYY-MM-DD.json`, generate
       "stats": { "total": 65, "high": 2, "medium": 35, "low": 28, "configChanges": 5 }
     },
     "AdsAppsMT": { "..." : "..." },
-    "AdsAppUI": { "..." : "..." }
+    "AdsAppUI": { "..." : "..." },
+    "AnB": { "..." : "..." },
+    "AdsAppsDB": { "..." : "..." }
   },
   "summary": {
     "totalCommits": 98,
@@ -171,7 +173,7 @@ Daily reports are stored as JSON files in `data/daily/YYYY-MM-DD.json`, generate
     "totalMedium": 56,
     "totalLow": 34,
     "totalConfigChanges": 30,
-    "reposIncluded": ["AdsAppsCampaignUI", "AdsAppsMT", "AdsAppUI"]
+    "reposIncluded": ["AdsAppsCampaignUI", "AdsAppsMT", "AdsAppUI", "AnB", "AdsAppsDB"]
   }
 }
 ```
@@ -404,7 +406,7 @@ The chat API uses a lightweight LLM pre-processing call to extract structured fi
 
 The LLM extracts a JSON object with:
 - `author` — person name if the query is about a specific person's commits
-- `repo` — exact repo name if mentioned (recognizes aliases like "campaignui", "cmui")
+- `repo` — exact repo name if mentioned (recognizes aliases like "campaignui", "cmui", "uiserver", "anb", "ccdb", "ccmt", "client center db", "client center mt", "cmdb", "campaign db", "db", "adsappsdb")
 - `dateFrom` / `dateTo` — date range if time is mentioned (resolves relative dates like "last week", "yesterday")
 - `searchQuery` — a rewritten version optimized for embedding similarity search (stripped of filter terms)
 - `secondarySearchQuery` — a second, different semantic query focusing on fix mechanisms (only for work item queries). Uses different terms than the primary query to bridge the semantic gap between bug descriptions and fix commits.

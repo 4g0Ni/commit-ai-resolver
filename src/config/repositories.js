@@ -39,20 +39,20 @@ const REPOSITORIES = {
         // Compare commits between STAGING (newest deploy) and LKG (last known good)
         releaseTags: { current: 'MT_STAGING', previous: 'MT_LKG' },
     },
-    // AdsAppsDB: {
-    //     name: 'AdsAppsDB',
-    //     project: ADO_PROJECT,
-    //     defaultBranch: 'refs/heads/master',
-    //     tagStrategy: 'versioned',
-    //     tagPattern: 'tags/',
-    // },
-    // AnB: {
-    //     name: 'AnB',
-    //     project: ADO_PROJECT,
-    //     defaultBranch: 'refs/heads/master',
-    //     tagStrategy: 'versioned',
-    //     tagPattern: 'tags/',
-    // },
+    AdsAppsDB: {
+        name: 'AdsAppsDB',
+        project: ADO_PROJECT,
+        defaultBranch: 'refs/heads/master',
+        tagStrategy: 'versioned',
+        tagPattern: 'tags/',
+    },
+    AnB: {
+        name: 'AnB',
+        project: ADO_PROJECT,
+        defaultBranch: 'refs/heads/master',
+        tagStrategy: 'versioned',
+        tagPattern: 'tags/',
+    },
     AdsAppUI: {
         name: 'AdsAppUI',
         project: ADO_PROJECT,

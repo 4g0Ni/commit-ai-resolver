@@ -8,14 +8,16 @@
  */
 
 import { extractIntent } from './intent-extractor.js';
-import { synthesizeAnswer } from './answer-synthesizer.js';
+import { synthesizeAnswer, synthesizeAnswerStream } from './answer-synthesizer.js';
 import { evaluateAnswer } from './answer-evaluator.js';
+import { logInfo, logError } from '../telemetry/column-whitelist.js';
 
 /**
  * Run the agentic search pipeline.
  *
  * @param {object} params
- * @param {AzureOpenAI} params.llm - OpenAI client for chat completions
+ * @param {AzureOpenAI} params.llm - OpenAI client for chat completions (gpt-5.4, used for synthesis)
+ * @param {AzureOpenAI} params.llmFast - OpenAI client for fast tasks (gpt-5.4-mini, used for intent/eval)
  * @param {Function} params.embedQuery - Async function: (text) => embedding vector
  * @param {Function} params.searchVectors - Async function: (embedding, opts) => results[]
  * @param {Function} params.lookupByCommitIds - Async function: (shortIds) => results[] (exact match)
@@ -24,10 +26,12 @@ import { evaluateAnswer } from './answer-evaluator.js';
  * @param {Array} params.history - Conversation history
  * @param {number} params.maxIterations - Max loop iterations (default: 5)
  * @param {Function} params.onProgress - Optional callback: (iteration, stage, details) => void
+ * @param {Function} params.onToken - Optional callback for streaming synthesizer tokens: (token: string) => void
  * @returns {Promise<object>} { type: 'answer'|'clarification', reply, searchMethod, iterations, ... }
  */
 export async function agenticSearch({
     llm,
+    llmFast,
     embedQuery,
     searchVectors,
     lookupByCommitIds,
@@ -37,11 +41,15 @@ export async function agenticSearch({
     maxIterations = 3,
     workItemContext,
     onProgress,
+    onToken,
+    correlationId,
 }) {
     let bestAnswer = null;
     let bestScore = 0;
     let bestResults = [];
+    let prevResultCount = 0;
     const iterationLog = [];
+    const pipelineStart = Date.now();
 
     const log = (iteration, stage, details) => {
         const entry = { iteration, stage, ...details, timestamp: Date.now() };
@@ -68,8 +76,19 @@ export async function agenticSearch({
     for (let i = 1; i <= maxIterations; i++) {
         // --- Agent 1: Intent Extraction (includes self-validation) ---
         log(i, 'intent-extractor', { status: 'running' });
-        const intent = await extractIntent(llm, context);
+        const intent = await extractIntent(llmFast || llm, context);
         log(i, 'intent-extractor', { status: 'done', confidence: intent.confidence, verdict: intent.verdict, elapsed: intent._elapsed });
+        logInfo('IntentExtraction', {
+            CorrelationId: correlationId,
+            Component: 'intent-extractor',
+            Intent: intent.searchQuery?.slice(0, 200),
+            Repo: intent.repo || null,
+            Confidence: intent.confidence,
+            Verdict: intent.verdict,
+            ElapsedMs: intent._elapsed,
+            TokensUsed: intent._tokens || 0,
+            IterationIndex: i,
+        });
         console.log(`  [Intent] searchQuery: "${intent.searchQuery}"`);
         if (intent.secondarySearchQuery) console.log(`  [Intent] secondarySearchQuery: "${intent.secondarySearchQuery}"`);
 
@@ -177,7 +196,11 @@ export async function agenticSearch({
             }
         }
 
+        const topScores = results.slice(0, 5).map(r => r.score?.toFixed(3)).join(', ');
         log(i, 'rag-search', { status: 'done', resultCount: results.length, embeddingMs, searchMs });
+        if (results.length > 0) {
+            console.log(`  [Search] ${results.length} results, top-5 scores: [${topScores}], date range: ${effectiveDateFrom || 'open'}..${effectiveDateTo || 'open'}`);
+        }
 
         // If vector search returned nothing and this is the first iteration, try full context
         if (results.length === 0 && i === 1) {
@@ -186,13 +209,30 @@ export async function agenticSearch({
         }
 
         // --- Agent 3: Answer Synthesizer ---
+        // Only stream tokens on the last iteration to avoid sending partial
+        // responses to the UI that get replaced on retry.
+        const isLastIteration = i >= maxIterations;
+        const canStream = onToken && isLastIteration;
         log(i, 'answer-synthesizer', { status: 'running', resultCount: results.length });
-        const synthesis = await synthesizeAnswer(llm, results, intent, context);
+        const synthesis = canStream
+            ? await synthesizeAnswerStream(llm, results, intent, context, i, onToken)
+            : await synthesizeAnswer(llm, results, intent, context, i);
         log(i, 'answer-synthesizer', {
             status: 'done',
             confidence: synthesis.confidence,
             coverage: synthesis.searchCoverage,
             elapsed: synthesis._elapsed,
+        });
+        console.log(`  [Synthesizer] confidence=${synthesis.confidence}, coverage=${synthesis.searchCoverage}, suspects=${synthesis.suspectCount}, tokens=${synthesis._tokens || '?'}, ${(synthesis._elapsed / 1000).toFixed(1)}s`);
+        logInfo('AnswerSynthesis', {
+            CorrelationId: correlationId,
+            Component: 'answer-synthesizer',
+            Confidence: synthesis.confidence,
+            ResultCount: results.length,
+            ElapsedMs: synthesis._elapsed,
+            TokensUsed: synthesis._tokens || 0,
+            SuspectsCount: synthesis.suspectCount || 0,
+            IterationIndex: i,
         });
 
         // Guard: if answer is empty, fall back to full context on first occurrence
@@ -210,23 +250,72 @@ export async function agenticSearch({
 
         // --- Agent 4: Answer Evaluator ---
         log(i, 'answer-evaluator', { status: 'running' });
-        const evaluation = await evaluateAnswer(llm, synthesis, { ...context, iteration: i }, results);
+        const evaluation = await evaluateAnswer(llmFast || llm, synthesis, { ...context, iteration: i }, results, maxIterations);
         log(i, 'answer-evaluator', {
             status: 'done',
             verdict: evaluation.verdict,
             qualityScore: evaluation.qualityScore,
             elapsed: evaluation._elapsed,
         });
+        console.log(`  [Evaluator] verdict=${evaluation.verdict}, qualityScore=${evaluation.qualityScore}, fastPath=${evaluation._fastPath || false}`);
+        logInfo('AnswerEvaluation', {
+            CorrelationId: correlationId,
+            Component: 'answer-evaluator',
+            Confidence: evaluation.qualityScore,
+            Verdict: evaluation.verdict,
+            ElapsedMs: evaluation._elapsed,
+            IterationIndex: i,
+        });
+        if (evaluation.issues?.length > 0) {
+            console.log(`  [Evaluator] issues: ${evaluation.issues.join('; ')}`);
+        }
+        if (evaluation.retryStrategy) {
+            console.log(`  [Evaluator] retryStrategy: action=${evaluation.retryStrategy.action}, reasoning=${evaluation.retryStrategy.reasoning || 'none'}`);
+            if (evaluation.retryStrategy.newKeywords?.length > 0) {
+                console.log(`  [Evaluator] newKeywords: ${evaluation.retryStrategy.newKeywords.join(', ')}`);
+            }
+            if (evaluation.retryStrategy.expandedDateFrom || evaluation.retryStrategy.expandedDateTo) {
+                console.log(`  [Evaluator] expandedDates: ${evaluation.retryStrategy.expandedDateFrom || '?'}..${evaluation.retryStrategy.expandedDateTo || '?'}`);
+            }
+        }
 
         if (evaluation.verdict === 'PASS') {
-            return formatAnswer(synthesis, 'agentic', i, iterationLog, null, results, workItemContext);
+            // If we didn't stream yet, re-run with streaming for the final answer
+            if (onToken && !canStream) {
+                log(i, 'answer-synthesizer', { status: 'streaming', resultCount: results.length });
+                const streamedSynthesis = await synthesizeAnswerStream(llm, results, intent, context, i, onToken);
+                console.log(`  [Pipeline] PASS — streamed final answer (iteration ${i}, ${((Date.now() - pipelineStart) / 1000).toFixed(1)}s total)`);
+                return await formatAnswer(streamedSynthesis, 'agentic', i, iterationLog, null, results, workItemContext, lookupByCommitIds);
+            }
+            console.log(`  [Pipeline] PASS — returning answer (iteration ${i}, ${((Date.now() - pipelineStart) / 1000).toFixed(1)}s total)`);
+            return await formatAnswer(synthesis, 'agentic', i, iterationLog, null, results, workItemContext, lookupByCommitIds);
         }
 
         if (evaluation.verdict === 'PARTIAL') {
-            return formatAnswer(synthesis, 'agentic', i, iterationLog, 'Results may be incomplete — I searched with the best available context.', results, workItemContext);
+            if (onToken && !canStream) {
+                log(i, 'answer-synthesizer', { status: 'streaming', resultCount: results.length });
+                const streamedSynthesis = await synthesizeAnswerStream(llm, results, intent, context, i, onToken);
+                console.log(`  [Pipeline] PARTIAL — streamed final answer with disclaimer (iteration ${i}, ${((Date.now() - pipelineStart) / 1000).toFixed(1)}s total)`);
+                return await formatAnswer(streamedSynthesis, 'agentic', i, iterationLog, 'Results may be incomplete — I searched with the best available context.', results, workItemContext, lookupByCommitIds);
+            }
+            console.log(`  [Pipeline] PARTIAL — returning answer with disclaimer (iteration ${i}, ${((Date.now() - pipelineStart) / 1000).toFixed(1)}s total)`);
+            return await formatAnswer(synthesis, 'agentic', i, iterationLog, 'Results may be incomplete — I searched with the best available context.', results, workItemContext, lookupByCommitIds);
         }
 
+        // RETRY — but detect stale retries (same result count as previous iteration)
+        if (results.length <= prevResultCount && results.length > 0 && i > 1) {
+            console.log(`  [Pipeline] STALE RETRY — result count unchanged (${results.length}), returning as PARTIAL`);
+            if (onToken) {
+                log(i, 'answer-synthesizer', { status: 'streaming', resultCount: results.length });
+                const streamedSynthesis = await synthesizeAnswerStream(llm, results, intent, context, i, onToken);
+                return await formatAnswer(streamedSynthesis, 'agentic', i, iterationLog, 'Results may be incomplete — I searched with the best available context.', results, workItemContext, lookupByCommitIds);
+            }
+            return await formatAnswer(synthesis, 'agentic', i, iterationLog, 'Results may be incomplete — I searched with the best available context.', results, workItemContext, lookupByCommitIds);
+        }
+        prevResultCount = results.length;
+
         // RETRY — prepare feedback for next iteration
+        console.log(`  [Pipeline] RETRY — will retry (iteration ${i} → ${i + 1})`);
         if (evaluation.retryStrategy && i < maxIterations) {
             context.feedback = evaluation.retryStrategy;
             // Apply date expansion overrides for next iteration's RAG search
@@ -245,15 +334,18 @@ export async function agenticSearch({
     }
 
     // Max iterations reached — return best answer found
+    const totalElapsed = Date.now() - pipelineStart;
+    console.log(`  [Pipeline] MAX ITERATIONS (${maxIterations}) — returning best answer, bestScore=${bestScore.toFixed(2)}, totalElapsed=${(totalElapsed / 1000).toFixed(1)}s`);
     if (bestAnswer) {
-        return formatAnswer(
+        return await formatAnswer(
             bestAnswer,
             'agentic',
             maxIterations,
             iterationLog,
             bestScore < 0.5 ? 'I wasn\'t fully confident in these results after multiple search attempts. Consider refining your question with more specific details.' : null,
             bestResults,
-            workItemContext
+            workItemContext,
+            lookupByCommitIds
         );
     }
 
@@ -301,7 +393,7 @@ function fuseResults(weightedLists, k = 60) {
         .map(entry => ({ ...entry.bestResult, score: entry.bestResult.score, _rrfScore: entry.rrfScore }));
 }
 
-function formatAnswer(synthesis, searchMethod, iterations, iterationLog, disclaimer, results, workItemContext) {
+async function formatAnswer(synthesis, searchMethod, iterations, iterationLog, disclaimer, results, workItemContext, lookupByCommitIds) {
     let reply = synthesis.answer;
     if (disclaimer) {
         reply += `\n\n---\n*⚠️ ${disclaimer}*`;
@@ -345,6 +437,62 @@ function formatAnswer(synthesis, searchMethod, iterations, iterationLog, disclai
         }
         suspects.length = 0;
         suspects.push(...reordered);
+    }
+
+    // Backfill: find commit IDs referenced in the answer text but missing from suspects.
+    // This happens when the synthesizer mentions commits from the full result set that
+    // fell outside the top-N suspects slice, or from broader context.
+    const existingIds = new Set(suspects.map(s => s.shortId));
+    const answerRefs = [...(synthesis.answer || '').matchAll(/\[([a-f0-9]{6,10})\]\(https?:\/\/[^)]+\)/g)];
+    const missingIds = [...new Set(answerRefs.map(m => m[1]))].filter(id => !existingIds.has(id));
+
+    if (missingIds.length > 0) {
+        // Check the full results array first (cheaper than a DB lookup)
+        const fullResultMap = new Map((results || []).map(r => [r.id, r]));
+        for (const id of missingIds) {
+            const r = fullResultMap.get(id);
+            if (r) {
+                suspects.push({
+                    commitId: r.commitId,
+                    shortId: r.id,
+                    repo: r.repo,
+                    date: r.date,
+                    author: r.author || r.metadata?.author,
+                    title: r.metadata?.title,
+                    summary: r.metadata?.summary,
+                    riskLevel: r.metadata?.riskLevel,
+                    url: r.metadata?.url,
+                    score: r.score,
+                });
+            }
+        }
+
+        // Any still missing — try vector store lookup
+        const stillMissing = missingIds.filter(id => !fullResultMap.has(id));
+        if (stillMissing.length > 0 && lookupByCommitIds) {
+            try {
+                const found = await lookupByCommitIds(stillMissing);
+                for (const r of found) {
+                    suspects.push({
+                        commitId: r.commitId,
+                        shortId: r.id,
+                        repo: r.repo,
+                        date: r.date,
+                        author: r.author || r.metadata?.author,
+                        title: r.metadata?.title,
+                        summary: r.metadata?.summary,
+                        riskLevel: r.metadata?.riskLevel,
+                        url: r.metadata?.url,
+                        score: r.score || 0,
+                    });
+                }
+                if (found.length > 0) {
+                    console.log(`  [formatAnswer] backfilled ${found.length} commit(s) from vector store: ${found.map(r => r.id).join(', ')}`);
+                }
+            } catch (err) {
+                console.warn(`  [formatAnswer] backfill lookup failed: ${err.message}`);
+            }
+        }
     }
 
     return {
@@ -396,7 +544,6 @@ ${contextText}
             { role: 'user', content: query },
         ],
         temperature: 0.3,
-        max_completion_tokens: 2048,
     });
 
     return {

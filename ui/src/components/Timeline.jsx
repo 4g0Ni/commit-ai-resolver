@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { fetchReleases, fetchDayRange } from '../api';
 import DateRangePicker from './DateRangePicker';
 import RepoFilter from './RepoFilter';
+import DashboardFilters from './DashboardFilters';
 import MetricsBoard from './MetricsBoard';
 import TimelineChart from './TimelineChart';
 import DayDetail from './DayDetail';
@@ -54,6 +55,44 @@ function filterDayByRepos(data, selectedRepos) {
     };
 }
 
+/** Filter commits within repos by risk level, change type, and author — recalculate stats. */
+function filterDayByCommitFilters(data, { riskLevels, changeTypes, authorSearch }) {
+    if (!data) return data;
+    const filtered = {};
+    let totalCommits = 0, totalHigh = 0, totalMedium = 0, totalLow = 0, totalConfigChanges = 0;
+
+    for (const [name, repo] of Object.entries(data.repositories)) {
+        const commits = repo.commits.filter(c => {
+            const s = c.summary;
+            if (!riskLevels.includes(s.riskLevel)) return false;
+            const ct = s.changeType || 'code';
+            if (!changeTypes.includes(ct)) return false;
+            if (authorSearch && c.author !== authorSearch) return false;
+            return true;
+        });
+        const high = commits.filter(c => c.summary.riskLevel === 'HIGH').length;
+        const medium = commits.filter(c => c.summary.riskLevel === 'MEDIUM').length;
+        const low = commits.filter(c => c.summary.riskLevel === 'LOW').length;
+        const config = commits.filter(c => (c.summary.changeType || 'code') !== 'code').length;
+        filtered[name] = {
+            ...repo,
+            commits,
+            stats: { total: commits.length, high, medium, low, configChanges: config },
+        };
+        totalCommits += commits.length;
+        totalHigh += high;
+        totalMedium += medium;
+        totalLow += low;
+        totalConfigChanges += config;
+    }
+
+    return {
+        ...data,
+        repositories: filtered,
+        summary: { ...data.summary, totalCommits, totalHigh, totalMedium, totalLow, totalConfigChanges },
+    };
+}
+
 function Timeline({ dates }) {
     const defaultRange = getDefaultRange();
     const [fromDate, setFromDate] = useState(defaultRange.from);
@@ -90,6 +129,9 @@ function Timeline({ dates }) {
 
     const allRepos = useMemo(() => getAllRepos(dayData), [dayData]);
     const [selectedRepos, setSelectedRepos] = useState([]);
+    const [selectedRiskLevels, setSelectedRiskLevels] = useState(['HIGH', 'MEDIUM', 'LOW']);
+    const [selectedChangeTypes, setSelectedChangeTypes] = useState(['code', 'config', 'mixed']);
+    const [authorSearch, setAuthorSearch] = useState('');
 
     // Sync selectedRepos when allRepos changes (new repos appear after data loads)
     useEffect(() => {
@@ -145,14 +187,45 @@ function Timeline({ dates }) {
         return dates.filter(d => d >= fromDate && d <= toDate).sort();
     }, [dates, fromDate, toDate]);
 
-    // Build repo-filtered dayData
-    const filteredDayData = useMemo(() => {
+    // Pre-author filtered data: apply repo, risk, and type filters (used to compute available authors)
+    const preAuthorData = useMemo(() => {
         const out = {};
         for (const date of filteredDates) {
-            out[date] = filterDayByRepos(dayData[date], selectedRepos);
+            const repoFiltered = filterDayByRepos(dayData[date], selectedRepos);
+            out[date] = filterDayByCommitFilters(repoFiltered, {
+                riskLevels: selectedRiskLevels,
+                changeTypes: selectedChangeTypes,
+                authorSearch: '',
+            });
         }
         return out;
-    }, [filteredDates, dayData, selectedRepos]);
+    }, [filteredDates, dayData, selectedRepos, selectedRiskLevels, selectedChangeTypes]);
+
+    // Collect unique authors from pre-author-filtered data
+    const availableAuthors = useMemo(() => {
+        const authors = new Set();
+        for (const data of Object.values(preAuthorData)) {
+            if (!data?.repositories) continue;
+            for (const repo of Object.values(data.repositories)) {
+                for (const c of repo.commits) authors.add(c.author);
+            }
+        }
+        return [...authors].sort();
+    }, [preAuthorData]);
+
+    // Build fully filtered dayData (including author filter)
+    const filteredDayData = useMemo(() => {
+        if (!authorSearch) return preAuthorData;
+        const out = {};
+        for (const date of filteredDates) {
+            out[date] = filterDayByCommitFilters(preAuthorData[date], {
+                riskLevels: selectedRiskLevels,
+                changeTypes: selectedChangeTypes,
+                authorSearch,
+            });
+        }
+        return out;
+    }, [preAuthorData, filteredDates, selectedRiskLevels, selectedChangeTypes, authorSearch]);
 
     // Default selection: today or most recent in range
     const sortedFiltered = [...filteredDates].sort().reverse();
@@ -166,6 +239,12 @@ function Timeline({ dates }) {
     const handleRangeChange = (from, to) => {
         setFromDate(from);
         setToDate(to);
+    };
+
+    const handleResetFilters = () => {
+        setSelectedRiskLevels(['HIGH', 'MEDIUM', 'LOW']);
+        setSelectedChangeTypes(['code', 'config', 'mixed']);
+        setAuthorSearch('');
     };
 
     return (
@@ -187,6 +266,16 @@ function Timeline({ dates }) {
                     allRepos={allRepos}
                     selectedRepos={selectedRepos}
                     onChange={setSelectedRepos}
+                />
+                <DashboardFilters
+                    selectedRiskLevels={selectedRiskLevels}
+                    onRiskLevelsChange={setSelectedRiskLevels}
+                    selectedChangeTypes={selectedChangeTypes}
+                    onChangeTypesChange={setSelectedChangeTypes}
+                    authorSearch={authorSearch}
+                    onAuthorSearchChange={setAuthorSearch}
+                    availableAuthors={availableAuthors}
+                    onReset={handleResetFilters}
                 />
             </div>
             <TimelineChart

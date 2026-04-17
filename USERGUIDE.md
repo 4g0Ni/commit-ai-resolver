@@ -11,6 +11,8 @@ Commit AI Resolver fetches code commits from Azure DevOps repositories, uses an 
 | AdsAppsCampaignUI | Date-sorted (`UnifiedUIDoubleRepoLKG.YYYYMMDD.NN`) | Campaign management UI |
 | AdsAppsMT | Rolling named tags (`MT_STAGING` → `MT_LKG`) | Middle-tier services |
 | AdsAppUI | Versioned (`sha-versioned.NNN`) | Ads Apps UI shell |
+| AnB | Versioned (`tags/`) | Ads & Billing platform |
+| AdsAppsDB | Versioned (`tags/`) | Database / data layer |
 
 ---
 
@@ -217,7 +219,7 @@ For clarifications:
 
 The Intent Extractor agent extracts:
 - **author** — person name if asking about a specific person
-- **repo** — exact repo name (recognizes aliases like "campaignui", "cmui", "appui")
+- **repo** — exact repo name (recognizes aliases like "campaignui", "cmui", "appui", "uiserver", "anb", "ccdb", "ccmt", "client center db", "client center mt", "cmdb", "campaign db", "db", "adsappsdb")
 - **dateFrom / dateTo** — date range (resolves "yesterday", "last week", "March 30", etc.)
 - **searchQuery** — a rewritten query optimized for embedding search (filter terms stripped)
 - **secondarySearchQuery** — a second, different semantic query for work item searches (different angle on the bug)
@@ -303,7 +305,7 @@ The React dashboard has three main areas:
 ### Features
 
 - **Date Range Picker** — Select from/to dates with preset buttons (7/14/30 days)
-- **Repo Filter** — Toggle which repos are visible (AdsAppsCampaignUI, AdsAppsMT, AdsAppUI)
+- **Repo Filter** — Toggle which repos are visible (AdsAppsCampaignUI, AdsAppsMT, AdsAppUI, AnB, AdsAppsDB)
 - **Timeline Chart** — Stacked bar chart colored by risk level (red/yellow/green), with weekend markers. Click a bar to view that day's details.
 - **Metrics Sidebar** — Vertical cards: Total Commits, Avg/Day, High/Medium/Low Risk, Config Changes, per-repo counts
 - **Day Detail** — Commit list grouped by repo, each commit showing:
@@ -546,7 +548,7 @@ From `src/`:
 node index.js
 
 # Specific repos
-node index.js --repos AdsAppsCampaignUI,AdsAppsMT
+node index.js --repos AdsAppsCampaignUI,AdsAppsMT,AnB
 
 # List release tags
 node index.js --tags

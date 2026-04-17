@@ -124,6 +124,8 @@ REPO-SPECIFIC CONFIG DETECTION RULES:
 - AdsAppUI: Config/pilot files are .cscfg, .csdef, Web.config, appsettings*.json, sharedfeatures.config, AllowedFeature.cs, PermissionProvider.cs, IPermissionProvider.cs. These control pilot flags and feature rollout for the UI. NOT config: serviceConfig.ini, build packaging scripts, AKS deployment artifacts.
 - AdsAppsMT: Config/pilot files are ONLY Dynamic.config, *Dynamic.config, DynamicConfigValues.cs. These control backend feature flags. NOT config: helm-*.yaml, values.yaml, Kubernetes manifests, Dockerfiles, agent/*.json, agent/*.md — these are infrastructure/tooling, not feature flags. Use changeType "code" for Helm/k8s/agent changes.
 - AdsAppsCampaignUI: Do NOT classify changes as "config" or "mixed" changeType. This repo does NOT contain pilot/config controls — pilots are managed in AdsAppUI server-side. Always use changeType "code" for this repo.
+- AnB: Config/pilot files are appsettings*.json, Web.config, *.cscfg. NOT config: build scripts, pipeline YAML. Use changeType "code" for build/deploy changes.
+- AdsAppsDB: Do NOT classify changes as "config" or "mixed" changeType. This is a database repo — stored procedures, migrations, and schema changes are all "code". Always use changeType "code" for this repo.
 
 ENVIRONMENT-SPECIFIC CONFIG EXTRACTION:
 - When .cscfg filenames contain environment info (e.g., "ServiceConfiguration.EastUS.SI.cscfg", "ServiceConfiguration.WestUS.Prod.cscfg"), include the environment in each configChange's "detail" field — e.g., "Enabled in EastUS SI environment".
@@ -430,4 +432,4 @@ async function summarizeCommits(repoConfig, commits, onProgress, concurrency = 2
     return results;
 }
 
-export { summarizeCommit, summarizeCommits, COMMIT_SUMMARY_PROMPT };
+export { summarizeCommit, summarizeCommits, COMMIT_SUMMARY_PROMPT, isConfigFile, prettifyMinifiedXml, CONFIG_FILE_PATTERNS };

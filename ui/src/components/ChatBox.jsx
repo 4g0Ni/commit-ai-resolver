@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { sendChatMessage, investigateCommits } from '../api';
+import { sendChatMessage, sendChatMessageStream, investigateCommits, submitFeedback } from '../api';
+import VoteFeedback from './VoteFeedback';
 
 function ChatBox() {
     const [messages, setMessages] = useState(() => {
@@ -36,6 +37,8 @@ function ChatBox() {
         }
     }, [input]);
 
+    const [streamingStatus, setStreamingStatus] = useState('');
+
     const handleSend = async () => {
         const text = input.trim();
         if (!text || loading) return;
@@ -45,48 +48,79 @@ function ChatBox() {
         setMessages(updatedMessages);
         setInput('');
         setLoading(true);
+        setStreamingStatus('');
 
         try {
-            // Send conversation history (skip the initial welcome message)
             const history = updatedMessages
-                .filter((_, i) => i > 0) // skip welcome
-                .slice(-10); // keep last 10 messages for context
+                .filter((_, i) => i > 0)
+                .slice(-10);
 
-            const data = await sendChatMessage(text, history);
+            // Add a placeholder assistant message for streaming
+            const placeholderIdx = updatedMessages.length;
+            setMessages(prev => [...prev, { role: 'assistant', content: '', isStreaming: true }]);
 
-            if (data.type === 'clarification') {
-                // System is asking for clarification — render as a special message
-                setMessages(prev => [...prev, {
-                    role: 'assistant',
-                    content: data.reply,
-                    isClarification: true,
-                }]);
-            } else {
-                // Normal answer — show metadata and suggested actions
-                let reply = data.reply;
-                const metaParts = [];
-                if (data.iterations > 1) metaParts.push(`Search refined ${data.iterations} time(s)`);
-                if (data.confidence) metaParts.push(`Confidence: ${(data.confidence * 100).toFixed(0)}%`);
-                if (data.searchMethod) metaParts.push(`Method: ${data.searchMethod}`);
-                if (data.resultCount) metaParts.push(`${data.resultCount} results`);
+            let streamedText = '';
 
-                if (metaParts.length > 0) {
-                    reply += `\n\n---\n*${metaParts.join(' · ')}*`;
-                }
+            await sendChatMessageStream(text, history, {
+                onStatus: (data) => {
+                    setStreamingStatus(data.message || '');
+                },
+                onToken: (token) => {
+                    streamedText += token;
+                    setMessages(prev => {
+                        const updated = [...prev];
+                        updated[placeholderIdx] = { ...updated[placeholderIdx], content: streamedText };
+                        return updated;
+                    });
+                },
+                onComplete: (data) => {
+                    setStreamingStatus('');
+                    if (data.type === 'clarification') {
+                        setMessages(prev => {
+                            const updated = [...prev];
+                            updated[placeholderIdx] = {
+                                role: 'assistant',
+                                content: data.reply,
+                                isClarification: true,
+                            };
+                            return updated;
+                        });
+                    } else {
+                        let reply = data.reply;
+                        const metaParts = [];
+                        if (data.iterations > 1) metaParts.push(`Search refined ${data.iterations} time(s)`);
+                        if (data.confidence) metaParts.push(`Confidence: ${(data.confidence * 100).toFixed(0)}%`);
+                        if (data.searchMethod) metaParts.push(`Method: ${data.searchMethod}`);
+                        if (data.resultCount) metaParts.push(`${data.resultCount} results`);
 
-                setMessages(prev => [...prev, {
-                    role: 'assistant',
-                    content: reply,
-                    suggestedActions: data.suggestedActions || [],
-                    suspects: data.suspects || [],
-                    originalQuery: text,
-                }]);
-            }
+                        if (metaParts.length > 0) {
+                            reply += `\n\n---\n*${metaParts.join(' · ')}*`;
+                        }
+
+                        setMessages(prev => {
+                            const updated = [...prev];
+                            updated[placeholderIdx] = {
+                                role: 'assistant',
+                                content: reply,
+                                queryId: data.queryId,
+                                suggestedActions: data.suggestedActions || [],
+                                suspects: data.suspects || [],
+                                originalQuery: text,
+                                confidence: data.confidence,
+                                searchMethod: data.searchMethod,
+                            };
+                            return updated;
+                        });
+                    }
+                },
+            });
         } catch (err) {
-            setMessages(prev => [
-                ...prev,
-                { role: 'error', content: `Error: ${err.message}` },
-            ]);
+            setStreamingStatus('');
+            setMessages(prev => {
+                // Remove the streaming placeholder if it exists
+                const filtered = prev.filter(m => !m.isStreaming);
+                return [...filtered, { role: 'error', content: `Error: ${err.message}` }];
+            });
         } finally {
             setLoading(false);
         }
@@ -115,6 +149,7 @@ function ChatBox() {
                 return [...updated, {
                     role: 'assistant',
                     content: data.reply,
+                    queryId: data.queryId,
                     isInvestigation: true,
                 }];
             });
@@ -135,6 +170,23 @@ function ChatBox() {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             handleSend();
+        }
+    };
+
+    const handleVote = (messageIndex, vote, comment) => {
+        setMessages(prev => {
+            const updated = [...prev];
+            updated[messageIndex] = { ...updated[messageIndex], vote };
+            return updated;
+        });
+        const msg = messages[messageIndex];
+        if (msg?.queryId) {
+            submitFeedback(msg.queryId, vote, comment, {
+                query: msg.originalQuery,
+                response: msg.content?.slice(0, 500),
+                confidence: msg.confidence,
+                searchMethod: msg.searchMethod,
+            }).catch(err => console.error('Feedback failed:', err));
         }
     };
 
@@ -190,11 +242,18 @@ function ChatBox() {
                                 </span>
                             </div>
                         )}
+                        {msg.role === 'assistant' && msg.queryId && !msg.isClarification && !msg.isInvestigating && (
+                            <VoteFeedback
+                                vote={msg.vote}
+                                onVote={(vote, comment) => handleVote(i, vote, comment)}
+                            />
+                        )}
                     </div>
                 ))}
                 {loading && (
                     <div className="typing-indicator">
                         <span></span><span></span><span></span>
+                        {streamingStatus && <span className="streaming-status">{streamingStatus}</span>}
                     </div>
                 )}
                 <div ref={messagesEndRef} />

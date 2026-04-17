@@ -1,88 +1,137 @@
-# Plan: Config Detection Validation + Diff-Filter Unit Tests
+# Plan: Dashboard Filters + Chat Voting + SQLite Telemetry
 
 ## Context
 
-We recently narrowed the config change detection rules in `commit-summarizer.js` and `diff-filter.js` — excluding Kubernetes/Helm files, agent/AI workflows, and Dependabot bumps from being classified as `config`/`mixed`. We also fixed config key extraction to use short flag names instead of XPath paths. Now we need to:
-1. Measure the impact at scale against the existing 36-day dataset
-2. Add unit tests for `diff-filter.js` to prevent regressions
+The dashboard only has repo and date range filters — no way to filter by risk level, change type, or author. Chat responses have no feedback mechanism, and all pipeline traces are console-only with no persistence. This plan adds three features: (1) toolbar filters, (2) thumbs up/down voting, (3) SQLite telemetry DB to close the feedback loop.
 
 ---
 
-## Task 1: Validation Script — `src/scripts/validate-config-detection.js`
+## Phase 1: SQLite Telemetry DB (backend foundation)
 
-### What it does
-Reads all 36 JSON files from `data/daily/`, finds all `config`/`mixed` commits, and applies heuristic false-positive detection to produce a report.
+### 1a. Install `better-sqlite3` in `api/`
 
-### False positive detection rules
-Since the stored JSON doesn't include the file `changes` array, detection works from summary text (title, message, configChanges keys/details):
-
-| Rule | Scope | Pattern |
-|------|-------|---------|
-| Infrastructure | all repos | helm, k8s, kubernetes, ingress, replica, AFD, values.yaml, image digest/tag |
-| Agent/AI | AdsAppsMT | agent workflow, pipeline-config, project-config, instruction.md, skill |
-| Dependabot | all repos | dependabot, automated bump patterns |
-| Build/deploy | all repos | AKS packaging, serviceConfig.ini, build pipeline YAML |
-| XPath keys | all repos | configChanges keys starting with `/` or containing `[@` (quality issue, not FP) |
-
-### Output
-Markdown report to stdout with:
-- Total config/mixed count, suspected FP count, by-repo breakdown table
-- Per-category FP breakdown
-- List of suspected FP commits (shortId, repo, date, title, reason)
-- Summary section formatted for `docs/SEARCH-QUALITY.md`
-
-### Run command
 ```bash
-cd src && node scripts/validate-config-detection.js
+cd api && npm install better-sqlite3
 ```
 
+### 1b. Create `api/db.js` — schema + helpers
+
+Tables:
+- **`chat_queries`**: `id` (UUID PK), `query`, `response`, `confidence`, `iterations`, `search_method`, `result_count`, `iteration_log` (JSON), `work_item_id`, `work_item_title`, `created_at`
+- **`chat_feedback`**: `id` (auto PK), `query_id` (FK → chat_queries), `vote` ('up'/'down'), `comment`, `voted_at`
+
+Exports: `logQuery()`, `recordFeedback()`, `getFeedbackStats()`
+
+DB path: `data/feedback.db`, WAL mode, foreign keys ON.
+
+### 1c. Modify `api/server.js`
+
+- Import `{ randomUUID }` from `crypto` and helpers from `./db.js`
+- In `POST /api/chat`: generate `queryId`, call `logQuery()` after pipeline completes, include `queryId` in response JSON
+- Add `POST /api/feedback` — validates `queryId` + `vote`, calls `recordFeedback()`. If FK fails (old queryId from localStorage), insert a stub `chat_queries` row from client-sent metadata, then retry.
+- Add `GET /api/feedback/stats` — returns `{ total_queries, avg_confidence, thumbs_up, thumbs_down }`
+
+### 1d. Add `data/feedback.db` to `.gitignore`
+
 ---
 
-## Task 2: Unit Tests — `src/tests/test-diff-filter.js`
+## Phase 2: Dashboard Filters (UI)
 
-### Approach
-Follow existing project convention: `node:assert`-style manual assertions with pass/fail counters, run via `node tests/test-diff-filter.js`. No test runner added.
+### 2a. Create `ui/src/components/DashboardFilters.jsx`
 
-### Test suites (11 suites, ~50 assertions)
+Three filter groups in one bar, following `RepoFilter.jsx` toggle-button pattern:
 
-1. **Empty input** — empty array, unknown repo
-2. **IGNORE patterns** — .snap, .Designer.cs, binary assets (.png, .svg, .woff2)
-3. **AUTO_SUMMARY global** — lock files, .generated.*, .min.js, dist/, .map, .resx, .csproj, .xsd
-4. **Per-repo: CampaignUI** — /loc/, .resjson, .cscfg, .csdef, Web.config (auto-skipped here)
-5. **Per-repo: AdsAppsMT** — Generated, .dgml, Datamart, adf-prod/trigger, .script, /agent/ (NEW)
-6. **Per-repo: AdsAppUI** — /loc/, .resjson, .cshtml; `.cscfg`/`Web.config` NOT auto-skipped (goes to LLM)
-7. **Priority** — ignore beats auto-summary (e.g., .generated.snap → ignored)
-8. **needsDiff fallthrough** — .tsx, .cs, README.md, Dynamic.config for MT → needsDiff
-9. **shouldSkipLLM** — all auto/ignored → true; any needsDiff → false; empty → true
-10. **buildSkippedFilesSummary** — grouping by reason, 3-file truncation, empty inputs
-11. **Exported constants** — MAX_FILES_FOR_DIFF=50, MAX_DIFF_SIZE=200000, repoFilters keys
+- **Risk Level**: HIGH / MEDIUM / LOW toggle buttons (multi-select, colored with `--risk-high/medium/low`)
+- **Change Type**: code / config / mixed toggle buttons (multi-select)
+- **Author**: text input with debounce (300ms), placeholder "Filter author..."
+- Separators between groups (`filter-separator`)
 
-### Run command
-```bash
-cd src && node tests/test-diff-filter.js
+Props: `selectedRiskLevels`, `onRiskLevelsChange`, `selectedChangeTypes`, `onChangeTypesChange`, `authorSearch`, `onAuthorSearchChange`
+
+### 2b. Add `filterDayByCommitFilters()` in `Timeline.jsx`
+
+New function that filters **commits within repos** (unlike `filterDayByRepos` which filters entire repos):
+
+```javascript
+function filterDayByCommitFilters(data, { riskLevels, changeTypes, authorSearch }) {
+    // For each repo: filter commits by riskLevel, changeType, author substring
+    // Recalculate repo.stats and data.summary from remaining commits
+    // Keep repos even if 0 commits (for chart consistency)
+}
 ```
 
+### 2c. Wire into `Timeline.jsx`
+
+- Add state: `selectedRiskLevels`, `selectedChangeTypes`, `authorSearch`
+- Chain in `filteredDayData` useMemo: `filterDayByRepos` → `filterDayByCommitFilters`
+- Render `<DashboardFilters />` in `.timeline-toolbar` after `<RepoFilter />`
+
+### 2d. Add CSS to `ui/src/App.css`
+
+- `.dashboard-filters` — flex row, same style as `.repo-filter`
+- `.filter-group` — flex, gap, align-items center
+- `.filter-btn.risk-high.active` etc. — risk-colored active states using rgba backgrounds
+- `.author-search-input` — styled like date inputs
+- `.filter-separator` — vertical line between groups
+
+**No changes needed** to TimelineChart, MetricsBoard, DayDetail, or CommitList — they already consume `filteredDayData` and render whatever they receive.
+
 ---
 
-## Execution Order
+## Phase 3: Thumbs Up/Down Voting (UI + API)
 
-1. **Task 2 first** (unit tests) — pure logic, no external dependencies, validates current code
-2. **Task 1 second** (validation script) — reads data files, produces report
-3. Update `docs/SEARCH-QUALITY.md` with validation results
+### 3a. Add `submitFeedback()` to `ui/src/api.js`
+
+```javascript
+export async function submitFeedback(queryId, vote, comment, metadata) { ... }
+```
+
+Posts to `POST /api/feedback` with queryId, vote, comment, and message metadata as fallback context.
+
+### 3b. Create `ui/src/components/VoteFeedback.jsx`
+
+Renders below each assistant message (not clarifications or investigations-in-progress):
+
+- Two icon buttons: 👍 👎 (opacity 0.4 default, 1.0 when selected, 0.2 when other selected)
+- On thumbs-down click: slide in a text input "What went wrong?" with Submit button
+- On vote: call parent `onVote(vote, comment)`, fire-and-forget API call
+
+### 3c. Modify `ChatBox.jsx`
+
+- When creating assistant messages after API response, add `queryId` (from API response) and `metadata` snapshot
+- Add `handleVote(messageIndex, vote, comment)` — updates message in state, calls `submitFeedback()`
+- Render `<VoteFeedback />` after each assistant message (not clarification, not investigation)
+- Vote state persists via existing localStorage `chat-history` mechanism
+
+### 3d. Add CSS to `ui/src/App.css`
+
+- `.vote-feedback` — flex row, border-top separator, small margin
+- `.vote-btn` — no background, emoji, hover scale effect
+- `.vote-btn.selected` / `.vote-btn.dimmed` — opacity states
+- `.vote-comment` — slide-in input + submit button
 
 ---
 
-## Files to create/modify
+## Files to Create/Modify
 
-| File | Action |
-|------|--------|
-| `src/tests/test-diff-filter.js` | CREATE — ~200 lines |
-| `src/scripts/validate-config-detection.js` | CREATE — ~180 lines |
-| `docs/SEARCH-QUALITY.md` | EDIT — add validation results section |
+| File | Action | Feature |
+|------|--------|---------|
+| `api/db.js` | CREATE | Phase 1 — SQLite schema + helpers |
+| `api/server.js` | EDIT | Phase 1+3 — queryId, logQuery, feedback endpoints |
+| `api/package.json` | EDIT | Phase 1 — add better-sqlite3 |
+| `.gitignore` | EDIT | Phase 1 — exclude data/feedback.db |
+| `ui/src/components/DashboardFilters.jsx` | CREATE | Phase 2 — filter controls |
+| `ui/src/components/Timeline.jsx` | EDIT | Phase 2 — filter state + pipeline |
+| `ui/src/components/VoteFeedback.jsx` | CREATE | Phase 3 — voting UI |
+| `ui/src/components/ChatBox.jsx` | EDIT | Phase 3 — vote integration |
+| `ui/src/api.js` | EDIT | Phase 3 — submitFeedback helper |
+| `ui/src/App.css` | EDIT | Phase 2+3 — styles |
+
+---
 
 ## Verification
 
-1. `node tests/test-diff-filter.js` — all assertions pass (exit code 0)
-2. `node scripts/validate-config-detection.js` — produces report, no crashes
-3. Review report for unexpected results, spot-check a few flagged FPs
-4. Append summary to SEARCH-QUALITY.md
+1. **Filters**: Start UI, select a day with mixed commits. Toggle HIGH off → HIGH commits disappear from chart, metrics, and detail. Type an author name → only their commits shown. Toggle "config" only → only config/mixed commits.
+2. **Voting**: Send a chat query. Thumbs up → button highlights, API logged. Thumbs down → comment input appears, submit → both stored. Refresh page → vote state persists from localStorage.
+3. **Telemetry**: After a few queries + votes, run `sqlite3 data/feedback.db "SELECT * FROM chat_queries"` and `"SELECT * FROM chat_feedback"` to verify data.
+4. **Stats**: `GET /api/feedback/stats` returns correct counts.

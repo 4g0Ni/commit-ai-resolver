@@ -57,7 +57,9 @@ INSTRUCTIONS:
    - Is it a config/pilot ramp that could increase blast radius?
 4. Rank suspects from most to least likely root cause.
 5. For the top candidate, explain the specific mechanism: what line/change causes what symptom.
-6. Suggest concrete next steps (revert, add monitoring, check logs for specific errors, etc.).
+6. Suggest concrete next steps that THIS TOOL can perform — i.e., further commit search, diff inspection, code change analysis.
+   - GOOD: "Investigate other commits by Siye Liu in the same date range", "Search for related changes in the shared grid template", "Check if any config/pilot changes accompanied this code change", "Look for follow-up fix commits after this date"
+   - BAD (do NOT suggest): "Revert the commit", "Check runtime logs", "Reproduce in staging", "Monitor production", "Contact the author", "Deploy a fix", "Run tests locally"
 
 Format your response as:
 
@@ -79,7 +81,7 @@ After your analysis, output a JSON block on a new line starting with |||JSON||| 
   "rootCauseRepo": "repo name",
   "confidence": 0.0-1.0,
   "mechanism": "one-line explanation of how the change causes the issue",
-  "nextSteps": ["specific actionable steps"]
+  "nextSteps": ["specific actionable steps within this tool's scope — commit search, diff analysis, related change investigation"]
 }`;
 
     const t0 = Date.now();
@@ -90,7 +92,6 @@ After your analysis, output a JSON block on a new line starting with |||JSON||| 
                 { role: 'user', content: `Analyze these ${suspects.length} suspect commits for the incident: "${query}"` },
             ],
             temperature: 0.2,
-            max_completion_tokens: 4096,
         });
         const fullText = result.choices?.[0]?.message?.content ?? '';
 

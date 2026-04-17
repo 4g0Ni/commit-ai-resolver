@@ -34,7 +34,7 @@ A dark-themed React dashboard with a timeline chart, risk metrics, and drill-dow
 │  Commit AI Resolver — Daily Change Tracking & Regression Diagnosis  │
 ├───────────────────────────────────────────────┬─────────────────────┤
 │  Date Range Picker  [7d] [14d] [30d]          │                     │
-│  Repo Filter  [CampaignUI] [MT] [AdsAppUI]    │   AI Chat Panel     │
+│  Repo Filter  [CMUI] [MT] [UIServer] [AnB] [CMDB]    │   AI Chat Panel     │
 ├───────────────────────────────────────────────┤   (Resizable)       │
 │                                               │                     │
 │  ██▇▅▃▇██▄▅▇█▅▃  ← Stacked risk bars        │  "What shipped      │
@@ -176,7 +176,7 @@ System: The system automatically applies a 2-day release buffer (checks Apr 7-9)
 
 ```
 You:    "What shipped yesterday?"
-System: Summary across all 3 repos with risk breakdown, config changes,
+System: Summary across all 5 repos with risk breakdown, config changes,
         and notable items highlighted.
 ```
 
@@ -207,7 +207,7 @@ System: Filtered list of HIGH risk commits with links, authors, and
 ### Data Pipeline
 
 ```
-Azure DevOps (3 repos)
+Azure DevOps (5 repos)
         │
         ▼
   Fetch commits + diffs (ADO REST API v7.1)
@@ -258,6 +258,8 @@ Azure DevOps (3 repos)
 | AdsAppsCampaignUI | Campaign management frontend (CMUI + CCUI SPAs) | Date-sorted LKG tags |
 | AdsAppsMT | Middle-tier services (25+ WCF/REST services) | Rolling gate tags (STAGING/LKG) |
 | AdsAppUI | Shared UI platform (dual-stack: net472 + .NET 10) | SHA-versioned tags |
+| AnB | Ads & Billing platform | Versioned tags |
+| AdsAppsDB | Database / data layer | Versioned tags |
 
 ### Risk Assessment Criteria
 
@@ -378,7 +380,7 @@ The LLM prompt enforces 8 quality rules validated through automated metrics:
 ```
 ┌──────────────────┐     ┌──────────────────┐     ┌──────────────────┐
 │  Azure DevOps    │     │  Azure OpenAI    │     │  LanceDB         │
-│  (3 repos)       │     │  GPT-5.4 +       │     │  Vector Store    │
+│  (5 repos)       │     │  GPT-5.4 +       │     │  Vector Store    │
 │                  │     │  Embeddings      │     │  (local)         │
 └────────┬─────────┘     └────────┬─────────┘     └────────┬─────────┘
          │                        │                        │

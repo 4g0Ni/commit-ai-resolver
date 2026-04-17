@@ -11,13 +11,18 @@
  *   POST /api/chat           — chat with LLM about commit summaries
  */
 
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import { randomUUID } from 'crypto';
 import { readdir, readFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { DefaultAzureCredential } from '@azure/identity';
 import { AzureOpenAI } from 'openai';
+import { logQuery, logQueryStub, recordFeedback, getFeedbackStats, getRecentFeedback } from './db.js';
+import { initAria } from './telemetry/aria-client.js';
+import { logInfo, logError } from './telemetry/column-whitelist.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, '..', 'data', 'daily');
@@ -26,6 +31,7 @@ const PORT = process.env.PORT || 4399;
 // --- Azure OpenAI setup ---
 const AZURE_OPENAI_ENDPOINT = 'https://yizha-maz2xf24-swedencentral.openai.azure.com/';
 const AZURE_OPENAI_DEPLOYMENT = 'gpt-5.4';
+const AZURE_OPENAI_MINI_DEPLOYMENT = 'gpt-5.4-mini';
 const AZURE_OPENAI_API_VERSION = '2025-04-01-preview';
 const EMBEDDING_DEPLOYMENT = 'text-embedding-3-large';
 const EMBEDDING_API_VERSION = '2023-05-15';
@@ -48,6 +54,15 @@ const embeddingClient = new AzureOpenAI({
         credential.getToken(COGNITIVE_SERVICES_SCOPE).then(at => at.token),
     apiVersion: EMBEDDING_API_VERSION,
     deployment: EMBEDDING_DEPLOYMENT,
+});
+
+const openaiMiniClient = new AzureOpenAI({
+    endpoint: AZURE_OPENAI_ENDPOINT,
+    apiKey: '',
+    azureADTokenProvider: () =>
+        credential.getToken(COGNITIVE_SERVICES_SCOPE).then(at => at.token),
+    apiVersion: AZURE_OPENAI_API_VERSION,
+    deployment: AZURE_OPENAI_MINI_DEPLOYMENT,
 });
 
 const app = express();
@@ -209,7 +224,7 @@ app.get('/api/releases', async (req, res) => {
  */
 async function extractQueryIntent(query) {
     const today = new Date().toISOString().slice(0, 10);
-    const repoList = 'AdsAppsCampaignUI, AdsAppsMT, AdsAppUI';
+    const repoList = 'AdsAppsCampaignUI, AdsAppsMT, AdsAppUI, AnB, AdsAppsDB';
     const prompt = `Extract search filters from the user's question about code commits. Today is ${today}.
 
 Return ONLY a JSON object with these fields (use null for missing):
@@ -291,11 +306,27 @@ app.post('/api/chat', async (req, res) => {
             }
         }
 
-        if (useVectors) {
-            // --- Agentic pipeline ---
+        const queryId = randomUUID();
+        const wantsStream = req.headers.accept?.includes('text/event-stream');
+
+        if (useVectors && wantsStream) {
+            // --- SSE streaming agentic pipeline ---
+            res.setHeader('Content-Type', 'text/event-stream');
+            res.setHeader('Cache-Control', 'no-cache');
+            res.setHeader('Connection', 'keep-alive');
+            res.setHeader('X-Accel-Buffering', 'no');
+            res.flushHeaders();
+
+            const sendEvent = (event, data) => {
+                res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+            };
+
+            sendEvent('status', { stage: 'starting', message: 'Analyzing your question...' });
+
             const t0 = Date.now();
             const result = await agenticSearch({
                 llm: openaiClient,
+                llmFast: openaiMiniClient,
                 embedQuery,
                 searchVectors,
                 lookupByCommitIds,
@@ -304,6 +335,90 @@ app.post('/api/chat', async (req, res) => {
                 history,
                 maxIterations: 5,
                 workItemContext,
+                correlationId: queryId,
+                onProgress: (iteration, stage, details) => {
+                    const stageMessages = {
+                        'intent-extractor': 'Extracting intent...',
+                        'rag-search': details.status === 'done'
+                            ? `Found ${details.resultCount} results`
+                            : 'Searching commits...',
+                        'rag-search-secondary': 'Running secondary search...',
+                        'rag-search-title': 'Searching by title...',
+                        'answer-synthesizer': details.status === 'running'
+                            ? 'Generating answer...'
+                            : undefined,
+                        'answer-evaluator': 'Evaluating answer quality...',
+                        'retry': `Refining search (attempt ${iteration})...`,
+                    };
+                    const msg = stageMessages[stage];
+                    if (msg) sendEvent('status', { stage, iteration, message: msg });
+                },
+                onToken: (token) => {
+                    sendEvent('token', { token });
+                },
+            });
+            const totalMs = Date.now() - t0;
+            console.log(`  Agentic search (SSE): ${result.searchMethod}, ${result.iterations} iteration(s), ${totalMs}ms`);
+
+            logInfo('ChatQuery', {
+                CorrelationId: queryId,
+                Component: 'chat-sse',
+                Query: message.slice(0, 500),
+                ResultCount: result.resultCount,
+                Confidence: result.confidence,
+                Verdict: result.searchMethod,
+                ElapsedMs: totalMs,
+                SuspectsCount: result.suspects?.length || 0,
+                SessionId: req.headers['x-session-id'] || null,
+            });
+
+            try {
+                logQuery({
+                    id: queryId,
+                    query: message,
+                    response: result.reply,
+                    confidence: result.confidence,
+                    iterations: result.iterations,
+                    searchMethod: result.searchMethod,
+                    resultCount: result.resultCount,
+                    iterationLog: result.iterationLog,
+                    workItemId: workItemContext?.id?.toString(),
+                    workItemTitle: workItemContext?.title,
+                });
+            } catch (dbErr) {
+                console.error('  [Telemetry] Failed to log query:', dbErr.message);
+            }
+
+            sendEvent('complete', {
+                queryId,
+                reply: result.reply,
+                searchMethod: result.searchMethod,
+                type: result.type,
+                confidence: result.confidence,
+                iterations: result.iterations,
+                suggestedActions: result.suggestedActions || [],
+                resultCount: result.resultCount,
+                suspects: result.suspects || [],
+                workItem: result.workItem || undefined,
+                ...(result.type === 'clarification' ? { question: result.question } : {}),
+            });
+            res.end();
+
+        } else if (useVectors) {
+            // --- Agentic pipeline ---
+            const t0 = Date.now();
+            const result = await agenticSearch({
+                llm: openaiClient,
+                llmFast: openaiMiniClient,
+                embedQuery,
+                searchVectors,
+                lookupByCommitIds,
+                buildFullContext,
+                query: message,
+                history,
+                maxIterations: 5,
+                workItemContext,
+                correlationId: queryId,
                 onProgress: (iteration, stage, details) => {
                     // Log progress server-side
                 },
@@ -311,7 +426,38 @@ app.post('/api/chat', async (req, res) => {
             const totalMs = Date.now() - t0;
             console.log(`  Agentic search: ${result.searchMethod}, ${result.iterations} iteration(s), ${totalMs}ms`);
 
+            logInfo('ChatQuery', {
+                CorrelationId: queryId,
+                Component: 'chat-json',
+                Query: message.slice(0, 500),
+                ResultCount: result.resultCount,
+                Confidence: result.confidence,
+                Verdict: result.searchMethod,
+                ElapsedMs: totalMs,
+                SuspectsCount: result.suspects?.length || 0,
+                SessionId: req.headers['x-session-id'] || null,
+            });
+
+            // Log to telemetry DB
+            try {
+                logQuery({
+                    id: queryId,
+                    query: message,
+                    response: result.reply,
+                    confidence: result.confidence,
+                    iterations: result.iterations,
+                    searchMethod: result.searchMethod,
+                    resultCount: result.resultCount,
+                    iterationLog: result.iterationLog,
+                    workItemId: workItemContext?.id?.toString(),
+                    workItemTitle: workItemContext?.title,
+                });
+            } catch (dbErr) {
+                console.error('  [Telemetry] Failed to log query:', dbErr.message);
+            }
+
             res.json({
+                queryId,
                 reply: result.reply,
                 searchMethod: result.searchMethod,
                 type: result.type,
@@ -360,10 +506,37 @@ ${contextText}
             console.log(`  LLM (full): ${Date.now() - t2}ms, tokens: ${result.usage?.total_tokens ?? '?'}`);
 
             const reply = result.choices?.[0]?.message?.content ?? 'No response from LLM.';
-            res.json({ reply, searchMethod: 'full', type: 'answer' });
+
+            // Log fallback query to telemetry DB
+            try {
+                logQuery({
+                    id: queryId,
+                    query: message,
+                    response: reply,
+                    confidence: null,
+                    iterations: 1,
+                    searchMethod: 'full',
+                    resultCount: null,
+                    iterationLog: [],
+                    workItemId: workItemContext?.id?.toString(),
+                    workItemTitle: workItemContext?.title,
+                });
+            } catch (dbErr) {
+                console.error('  [Telemetry] Failed to log query:', dbErr.message);
+            }
+
+            res.json({ queryId, reply, searchMethod: 'full', type: 'answer' });
         }
     } catch (err) {
         console.error('Chat error:', err);
+        logError('ChatError', {
+            CorrelationId: req.body?.message ? randomUUID() : undefined,
+            Component: 'chat',
+            ErrorMessage: err.message,
+            ErrorStack: err.stack?.slice(0, 1000),
+            Query: req.body?.message?.slice(0, 500),
+            HttpStatus: 500,
+        });
         res.status(500).json({ error: err.message });
     }
 });
@@ -406,6 +579,7 @@ app.post('/api/investigate', async (req, res) => {
 
         console.log(`  Investigate: "${message.slice(0, 80)}" — ${suspects.length} suspect(s)`);
         const t0 = Date.now();
+        const investigateId = randomUUID();
 
         // Fetch diffs for each suspect (cap at 5)
         const suspectsWithDiffs = [];
@@ -450,7 +624,16 @@ app.post('/api/investigate', async (req, res) => {
         const totalMs = Date.now() - t0;
         console.log(`  Investigation complete: ${totalMs}ms, confidence: ${result.confidence}, root cause: ${result.rootCauseCandidate || 'none'}`);
 
+        logInfo('Investigation', {
+            CorrelationId: investigateId,
+            Component: 'investigate',
+            Query: message.slice(0, 500),
+            Confidence: result.confidence,
+            ElapsedMs: totalMs,
+            SuspectsCount: result.suspectsAnalyzed,
+        });
         res.json({
+            queryId: investigateId,
             reply: result.analysis,
             type: 'investigation',
             rootCauseCandidate: result.rootCauseCandidate,
@@ -462,6 +645,75 @@ app.post('/api/investigate', async (req, res) => {
         });
     } catch (err) {
         console.error('Investigate error:', err);
+        logError('InvestigateError', {
+            Component: 'investigate',
+            ErrorMessage: err.message,
+            ErrorStack: err.stack?.slice(0, 1000),
+            Query: req.body?.message?.slice(0, 500),
+            HttpStatus: 500,
+        });
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// POST /api/feedback — record user vote on a chat response
+app.post('/api/feedback', async (req, res) => {
+    try {
+        const { queryId, vote, comment, metadata } = req.body;
+        if (!queryId || !vote || !['up', 'down'].includes(vote)) {
+            return res.status(400).json({ error: 'queryId and vote (up/down) are required' });
+        }
+
+        try {
+            recordFeedback({ queryId, vote, comment });
+        } catch (err) {
+            // FK constraint failure — queryId not in chat_queries (e.g. from old localStorage)
+            if (err.message?.includes('FOREIGN KEY')) {
+                console.warn(`  [Feedback] Unknown queryId ${queryId}, inserting stub`);
+                logQueryStub({
+                    id: queryId,
+                    query: metadata?.query,
+                    response: metadata?.response,
+                    confidence: metadata?.confidence,
+                    searchMethod: metadata?.searchMethod,
+                });
+                recordFeedback({ queryId, vote, comment });
+            } else {
+                throw err;
+            }
+        }
+
+        console.log(`  [Feedback] ${vote} for ${queryId}${comment ? ' — ' + comment.slice(0, 50) : ''}`);
+        logInfo('Feedback', {
+            CorrelationId: queryId,
+            Component: 'feedback',
+            Message: vote,
+            Query: comment?.slice(0, 500) || null,
+        });
+        res.json({ ok: true });
+    } catch (err) {
+        console.error('Feedback error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// GET /api/feedback/stats — aggregated feedback statistics
+app.get('/api/feedback/stats', async (req, res) => {
+    try {
+        const stats = getFeedbackStats();
+        res.json(stats);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// GET /api/feedback/recent — recent queries with feedback
+app.get('/api/feedback/recent', async (req, res) => {
+    try {
+        const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+        const rows = getRecentFeedback(limit);
+        res.json(rows);
+    } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
@@ -469,4 +721,5 @@ app.post('/api/investigate', async (req, res) => {
 app.listen(PORT, () => {
     console.log(`Commit AI Resolver API running on http://localhost:${PORT}`);
     console.log(`Data directory: ${DATA_DIR}`);
+    initAria();
 });

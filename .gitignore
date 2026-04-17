@@ -160,7 +160,6 @@ target/.cloudpack
 .claude/settings.local.json
 .claude/commands/*.md
 !.claude/commands/setup-claude-commands.md
-CLAUDE.md
 
 # GitHub Copilot
 .github/prompts/*.prompt.md

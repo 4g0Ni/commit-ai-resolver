@@ -12,11 +12,12 @@
  * @param {Array} results - RAG search results
  * @returns {Promise<object>} Evaluation verdict with retry strategy
  */
-export async function evaluateAnswer(llm, synthesis, context, results) {
+export async function evaluateAnswer(llm, synthesis, context, results, maxIterations = 3) {
     const { query, iteration = 1 } = context;
 
     // Fast-path: if synthesizer is confident with enough results, skip LLM eval
     if (synthesis.confidence >= 0.65 && synthesis.resultCount >= 3) {
+        console.log(`  [Evaluator] fast-path PASS: confidence=${synthesis.confidence} >= 0.65, results=${synthesis.resultCount} >= 3`);
         return {
             verdict: 'PASS',
             qualityScore: synthesis.confidence,
@@ -29,8 +30,10 @@ export async function evaluateAnswer(llm, synthesis, context, results) {
 
     // Fast-path: if this is the last iteration, just return what we have
     if (iteration >= 3) {
+        const verdict = synthesis.confidence >= 0.4 ? 'PASS' : 'PARTIAL';
+        console.log(`  [Evaluator] fast-path ${verdict}: last iteration (${iteration}), confidence=${synthesis.confidence}`);
         return {
-            verdict: synthesis.confidence >= 0.4 ? 'PASS' : 'PARTIAL',
+            verdict,
             qualityScore: synthesis.confidence,
             issues: ['max iterations reached'],
             retryStrategy: null,
@@ -48,7 +51,7 @@ ANSWER METADATA:
 - Search coverage: ${synthesis.searchCoverage}
 - Results found: ${synthesis.resultCount}
 - Score stats: avg=${synthesis.scoreStats?.avgScore}, max=${synthesis.scoreStats?.maxScore}, min=${synthesis.scoreStats?.minScore}
-- Iteration: ${iteration} of 5
+- Iteration: ${iteration} of ${maxIterations}
 
 ANSWER (first 500 chars):
 ${synthesis.answer.slice(0, 500)}

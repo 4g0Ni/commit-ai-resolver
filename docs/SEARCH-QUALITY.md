@@ -6,7 +6,7 @@ This document defines the fundamental search use cases for the Commit AI Resolve
 
 **Architecture:** 3-agent pipeline (Intent Extractor (with self-validation) → Multi-Query RAG Search (with RRF fusion) → Answer Synthesizer (multimodal) → Answer Evaluator), LanceDB vector store with `text-embedding-3-large` embeddings (3072 dimensions). Max 3 iterations per query. Supports ADO work item URL input with automatic bug context fetching, screenshot extraction, and date anchoring.
 
-**Data scope:** 34 days (2026-03-11 to 2026-04-13), 2,358 commits across 3 repos.
+**Data scope:** 34 days (2026-03-11 to 2026-04-13), 2,358 commits across 5 repos.
 
 | Repo | Total | HIGH | MEDIUM | LOW |
 |------|-------|------|--------|-----|
