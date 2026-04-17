@@ -45,8 +45,13 @@ ${feedback.newKeywords ? `Additional keywords to include: ${feedback.newKeywords
         ? `\nRecent conversation for context:\n${history.slice(-4).map(h => `${h.role}: ${h.content?.slice(0, 200)}`).join('\n')}\n`
         : '';
 
+    const priorCommitContext = context.priorSuspects?.length > 0
+        ? `\nCommit IDs from previous search results that the user may reference: ${context.priorSuspects.map(s => s.commitId).join(', ')}\n`
+        : '';
+
     const prompt = `Extract search filters from the user's question about code commits. Today is ${today}.
 ${conversationContext}
+${priorCommitContext}
 Return ONLY a JSON object with these fields (use null for missing):
 - "author": full person name if asking about a specific person's commits (null if not person-specific)
 - "repo": exact repo name from [${repoList}] if mentioned. Recognize aliases: "campaignui"/"cmui" → AdsAppsCampaignUI, "mt"/"middle tier" → AdsAppsMT, "appui"/"shell"/"uiserver" → AdsAppUI, "anb"/"ccdb"/"ccmt"/"client center db"/"client center mt" → AnB, "cmdb"/"campaign db"/"db"/"adsappsdb" → AdsAppsDB. (null if not repo-specific)

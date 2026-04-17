@@ -14,18 +14,21 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import jwt from 'jsonwebtoken';
+import jwksClient from 'jwks-rsa';
 import { randomUUID } from 'crypto';
 import { readdir, readFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { DefaultAzureCredential } from '@azure/identity';
 import { AzureOpenAI } from 'openai';
-import { logQuery, logQueryStub, recordFeedback, getFeedbackStats, getRecentFeedback } from './db.js';
+import { logQuery, logQueryStub, recordFeedback, getFeedbackStats, getRecentFeedback, getUsageMetrics } from './db.js';
 import { initAria } from './telemetry/aria-client.js';
 import { logInfo, logError } from './telemetry/column-whitelist.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, '..', 'data', 'daily');
+const NO_AUTH = process.argv.includes('--no-auth') || process.env.NO_AUTH === '1';
 const PORT = process.env.PORT || 4399;
 
 // --- Azure OpenAI setup ---
@@ -66,8 +69,56 @@ const openaiMiniClient = new AzureOpenAI({
 });
 
 const app = express();
-app.use(cors());
+app.use(cors({
+    origin: ['http://localhost:5173', 'http://localhost:4399'],
+    credentials: true,
+}));
 app.use(express.json());
+
+// --- Azure AD JWT auth middleware ---
+const AZURE_CLIENT_ID = 'bc4d2d3c-b205-42f4-90f6-8bac756fd7f5';
+const AZURE_TENANT_ID = '72f988bf-86f1-41af-91ab-2d7cd011db47';
+
+const jwksRsaClient = jwksClient({
+    jwksUri: `https://login.microsoftonline.com/${AZURE_TENANT_ID}/discovery/v2.0/keys`,
+    cache: true,
+    rateLimit: true,
+});
+
+function getSigningKey(header, callback) {
+    jwksRsaClient.getSigningKey(header.kid, (err, key) => {
+        if (err) return callback(err);
+        callback(null, key.getPublicKey());
+    });
+}
+
+function authMiddleware(req, res, next) {
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) {
+        return res.status(401).json({ error: 'Authentication required' });
+    }
+    const token = authHeader.slice(7);
+    jwt.verify(token, getSigningKey, {
+        audience: AZURE_CLIENT_ID,
+        issuer: `https://login.microsoftonline.com/${AZURE_TENANT_ID}/v2.0`,
+        algorithms: ['RS256'],
+    }, (err, decoded) => {
+        if (err) return res.status(401).json({ error: 'Invalid token' });
+        req.user = {
+            id: decoded.oid,
+            email: decoded.preferred_username || decoded.upn || decoded.email,
+            name: decoded.name,
+        };
+        next();
+    });
+}
+
+app.use('/api', NO_AUTH ? (req, res, next) => {
+    req.user = { id: 'test-user', email: 'test@test.local', name: 'Test User' };
+    next();
+} : authMiddleware);
+
+if (NO_AUTH) console.log('⚠ Auth disabled (--no-auth)');
 
 // --- Request logging middleware ---
 app.use((req, res, next) => {
@@ -384,6 +435,8 @@ app.post('/api/chat', async (req, res) => {
                     iterationLog: result.iterationLog,
                     workItemId: workItemContext?.id?.toString(),
                     workItemTitle: workItemContext?.title,
+                    elapsedMs: totalMs,
+                    userId: req.user?.email || req.user?.id,
                 });
             } catch (dbErr) {
                 console.error('  [Telemetry] Failed to log query:', dbErr.message);
@@ -451,6 +504,8 @@ app.post('/api/chat', async (req, res) => {
                     iterationLog: result.iterationLog,
                     workItemId: workItemContext?.id?.toString(),
                     workItemTitle: workItemContext?.title,
+                    elapsedMs: totalMs,
+                    userId: req.user?.email || req.user?.id,
                 });
             } catch (dbErr) {
                 console.error('  [Telemetry] Failed to log query:', dbErr.message);
@@ -520,6 +575,8 @@ ${contextText}
                     iterationLog: [],
                     workItemId: workItemContext?.id?.toString(),
                     workItemTitle: workItemContext?.title,
+                    elapsedMs: Date.now() - t2,
+                    userId: req.user?.email || req.user?.id,
                 });
             } catch (dbErr) {
                 console.error('  [Telemetry] Failed to log query:', dbErr.message);
@@ -715,6 +772,17 @@ app.get('/api/feedback/recent', async (req, res) => {
         res.json(rows);
     } catch (err) {
         res.status(500).json({ error: err.message });
+    }
+});
+
+// ── Usage Metrics ──
+app.get('/api/metrics/usage', (req, res) => {
+    try {
+        const metrics = getUsageMetrics();
+        res.json(metrics);
+    } catch (err) {
+        console.error('Metrics error:', err);
+        res.status(500).json({ error: 'Failed to get usage metrics' });
     }
 });
 

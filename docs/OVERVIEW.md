@@ -60,6 +60,9 @@ A dark-themed React dashboard with a timeline chart, risk metrics, and drill-dow
 - Per-repo filtering
 - Metrics sidebar (total commits, HIGH/MEDIUM/LOW breakdown, config changes)
 - Commit cards with risk badges, config change indicators, feature flag names, and ADO links
+- Dark and light theme support with toggle button
+- **Metrics dashboard** — view DAU/WAU/MAU, query volume trends, confidence distribution, feedback rates, latency percentiles, retention, and adoption metrics
+- **Feedback panel** — submit and view thumbs-up/down feedback on chat responses
 
 ### 2. AI Chat — Agentic Search Pipeline
 
@@ -278,6 +281,7 @@ Azure DevOps (5 repos)
 - Node.js 18+
 - Azure CLI logged in (`az login`) — required for ADO API access and Azure OpenAI
 - Access to the target Azure DevOps repositories
+- Microsoft corporate account (Entra ID) — required for app authentication
 
 ### Setup
 
@@ -368,7 +372,7 @@ The LLM prompt enforces 8 quality rules validated through automated metrics:
 | **Embeddings** | text-embedding-3-large (3,072 dimensions) |
 | **Vector DB** | LanceDB (embedded, no server required) |
 | **Source Control** | Azure DevOps REST API v7.1 |
-| **Auth** | DefaultAzureCredential (zero-config) |
+| **Auth** | Microsoft Entra ID (MSAL) for users, DefaultAzureCredential for Azure services |
 | **Backend** | Node.js + Express 5 |
 | **Frontend** | React 19 + Vite |
 | **Chat Rendering** | React Markdown |
@@ -394,6 +398,7 @@ The LLM prompt enforces 8 quality rules validated through automated metrics:
 │                                                                     │
 │  POST /api/chat        → Agentic Search Pipeline (3 agents)        │
 │  POST /api/investigate → Deep Diff Investigation                    │
+│  GET  /api/metrics/usage → Usage Dashboard (DAU/MAU, latency, etc) │
 │  GET  /api/days        → Daily Summary Data                         │
 │  GET  /api/days/:date  → Single Day Detail                          │
 └─────────────────────────────────┬───────────────────────────────────┘

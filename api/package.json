@@ -16,8 +16,10 @@
     "apache-arrow": "^18.1.0",
     "better-sqlite3": "^12.9.0",
     "cors": "^2.8.5",
-    "express": "^5.1.0",
     "dotenv": "^16.4.0",
+    "express": "^5.1.0",
+    "jsonwebtoken": "^9.0.3",
+    "jwks-rsa": "^3.2.2",
     "openai": "^6.33.0"
   }
 }

@@ -11,7 +11,7 @@
 | ADO Git integration (commits, diffs, tags) | ✅ Done | 3 tag strategies supported |
 | LLM commit summarization | ✅ Done | GPT-5.4, 10x parallel, retry, diff filtering |
 | Config/pilot change detection | ✅ Done | changeType + configChanges fields |
-| React dashboard | ✅ Done | Dark theme, chart, filters, metrics |
+| React dashboard | ✅ Done | Dark/light theme, chart, filters, metrics, usage dashboard |
 | LLM chat interface | ✅ Done | Markdown rendering, context-aware |
 | Vector search (RAG) | ✅ Done | LanceDB embedded vector DB, text-embedding-3-large, LLM-based query intent extraction, multi-query RRF fusion |
 | Work item integration | ✅ Done | Paste ADO work item URL → fetch bug → extract screenshots → anchor search dates |
@@ -187,6 +187,7 @@ The React dashboard renders daily reports as:
 - **Commit detail view** — Per-repo sections with full commit cards, config badges, and flag tags
 - **Date range picker** — Filter to 7/14/30 day windows
 - **Repo filter** — Toggle individual repos on/off
+- **Usage metrics dashboard** — Query volume, DAU/WAU/MAU, confidence distribution, feedback rates, latency percentiles, retention, and adoption metrics
 
 ---
 
@@ -340,7 +341,7 @@ WHERE ABS(new_percentage - old_percentage) > 10 AND date = '2026-03-30';
 | Date chart / timeline UI | Calendar or timeline view showing daily change counts, risk indicators, and drill-down. | [10544188](https://msasg.visualstudio.com/Bing_Ads/_workitems/edit/10544188) |
 | Daily report detail view | Rendered Markdown or HTML page per day with full commit summaries and flag diffs. | [10544194](https://msasg.visualstudio.com/Bing_Ads/_workitems/edit/10544194) |
 | Filtering & search | Filter by repo, author, risk level, date range, keyword. | [10544198](https://msasg.visualstudio.com/Bing_Ads/_workitems/edit/10544198) |
-| Dashboard metrics | Aggregate views: commits/day trend, flag change frequency, high-risk change heatmap. | [10544202](https://msasg.visualstudio.com/Bing_Ads/_workitems/edit/10544202) |
+| Dashboard metrics | Aggregate views: commits/day trend, flag change frequency, high-risk change heatmap. Usage metrics dashboard with DAU/WAU/MAU, feedback rates, latency percentiles, retention, and adoption metrics. | [10544202](https://msasg.visualstudio.com/Bing_Ads/_workitems/edit/10544202) |
 
 ### 6.5 LLM Chat Integration
 
@@ -507,7 +508,7 @@ The chat API gracefully degrades:
 | Visualization | Custom React app / Power BI / Grafana |
 | Release tag strategy | Git tags / ADO release definitions / build numbers per repo |
 | Noise filter config | Repo-level `.commitairc` file / central config |
-| Auth & access control | Entra ID / existing internal auth |
+| Auth & access control | ~~Entra ID / existing internal auth~~ | ✅ Done — Microsoft Entra ID via MSAL |
 
 ---
 
@@ -531,6 +532,9 @@ The chat API gracefully degrades:
 | False positive rate in suspect ranking | < 30% of top-3 suggestions |
 | DRI adoption | 80% of on-call incidents use the tool within 3 months |
 | Pipeline reliability | > 99% daily completion rate |
+| User engagement (DAU/MAU ratio) | Tracked via usage metrics dashboard (user identity from Entra ID) |
+| Feedback positive rate | Tracked via usage metrics dashboard |
+| User retention rate | Tracked via usage metrics dashboard |
 
 ---
 

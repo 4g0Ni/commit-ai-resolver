@@ -59,7 +59,13 @@ export async function agenticSearch({
         console.log(`  [Agent ${iteration}/${maxIterations}] ${stage}${detailStr}`);
     };
 
-    let context = { query, history, feedback: null, workItemContext };
+    // Extract prior search results from conversation history so follow-up
+    // queries can reference specific commits from earlier answers
+    const priorSuspects = history
+        .filter(h => h.role === 'assistant' && h.suspects?.length)
+        .flatMap(h => h.suspects);
+
+    let context = { query, history, feedback: null, workItemContext, priorSuspects };
 
     // If a work item is provided, anchor dates to its creation date
     if (workItemContext?.createdDate) {
@@ -181,10 +187,17 @@ export async function agenticSearch({
         }
 
         // Direct commit ID lookup — if the user referenced specific SHAs, ensure
-        // those commits are in the results regardless of vector similarity score
-        if (intent.commitIds?.length > 0 && lookupByCommitIds) {
-            log(i, 'commit-lookup', { status: 'running', commitIds: intent.commitIds });
-            const directMatches = await lookupByCommitIds(intent.commitIds);
+        // those commits are in the results regardless of vector similarity score.
+        // Also include commit IDs from prior search results that the user may reference.
+        const priorSuspectIds = priorSuspects.map(s => s.commitId).filter(Boolean);
+        const queryCommitIds = intent.commitIds || [];
+        const allCommitIds = [...new Set([...queryCommitIds, ...priorSuspectIds.filter(id =>
+            query.toLowerCase().includes(id.slice(0, 7).toLowerCase())
+        )])];
+
+        if (allCommitIds.length > 0 && lookupByCommitIds) {
+            log(i, 'commit-lookup', { status: 'running', commitIds: allCommitIds });
+            const directMatches = await lookupByCommitIds(allCommitIds);
             if (directMatches.length > 0) {
                 // Prepend direct matches, dedup against existing results
                 const existingIds = new Set(results.map(r => r.id));

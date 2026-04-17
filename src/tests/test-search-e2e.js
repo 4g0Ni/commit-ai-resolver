@@ -411,6 +411,75 @@ console.log('\n══ Suite 13: API data endpoints ══');
 }
 
 // ===========================================================================
+// Suite 14: Follow-up query with prior suspects (prior results context)
+// ===========================================================================
+console.log('\n══ Suite 14: Follow-up query with prior suspects ══');
+{
+    const hasApi = await apiAvailable();
+    if (!hasApi) {
+        skip('API server not running — skipping follow-up query tests');
+    } else {
+        // Step 1: Initial query to get suspects
+        const { status: s1, data: d1 } = await chatQuery('What changes were made to ads grid recently?');
+        if (s1 !== 200 || !d1.suspects?.length) {
+            skip(`initial query failed or no suspects (status=${s1}, suspects=${d1.suspects?.length ?? 0})`);
+        } else {
+            const suspects = d1.suspects;
+            const firstCommitId = suspects[0].commitId;
+            console.log(`  Initial query returned ${suspects.length} suspects, first: ${firstCommitId}`);
+
+            // Step 2: Follow-up query referencing a specific commit ID from prior results,
+            // with history that includes the prior assistant message and its suspects
+            const history = [
+                { role: 'user', content: 'What changes were made to ads grid recently?' },
+                { role: 'assistant', content: d1.reply, suspects },
+            ];
+
+            const res = await fetch(`${API_BASE}/api/chat`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    message: `Tell me more about commit ${firstCommitId}`,
+                    history,
+                }),
+            });
+            const d2 = await res.json();
+
+            assert(res.status === 200, `follow-up query returns 200`);
+            assert(d2.reply?.length > 50, `follow-up reply is substantive (${d2.reply?.length} chars)`);
+            assert(
+                d2.reply.toLowerCase().includes(firstCommitId.slice(0, 7).toLowerCase()) ||
+                d2.suspects?.some(s => s.commitId === firstCommitId),
+                `follow-up references the requested commit ${firstCommitId}`
+            );
+
+            // Step 3: Follow-up comparing two commits from prior results
+            if (suspects.length >= 2) {
+                const id1 = suspects[0].commitId;
+                const id2 = suspects[1].commitId;
+                const history2 = [
+                    { role: 'user', content: 'What changes were made to ads grid recently?' },
+                    { role: 'assistant', content: d1.reply, suspects },
+                ];
+                const res2 = await fetch(`${API_BASE}/api/chat`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        message: `Compare commit ${id1} and ${id2}`,
+                        history: history2,
+                    }),
+                });
+                const d3 = await res2.json();
+                assert(res2.status === 200, `compare query returns 200`);
+                assert(d3.reply?.length > 50, `compare reply is substantive (${d3.reply?.length} chars)`);
+            } else {
+                skip('need >=2 suspects for compare test');
+            }
+        }
+    }
+}
+
+// ===========================================================================
 // Summary
 // ===========================================================================
 console.log(`\n══════════════════════════════════════════`);

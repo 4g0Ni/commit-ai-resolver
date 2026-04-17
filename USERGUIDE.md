@@ -16,6 +16,39 @@ Commit AI Resolver fetches code commits from Azure DevOps repositories, uses an 
 
 ---
 
+## Authentication
+
+All API endpoints require authentication via **Microsoft Entra ID (Azure AD)**. Users sign in with their Microsoft corporate account.
+
+### How It Works
+
+1. Frontend uses `@azure/msal-browser` with redirect flow — user is redirected to Microsoft login, then back to the app
+2. After sign-in, an **ID token** (JWT) is sent with every API request as a `Bearer` token
+3. Backend validates the JWT signature against Microsoft's JWKS endpoint, checks audience (client ID) and issuer (tenant)
+4. User identity (`preferred_username` / email) is extracted from the token and used for DAU/MAU tracking
+
+### Session Persistence
+
+MSAL caches tokens in `localStorage` with `storeAuthStateInCookie: true`, so users stay signed in across browser refreshes and tabs. No server-side session management needed.
+
+### Azure App Registration
+
+| Setting | Value |
+|---|---|
+| Client ID | `bc4d2d3c-b205-42f4-90f6-8bac756fd7f5` |
+| Tenant ID | `72f988bf-86f1-41af-91ab-2d7cd011db47` |
+| Platform | Single-page application |
+| Redirect URI | `http://localhost:5173` (dev) |
+
+**Important:** The redirect URI must be registered under the **Single-page application** platform type in the Azure portal (not "Web"), otherwise MSAL will get a `AADSTS9002326` cross-origin error.
+
+### Config Files
+
+- `ui/src/authConfig.js` — MSAL configuration (client ID, authority, cache settings, login scopes)
+- `api/server.js` — JWT validation middleware (`authMiddleware`)
+
+---
+
 ## Prerequisites
 
 1. **Node.js** v18+
@@ -110,6 +143,7 @@ Runs on `http://localhost:3001` with request logging (method, URL, status, durat
 | `GET /api/days?from=&to=` | Date range query |
 | `POST /api/chat` | LLM chat with RAG vector search (body: `{ message, history }`). Supports ADO work item URLs — automatically fetches bug context, extracts screenshots, and runs multi-query search. |
 | `POST /api/investigate` | Deep diff investigation for suspect commits |
+| `GET /api/metrics/usage` | Usage metrics dashboard (DAU/WAU/MAU, query volume, confidence, latency, feedback rates, retention) |
 | `GET /api/vectors/stats` | Vector store stats (commit count, repos, date range) |
 
 Chat requests log: query text, extracted filters, embedding time, search results count, LLM time, and token usage.
@@ -289,7 +323,7 @@ The React dashboard has three main areas:
 ### Layout
 ```
 ┌──────────────────────────────────────────────────────────┐
-│ Header — Commit AI Resolver                              │
+│ Header — Commit AI Resolver    [Metrics] [Feedback] 🌙   │
 ├──────────────────────────────────────┬───────────────────┤
 │ Toolbar (date range picker + repo    │                   │
 │   filter)                            │                   │
@@ -316,6 +350,9 @@ The React dashboard has three main areas:
   - Config changes list (key, action, detail)
   - Affected areas and feature flag tags
 - **Chat Panel** — Ask questions about changes, investigate incidents. Responses rendered as markdown. **Resizable** — drag the left edge to adjust width (min 360px, max 1200px, default 560px). Width is persisted across page refreshes.
+- **Theme Toggle** — Switch between dark and light themes (persisted in localStorage)
+- **Metrics Dashboard** — Click "Metrics" in the header to open a usage dashboard showing: total/daily/weekly/monthly query counts, DAU/WAU/MAU, daily active users chart, confidence distribution, search method breakdown, feedback rates (positive/negative), latency percentiles (P50/P95), user engagement (retention rate, avg queries/user), and adoption summary (DAU/MAU ratio)
+- **Feedback Panel** — Click "Feedback" in the header to view and submit thumbs-up/down feedback on chat responses
 
 ---
 
@@ -452,17 +489,23 @@ commit-ai-resolver/
 │   └── package.json
 ├── api/                              # Express backend API
 │   ├── server.js                     # REST endpoints + agentic chat pipeline
+│   ├── db.js                         # SQLite telemetry DB (queries, feedback, usage metrics)
 │   ├── agents/                       # Agentic search pipeline agents
 │   │   ├── orchestrator.js           # Agent loop coordinator (max 3 iterations, multi-query RRF)
 │   │   ├── intent-extractor.js       # Agent 1: Extract filters + confidence + self-validation
 │   │   ├── extraction-analyzer.js    # (Legacy — functionality merged into intent-extractor)
 │   │   ├── answer-synthesizer.js     # Agent 2: Generate ranked answer with commit links (multimodal)
 │   │   └── answer-evaluator.js       # Agent 3: Rate answer quality, decide pass/retry
+│   ├── telemetry/                    # Aria / 1DS telemetry
+│   │   ├── aria-client.js            # 1DS SDK initialization
+│   │   └── column-whitelist.js       # Event filtering (commitairesolver_tracing / commitairesolver_errors)
 │   └── package.json
 ├── ui/                               # React dashboard (Vite 5)
 │   ├── src/
-│   │   ├── App.jsx                   # Main layout (timeline + chat)
-│   │   ├── App.css                   # Dark theme styles
+│   │   ├── App.jsx                   # Main layout (timeline + chat + auth guard)
+│   │   ├── App.css                   # Dark/light theme styles
+│   │   ├── authConfig.js             # MSAL configuration (client ID, authority, instance)
+│   │   ├── index.css                 # CSS custom properties (theme variables)
 │   │   ├── api.js                    # API client helpers
 │   │   └── components/
 │   │       ├── Timeline.jsx          # Orchestrator (toolbar + chart + detail)
@@ -472,7 +515,9 @@ commit-ai-resolver/
 │   │       ├── MetricsBoard.jsx      # Vertical metrics sidebar
 │   │       ├── DateRangePicker.jsx   # Date range with presets
 │   │       ├── RepoFilter.jsx        # Repository toggle filter
-│   │       └── ChatBox.jsx           # LLM chat with markdown rendering
+│   │       ├── ChatBox.jsx           # LLM chat with markdown rendering
+│   │       ├── FeedbackPanel.jsx     # User feedback overlay (thumbs up/down)
+│   │       └── UsageMetrics.jsx      # Usage metrics dashboard (DAU/MAU, latency, feedback rates)
 │   └── package.json
 ├── data/
 │   ├── daily/                        # Generated daily JSON files
@@ -522,11 +567,17 @@ repoFilters.NewRepo = {
 
 ## Authentication
 
-All API calls use `DefaultAzureCredential` from `@azure/identity`:
+All API calls use `DefaultAzureCredential` from `@azure/identity` for Azure OpenAI and ADO access:
 - **Local dev:** Your `az login` session
 - **Deployed:** Managed Identity
 
 No PAT tokens needed.
+
+**User authentication** uses Microsoft Entra ID via MSAL:
+- Frontend: `@azure/msal-browser` + `@azure/msal-react` (redirect flow, localStorage cache)
+- Backend: JWT validation middleware using `jsonwebtoken` + `jwks-rsa`
+- All `/api` routes require a valid Bearer token (ID token from Microsoft)
+- User email from the token is stored as `user_id` in SQLite for usage metrics
 
 ---
 

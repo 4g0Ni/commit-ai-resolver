@@ -37,6 +37,11 @@ export async function synthesizeAnswer(llm, results, intent, context, iteration 
         ? `\nConversation context:\n${history.slice(-4).map(h => `${h.role}: ${h.content?.slice(0, 200)}`).join('\n')}\n`
         : '';
 
+    const priorSuspectsContext = context.priorSuspects?.length > 0
+        ? `\nPreviously discussed commits (user may reference these):\n${context.priorSuspects.slice(-10).map(s =>
+            `- ${s.commitId} (${s.repo}) by ${s.author}: ${s.title}`).join('\n')}\n`
+        : '';
+
     const bugContextSection = workItemContext ? `
 BUG CONTEXT — The user is investigating this work item:
 Title: ${workItemContext.title}
@@ -57,6 +62,7 @@ Explain specifically how each suspect's changes relate to the bug symptom.
     const systemPrompt = `You are an expert change analysis assistant for the Microsoft Advertising engineering team.
 Analyze the search results and generate a comprehensive answer to the user's question.
 ${conversationContext}
+${priorSuspectsContext}
 ${bugContextSection}
 SEARCH METADATA:
 - Results found: ${scoreStats.count}
@@ -251,6 +257,11 @@ export async function synthesizeAnswerStream(llm, results, intent, context, iter
         ? `\nConversation context:\n${context.history.slice(-4).map(h => `${h.role}: ${h.content?.slice(0, 200)}`).join('\n')}\n`
         : '';
 
+    const priorSuspectsContext = context.priorSuspects?.length > 0
+        ? `\nPreviously discussed commits (user may reference these):\n${context.priorSuspects.slice(-10).map(s =>
+            `- ${s.commitId} (${s.repo}) by ${s.author}: ${s.title}`).join('\n')}\n`
+        : '';
+
     const bugContextSection = workItemContext ? `
 BUG CONTEXT — The user is investigating this work item:
 Title: ${workItemContext.title}
@@ -272,6 +283,7 @@ Explain specifically how each suspect's changes relate to the bug symptom.
     const systemPrompt = `You are an expert change analysis assistant for the Microsoft Advertising engineering team.
 Analyze the search results and generate a comprehensive answer to the user's question.
 ${conversationContext}
+${priorSuspectsContext}
 ${bugContextSection}
 SEARCH METADATA:
 - Results found: ${scoreStats.count}

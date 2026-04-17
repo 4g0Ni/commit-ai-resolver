@@ -15,6 +15,33 @@
   --chat-assistant: #21262d;
   --shadow-overlay: rgba(0, 0, 0, 0.5);
   --shadow-dropdown: rgba(0, 0, 0, 0.3);
+  --config-purple: #bb80ff;
+  --config-purple-bg: rgba(187, 128, 255, 0.18);
+  --config-purple-border: rgba(187, 128, 255, 0.35);
+  --config-purple-subtle: rgba(187, 128, 255, 0.06);
+  --config-purple-panel: rgba(187, 128, 255, 0.08);
+  --config-purple-panel-border: rgba(187, 128, 255, 0.2);
+  --config-purple-tab: rgba(187, 128, 255, 0.2);
+  --config-purple-border-subtle: rgba(187, 128, 255, 0.15);
+  --accent-bg: rgba(88, 166, 255, 0.15);
+  --accent-bg-subtle: rgba(88, 166, 255, 0.06);
+  --accent-bg-hover: rgba(88, 166, 255, 0.12);
+  --accent-env-bg: rgba(88, 166, 255, 0.12);
+  --accent-env-border: rgba(88, 166, 255, 0.25);
+  --risk-high-bg: rgba(248, 81, 73, 0.15);
+  --risk-high-border: rgba(248, 81, 73, 0.3);
+  --risk-medium-bg: rgba(210, 153, 34, 0.15);
+  --risk-medium-border: rgba(210, 153, 34, 0.3);
+  --risk-low-bg: rgba(63, 185, 80, 0.15);
+  --table-header-bg: rgba(255, 255, 255, 0.04);
+  --table-row-border: rgba(255, 255, 255, 0.04);
+  --env-row-border: rgba(255, 255, 255, 0.05);
+  --clarification-text: #d2991f;
+  --clarification-bg: rgba(210, 153, 34, 0.12);
+  --clarification-border: rgba(210, 153, 34, 0.4);
+  --code-bg: rgba(255, 255, 255, 0.1);
+  --investigation-bg: rgba(88, 166, 255, 0.06);
+  --calendar-icon-filter: invert(0.7);
 }
 
 [data-theme="light"] {
@@ -26,13 +53,40 @@
   --text-secondary: #656d76;
   --accent: #0969da;
   --accent-hover: #0550ae;
-  --risk-high: #cf222e;
-  --risk-medium: #9a6700;
-  --risk-low: #1a7f37;
+  --risk-high: #e5534b;
+  --risk-medium: #bf8700;
+  --risk-low: #2da44e;
   --chat-user: #0969da;
   --chat-assistant: #f6f8fa;
   --shadow-overlay: rgba(0, 0, 0, 0.25);
   --shadow-dropdown: rgba(0, 0, 0, 0.12);
+  --config-purple: #8250df;
+  --config-purple-bg: rgba(130, 80, 223, 0.12);
+  --config-purple-border: rgba(130, 80, 223, 0.3);
+  --config-purple-subtle: rgba(130, 80, 223, 0.05);
+  --config-purple-panel: rgba(130, 80, 223, 0.06);
+  --config-purple-panel-border: rgba(130, 80, 223, 0.2);
+  --config-purple-tab: rgba(130, 80, 223, 0.15);
+  --config-purple-border-subtle: rgba(130, 80, 223, 0.12);
+  --accent-bg: rgba(9, 105, 218, 0.1);
+  --accent-bg-subtle: rgba(9, 105, 218, 0.04);
+  --accent-bg-hover: rgba(9, 105, 218, 0.08);
+  --accent-env-bg: rgba(9, 105, 218, 0.08);
+  --accent-env-border: rgba(9, 105, 218, 0.2);
+  --risk-high-bg: rgba(207, 34, 46, 0.08);
+  --risk-high-border: rgba(207, 34, 46, 0.25);
+  --risk-medium-bg: rgba(154, 103, 0, 0.08);
+  --risk-medium-border: rgba(154, 103, 0, 0.25);
+  --risk-low-bg: rgba(26, 127, 55, 0.08);
+  --table-header-bg: rgba(0, 0, 0, 0.04);
+  --table-row-border: rgba(0, 0, 0, 0.06);
+  --env-row-border: rgba(0, 0, 0, 0.08);
+  --clarification-text: #9a6700;
+  --clarification-bg: rgba(154, 103, 0, 0.08);
+  --clarification-border: rgba(154, 103, 0, 0.3);
+  --code-bg: rgba(0, 0, 0, 0.06);
+  --investigation-bg: rgba(9, 105, 218, 0.04);
+  --calendar-icon-filter: none;
 }
 
 * {
