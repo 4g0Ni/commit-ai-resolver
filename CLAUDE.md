@@ -34,6 +34,8 @@ data/          — Runtime data (daily JSON, diffs, LanceDB vector store) — gi
 
 ## Coding Standards
 
+- **Read before you write:** Before importing or using any module, read its source to verify the export names, data shapes (object vs array vs function), and parameter signatures. Never assume — a wrong assumption (e.g., iterating an object as an array) causes runtime crashes that are trivially avoidable.
+- **Verify after you write:** After implementing any backend/service change, start the server (`node api/server.js --no-auth`) and confirm the new code path runs without errors. Do not consider the work done until it has been executed at least once.
 - Functional components only (no class components).
 - Use React hooks (`useState`, `useEffect`, `useCallback`, `useMemo`, `useRef`) for state and side effects.
 - Default exports for React components: `export default ComponentName;`

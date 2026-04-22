@@ -25,6 +25,7 @@ import { AzureOpenAI } from 'openai';
 import { logQuery, logQueryStub, recordFeedback, getFeedbackStats, getRecentFeedback, getUsageMetrics } from './db.js';
 import { initAria } from './telemetry/aria-client.js';
 import { logInfo, logError } from './telemetry/column-whitelist.js';
+import { startScheduledRefresh } from '../src/services/scheduled-refresh.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, '..', 'data', 'daily');
@@ -790,4 +791,5 @@ app.listen(PORT, () => {
     console.log(`Commit AI Resolver API running on http://localhost:${PORT}`);
     console.log(`Data directory: ${DATA_DIR}`);
     initAria();
+    startScheduledRefresh();
 });

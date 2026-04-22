@@ -42,7 +42,7 @@ ${feedback.newKeywords ? `Additional keywords to include: ${feedback.newKeywords
     }
 
     const conversationContext = history.length > 0
-        ? `\nRecent conversation for context:\n${history.slice(-4).map(h => `${h.role}: ${h.content?.slice(0, 200)}`).join('\n')}\n`
+        ? `\nRecent conversation for context:\n${history.slice(-4).map(h => `${h.role}: ${h.content?.slice(0, 200)}`).join('\n')}\n\nIMPORTANT: The user's current message may be a follow-up that references or refines a previous question. If the current message is short or uses words like "I mean", "actually", "but for", "instead", "no", "change to", etc., treat it as a REFINEMENT of the previous query — carry forward all filters (repo, keywords, topic) from the prior question and only modify what the user is explicitly changing. Do NOT generate a generic search query when the user is clearly refining a prior specific question.\n`
         : '';
 
     const priorCommitContext = context.priorSuspects?.length > 0

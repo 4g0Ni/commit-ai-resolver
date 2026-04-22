@@ -175,7 +175,7 @@ function buildRepoStats(summarized) {
 
 async function main() {
     const opts = parseArgs();
-    const repos = [REPOSITORIES.AdsAppsCampaignUI, REPOSITORIES.AdsAppsMT, REPOSITORIES.AdsAppUI];
+    const repos = Object.values(REPOSITORIES);
 
     await mkdir(DATA_DIR, { recursive: true });
 

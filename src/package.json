@@ -7,7 +7,9 @@
   "scripts": {
     "start": "node index.js",
     "fetch-commits": "node index.js",
-    "generate-data": "node scripts/generate-sample-data.js"
+    "generate-data": "node scripts/generate-sample-data.js",
+    "refresh": "node scripts/scheduled-refresh.js",
+    "refresh:loop": "node scripts/scheduled-refresh.js --loop 60"
   },
   "dependencies": {
     "@azure/identity": "^4.0.0",
