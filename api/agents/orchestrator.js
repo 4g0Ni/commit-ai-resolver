@@ -12,6 +12,12 @@ import { synthesizeAnswer, synthesizeAnswerStream } from './answer-synthesizer.j
 import { evaluateAnswer } from './answer-evaluator.js';
 import { logInfo, logError } from '../telemetry/column-whitelist.js';
 
+function daysAgo(n) {
+    const d = new Date();
+    d.setDate(d.getDate() - n);
+    return d.toISOString().slice(0, 10);
+}
+
 /**
  * Run the agentic search pipeline.
  *
@@ -123,13 +129,34 @@ export async function agenticSearch({
         const effectiveDateFrom = context.dateOverrides?.dateFrom || intent.dateFrom || undefined;
         const effectiveDateTo = context.dateOverrides?.dateTo || intent.dateTo || undefined;
 
+        // Apply default date range when no dates specified:
+        // - Incident queries (crash, broke, regression, etc.) → 7 days (tight window)
+        // - General queries → 30 days
+        // - Max supported range: 6 months
+        let finalDateFrom = effectiveDateFrom;
+        let finalDateTo = effectiveDateTo;
+        if (!finalDateFrom) {
+            const q = (intent.searchQuery || '').toLowerCase();
+            const isIncident = /\b(spike|broke|break|error|crash|regression|outage|down|incident|live.?site|production.?issue)\b/.test(q)
+                || /\b(spike|broke|break|error|crash|regression|outage|down|incident|live.?site|production.?issue)\b/.test(query.toLowerCase());
+            finalDateFrom = daysAgo(isIncident ? 7 : 30);
+        }
+        if (!finalDateTo) {
+            finalDateTo = new Date().toISOString().slice(0, 10);
+        }
+        // Clamp to max 6 months
+        const sixMonthsAgo = daysAgo(180);
+        if (finalDateFrom < sixMonthsAgo) {
+            finalDateFrom = sixMonthsAgo;
+        }
+
         const searchOpts = {
             topK: workItemContext ? 50 : (hasMetadataFilters ? 50 : 30),
             minScore: intent.author ? 0.01 : (hasFilters ? 0.05 : 0.15),
             author: intent.author || undefined,
             repo: intent.repo || undefined,
-            dateFrom: effectiveDateFrom,
-            dateTo: effectiveDateTo,
+            dateFrom: finalDateFrom,
+            dateTo: finalDateTo,
             riskLevel: intent.riskLevel || undefined,
             changeType: intent.changeType || undefined,
         };
@@ -212,7 +239,7 @@ export async function agenticSearch({
         const topScores = results.slice(0, 5).map(r => r.score?.toFixed(3)).join(', ');
         log(i, 'rag-search', { status: 'done', resultCount: results.length, embeddingMs, searchMs });
         if (results.length > 0) {
-            console.log(`  [Search] ${results.length} results, top-5 scores: [${topScores}], date range: ${effectiveDateFrom || 'open'}..${effectiveDateTo || 'open'}`);
+            console.log(`  [Search] ${results.length} results, top-5 scores: [${topScores}], date range: ${finalDateFrom || 'open'}..${finalDateTo || 'open'}`);
         }
 
         // If vector search returned nothing and this is the first iteration, try full context
@@ -334,8 +361,8 @@ export async function agenticSearch({
             // Apply date expansion overrides for next iteration's RAG search
             if (evaluation.retryStrategy.expandedDateFrom || evaluation.retryStrategy.expandedDateTo) {
                 context.dateOverrides = {
-                    dateFrom: evaluation.retryStrategy.expandedDateFrom || effectiveDateFrom,
-                    dateTo: evaluation.retryStrategy.expandedDateTo || effectiveDateTo,
+                    dateFrom: evaluation.retryStrategy.expandedDateFrom || finalDateFrom,
+                    dateTo: evaluation.retryStrategy.expandedDateTo || finalDateTo,
                 };
             }
             log(i, 'retry', {

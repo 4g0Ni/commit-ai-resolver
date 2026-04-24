@@ -26,6 +26,9 @@ import { logQuery, logQueryStub, recordFeedback, getFeedbackStats, getRecentFeed
 import { initAria } from './telemetry/aria-client.js';
 import { logInfo, logError } from './telemetry/column-whitelist.js';
 import { startScheduledRefresh } from '../src/services/scheduled-refresh.js';
+import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node';
+import { isInitializeRequest } from '@modelcontextprotocol/server';
+import { createMcpServer } from './mcp.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, '..', 'data', 'daily');
@@ -73,6 +76,7 @@ const app = express();
 app.use(cors({
     origin: ['http://localhost:5173', 'http://localhost:4399'],
     credentials: true,
+    exposedHeaders: ['Mcp-Session-Id'],
 }));
 app.use(express.json());
 
@@ -787,8 +791,81 @@ app.get('/api/metrics/usage', (req, res) => {
     }
 });
 
+// --- MCP Streamable HTTP endpoint ---
+// Each MCP session gets its own McpServer + transport pair.
+// McpServer binds to one transport, so we create one per session and reuse it.
+const mcpSessions = new Map(); // sessionId → { server, transport }
+
+const mcpDeps = {
+    embedQuery,
+    searchVectors,
+    lookupByCommitIds,
+    getVectorStats,
+    listAvailableDates,
+    loadDayData,
+};
+
+app.post('/mcp', async (req, res) => {
+    const sessionId = req.headers['mcp-session-id'];
+    try {
+        if (sessionId && mcpSessions.has(sessionId)) {
+            const { transport } = mcpSessions.get(sessionId);
+            await transport.handleRequest(req, res, req.body);
+            return;
+        }
+
+        if (!sessionId && isInitializeRequest(req.body)) {
+            const transport = new NodeStreamableHTTPServerTransport({
+                sessionIdGenerator: () => randomUUID(),
+                onsessioninitialized: (sid) => {
+                    mcpSessions.set(sid, { server, transport });
+                    console.log(`[MCP] Session initialized: ${sid}`);
+                },
+            });
+            transport.onclose = () => {
+                const sid = transport.sessionId;
+                if (sid) {
+                    mcpSessions.delete(sid);
+                    console.log(`[MCP] Session closed: ${sid}`);
+                }
+            };
+            const server = createMcpServer(mcpDeps);
+            await server.connect(transport);
+            await transport.handleRequest(req, res, req.body);
+            return;
+        }
+
+        if (sessionId) {
+            return res.status(404).json({ jsonrpc: '2.0', error: { code: -32001, message: 'Session not found' }, id: null });
+        }
+        return res.status(400).json({ jsonrpc: '2.0', error: { code: -32000, message: 'Bad Request: missing session ID' }, id: null });
+    } catch (err) {
+        console.error('[MCP] Error:', err);
+        if (!res.headersSent) {
+            res.status(500).json({ jsonrpc: '2.0', error: { code: -32603, message: 'Internal server error' }, id: null });
+        }
+    }
+});
+
+app.get('/mcp', async (req, res) => {
+    const sessionId = req.headers['mcp-session-id'];
+    if (!sessionId || !mcpSessions.has(sessionId)) {
+        return res.status(404).send('Session not found');
+    }
+    await mcpSessions.get(sessionId).transport.handleRequest(req, res);
+});
+
+app.delete('/mcp', async (req, res) => {
+    const sessionId = req.headers['mcp-session-id'];
+    if (!sessionId || !mcpSessions.has(sessionId)) {
+        return res.status(404).send('Session not found');
+    }
+    await mcpSessions.get(sessionId).transport.handleRequest(req, res);
+});
+
 app.listen(PORT, () => {
     console.log(`Commit AI Resolver API running on http://localhost:${PORT}`);
+    console.log(`MCP endpoint: http://localhost:${PORT}/mcp`);
     console.log(`Data directory: ${DATA_DIR}`);
     initAria();
     startScheduledRefresh();
