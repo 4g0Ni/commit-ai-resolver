@@ -57,7 +57,7 @@ Return ONLY a JSON object with these fields (use null for missing):
 - "repo": exact repo name from [${repoList}] if mentioned. Recognize aliases: "campaignui"/"cmui" → AdsAppsCampaignUI, "mt"/"middle tier" → AdsAppsMT, "appui"/"shell"/"uiserver" → AdsAppUI, "anb"/"ccdb"/"ccmt"/"client center db"/"client center mt" → AnB, "cmdb"/"campaign db"/"db"/"adsappsdb" → AdsAppsDB. (null if not repo-specific)
 - "dateFrom": start date YYYY-MM-DD if a time range is mentioned. For incident/regression queries ("spike", "broke", "error", "crash", "regression", "production issue", "live-site"), expand the start date 2 days earlier to account for release buffer. For "this week", use Monday of the current week. For "recently" or vague time references, use 30 days ago. If the user does not mention any time range, use null — the system will apply a sensible default. (null if open-ended)
 - "dateTo": end date YYYY-MM-DD if a time range is mentioned (null if open-ended)
-- "searchQuery": a rewritten version optimized for semantic search against commit summaries. Remove person names and date references. Keep the technical intent specific. For author queries, include broad technical terms like "feature implementation configuration API change". For broad queries like "what changed", use "code changes features configuration deployment updates".
+- "searchQuery": a rewritten version optimized for semantic search against commit summaries. Remove person names and date references. Keep the technical intent specific. Only include terms that reflect what the user actually asked about — do not pad with generic keywords.
 - "secondarySearchQuery": (only when a work item/bug context is provided) a SECOND, DIFFERENT semantic query focusing on the fix mechanism — component names, template changes, routing, configuration keys, data model, CSS/layout. Use different terms from searchQuery. (null if no work item context)
 - "riskLevel": "HIGH", "MEDIUM", or "LOW" if the user is asking about a specific risk level (null if not risk-specific)
 - "changeType": "config", "code", or "mixed" if the user is asking about config/pilot/flag changes vs code changes (null if not type-specific)
@@ -69,13 +69,13 @@ Return ONLY a JSON object with these fields (use null for missing):
 
 Examples:
 User: "what did Beina Zhang change last week"
-{"author":"Beina Zhang","repo":null,"dateFrom":"${daysAgo(7, today)}","dateTo":"${today}","searchQuery":"feature implementation configuration API code changes deployment updates","riskLevel":null,"changeType":null,"keywords":["feature","implementation","configuration","API","changes"],"confidence":0.9,"ambiguities":[],"verdict":"GOOD","clarificationQuestion":null}
+{"author":"Beina Zhang","repo":null,"dateFrom":"${daysAgo(7, today)}","dateTo":"${today}","searchQuery":"changes by Beina Zhang","riskLevel":null,"changeType":null,"keywords":["changes"],"confidence":0.9,"ambiguities":[],"verdict":"GOOD","clarificationQuestion":null}
 
 User: "show me all HIGH risk changes this week"
-{"author":null,"repo":null,"dateFrom":"${daysAgo(7, today)}","dateTo":"${today}","searchQuery":"high risk breaking changes pilot ramp deployment configuration removal","riskLevel":"HIGH","changeType":null,"keywords":["high","risk","breaking","pilot","ramp","deployment"],"confidence":0.9,"ambiguities":[],"verdict":"GOOD","clarificationQuestion":null}
+{"author":null,"repo":null,"dateFrom":"${daysAgo(7, today)}","dateTo":"${today}","searchQuery":"high risk breaking changes","riskLevel":"HIGH","changeType":null,"keywords":["high","risk","breaking","changes"],"confidence":0.9,"ambiguities":[],"verdict":"GOOD","clarificationQuestion":null}
 
 User: "what pilot flags were changed recently"
-{"author":null,"repo":null,"dateFrom":"${daysAgo(30, today)}","dateTo":"${today}","searchQuery":"pilot flag feature gate configuration ramp percentage rollout enable disable","riskLevel":null,"changeType":"config","keywords":["pilot","flag","config","ramp","feature","gate"],"confidence":0.85,"ambiguities":[],"verdict":"GOOD","clarificationQuestion":null}
+{"author":null,"repo":null,"dateFrom":"${daysAgo(30, today)}","dateTo":"${today}","searchQuery":"pilot flag feature gate configuration ramp percentage rollout","riskLevel":null,"changeType":"config","keywords":["pilot","flag","config","ramp","feature","gate"],"confidence":0.85,"ambiguities":[],"verdict":"GOOD","clarificationQuestion":null}
 
 User: "something broke"
 {"author":null,"repo":null,"dateFrom":null,"dateTo":null,"searchQuery":"bug error crash broken regression","riskLevel":null,"changeType":null,"keywords":["bug","error","crash","broken","regression"],"confidence":0.3,"ambiguities":["which page or feature is affected?","when did the issue start?","what kind of breakage — errors, crashes, or slowness?"],"verdict":"ASK_USER","clarificationQuestion":"What exactly broke, in which feature or area, and roughly when did it start happening?"}

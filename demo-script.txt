@@ -1,0 +1,134 @@
+Commit AI Resolver — 5-Minute Demo Script
+==========================================
+
+[0:00–0:20] Opening
+--------------------
+"Commit AI Resolver is a daily change tracking and regression analysis tool
+for Microsoft Advertising repositories. It automatically fetches commits,
+summarizes them with AI using code diff analysis, and provides a searchable
+dashboard with an intelligent chat interface — so you can quickly find what
+changed and investigate live-site issues without manually reading every PR."
+
+
+[0:20–0:50] Dashboard Overview
+-------------------------------
+(Show the Timeline view)
+
+"The main dashboard shows a timeline of daily commits across five key repos:
+Campaign UI, Middle Tier, UI Server, AnB, and Campaign DB. Each day is
+summarized with commit counts, risk levels, and change types at a glance."
+
+(Click into a specific day)
+
+"Clicking a day expands the detail view — each commit has an AI-generated
+summary based on the actual code diff, not just the PR title. This is
+important because PR titles are often vague or inaccurate — our summaries
+tell you what the code actually changed."
+
+
+[0:50–1:50] Scenario 1: Bug Investigation — Finding Suspect Commits
+---------------------------------------------------------------------
+(Open the chat panel)
+
+"Let's walk through a real scenario. Imagine a manual tester files a bug:
+'Campaign budget validation broke after last Tuesday's deployment.' As the
+DRI, you need to find which commit caused it. Traditionally, you'd scroll
+through dozens of PRs, read each title — which may say something unhelpful
+like 'code cleanup' or 'fix issue' — and then open the actual diff to
+understand what changed. That can take 30 minutes or more."
+
+(Type query: "What changes were made to campaign budget validation logic
+in CMUI in the last week?")
+
+"With Commit AI Resolver, you just ask. The system searches through
+AI-generated summaries that are based on the actual code changes, not PR
+titles. It returns the suspicious commits ranked by relevance, with clear
+explanations of what each commit modified."
+
+(Show the streaming response with cited commits)
+
+"Now I can immediately see which commits touched budget validation, who
+authored them, and what specifically changed — without opening a single PR.
+I can hand this list directly to the dev who owns the area for confirmation."
+
+
+[1:50–2:50] Scenario 2: Understanding Changes by Person or Feature Area
+--------------------------------------------------------------------------
+(Type query: "What did <author name> change in the authentication area
+this week?")
+
+"Here's another common scenario. You want to understand what a specific
+developer changed, or what happened in a feature area. PR titles often
+don't tell the full story — a PR titled 'minor refactor' might actually
+restructure the entire auth middleware."
+
+(Show the response)
+
+"Because our summaries are generated from the actual code diff, you get an
+accurate picture regardless of how the PR was titled. You can search by
+author, by feature area, by risk level, or any combination — in natural
+language."
+
+(Type follow-up: "Were any of those config or feature flag changes?")
+
+"Follow-up questions work with conversation context. Here I'm narrowing
+down to just config changes, which are often the cause of regressions
+that get deployed without code review."
+
+
+[2:50–3:40] Scenario 2 continued: Diff-Based Summaries vs PR Titles
+----------------------------------------------------------------------
+(Show a side-by-side: a commit with a vague PR title vs its AI summary)
+
+"Let me highlight the key difference. Here's a commit with the PR title
+'Update files.' Not very helpful. But our AI summary, generated from the
+actual code diff, says: 'Modified the campaign budget cap validation to
+allow values above 10M for enterprise accounts, added a new feature flag
+gate for the rollout.' That's the level of detail you get automatically
+for every commit, every day."
+
+
+[3:40–4:30] MCP & Skill Integration for DRI Agents
+-----------------------------------------------------
+(Switch to a terminal / Claude Code session)
+
+"Beyond the web dashboard, Commit AI Resolver is available as an MCP server
+and as a Claude Code skill. This means any DRI agent or AI workflow can
+query commit data programmatically."
+
+(Show an MCP tool call example — e.g., search_commits or get_daily_summary)
+
+"For example, an on-call DRI agent investigating a live-site incident can
+call our MCP tools to search for suspect commits, filter by risk level or
+repo, and get daily summaries — all without a human opening the dashboard."
+
+(Show skill invocation in Claude Code)
+
+"In Claude Code, the commit-resolver skill lets you search commits right
+from your terminal. This integrates naturally into existing DRI workflows —
+your triage agent can pull commit context alongside alerts, ICM tickets,
+and deployment logs to build a complete incident picture."
+
+
+[4:30–5:00] Closing
+---------------------
+"To recap: Commit AI Resolver solves the problem of understanding what
+actually changed across your codebase. It goes beyond PR titles by
+analyzing real code diffs with AI. Testers can trace bugs to suspect
+commits in seconds. Developers can review changes by person or feature
+area without reading every PR. And with MCP and skill integration, DRI
+agents can query commit intelligence programmatically as part of their
+incident triage workflow. Thank you."
+
+
+===========================================
+Recording Tips
+===========================================
+- Start the UI dev server (npm run dev in ui/) and API server
+  (node api/server.js) before recording
+- Use a dark theme for better screen recording contrast
+- Have pre-planned queries ready so there's no awkward typing pauses
+- The SSE streaming effect looks great on video — let it play out naturally
+- For the MCP/skill demo, have a Claude Code session ready with the
+  commit-resolver skill loaded
+- Consider using a real recent bug example to make the demo more compelling

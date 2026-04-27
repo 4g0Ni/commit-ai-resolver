@@ -1,6 +1,6 @@
 import { msalInstance, loginRequest } from './authConfig.js';
 
-const API_BASE = 'http://localhost:4399/api';
+const API_BASE = '/api';
 
 async function getAuthHeaders() {
     const accounts = msalInstance.getAllAccounts();

@@ -1,0 +1,16 @@
+{
+  "navigationFallback": {
+    "rewrite": "/index.html",
+    "exclude": ["*.js", "*.css", "*.png", "*.jpg", "*.svg", "*.ico", "*.woff", "*.woff2"]
+  },
+  "routes": [
+    {
+      "route": "/api/*",
+      "allowedRoles": ["anonymous"]
+    },
+    {
+      "route": "/mcp",
+      "allowedRoles": ["anonymous"]
+    }
+  ]
+}

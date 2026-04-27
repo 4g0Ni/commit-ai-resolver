@@ -18,6 +18,7 @@ import jwt from 'jsonwebtoken';
 import jwksClient from 'jwks-rsa';
 import { randomUUID } from 'crypto';
 import { readdir, readFile } from 'fs/promises';
+import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { DefaultAzureCredential } from '@azure/identity';
@@ -73,8 +74,13 @@ const openaiMiniClient = new AzureOpenAI({
 });
 
 const app = express();
+const allowedOrigins = [
+    'http://localhost:5173',
+    'http://localhost:4399',
+    ...(process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim()) : []),
+];
 app.use(cors({
-    origin: ['http://localhost:5173', 'http://localhost:4399'],
+    origin: allowedOrigins,
     credentials: true,
     exposedHeaders: ['Mcp-Session-Id'],
 }));
@@ -862,6 +868,21 @@ app.delete('/mcp', async (req, res) => {
     }
     await mcpSessions.get(sessionId).transport.handleRequest(req, res);
 });
+
+// --- Serve UI static files (production) ---
+// In dev: ui/dist is at ../ui/dist relative to api/
+// In prod (App Service): ui/dist is at ./ui/dist inside wwwroot
+const UI_DIST = existsSync(join(__dirname, 'ui', 'dist'))
+    ? join(__dirname, 'ui', 'dist')
+    : join(__dirname, '..', 'ui', 'dist');
+if (existsSync(UI_DIST)) {
+    app.use(express.static(UI_DIST));
+    // SPA fallback: serve index.html for non-API routes
+    app.use((req, res, next) => {
+        if (req.method !== 'GET' || req.path.startsWith('/api/') || req.path.startsWith('/mcp')) return next();
+        res.sendFile(join(UI_DIST, 'index.html'));
+    });
+}
 
 app.listen(PORT, () => {
     console.log(`Commit AI Resolver API running on http://localhost:${PORT}`);

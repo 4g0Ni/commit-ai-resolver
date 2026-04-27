@@ -17,6 +17,7 @@ api/           — Express backend (REST API + SSE streaming chat)
 ui/            — React (Vite) frontend
   src/components/  — React components
   src/api.js       — API client functions
+deploy/        — Azure deployment scripts (prepare-api.ps1, deploy.ps1)
 data/          — Runtime data (daily JSON, diffs, LanceDB vector store) — gitignored
 ```
 
@@ -154,6 +155,18 @@ When adding a new repo, update:
 - Install with `npm install --registry https://registry.npmjs.org/` (corporate registry may need explicit override).
 - Backend: `express`, `cors`, `openai`, `@azure/identity`, `@lancedb/lancedb`, `better-sqlite3`, `jsonwebtoken`, `jwks-rsa`.
 - Frontend: `react`, `react-dom`, `react-markdown`, `vite`, `@azure/msal-browser`, `@azure/msal-react`.
+
+## Deployment
+
+- **Target:** Single Azure App Service (Linux B1, Node 20 LTS) at `commit-ai-resolver.azurewebsites.net`
+- **Architecture:** Express API + React UI served from the same origin (no separate SWA)
+- **Scripts:** `deploy/deploy.ps1` (full provision + deploy), `deploy/prepare-api.ps1` (package API + UI into zip)
+- **Build system:** Oryx (triggered by `az webapp deployment source config-zip`) — runs `npm install` on server, compresses `node_modules` to `tar.gz`
+- **Data persistence:** `/home/data/` (survives redeployments). Uploaded separately via Kudu ZIP API, not included in deployment package
+- **Startup:** `startup.sh` creates symlinks (`/home/site/data → /home/data`, `/home/site/src → wwwroot/src`) then runs `node server.js`
+- **Identity:** System-assigned MI for Azure OpenAI, user-assigned MI (set via `AZURE_CLIENT_ID`) for ADO access
+- **Zip creation:** Uses .NET `ZipFile` (not `Compress-Archive`) to ensure forward-slash paths for Linux compatibility
+- **Deploy commands:** `.\deploy\deploy.ps1 -SkipProvision` (redeploy code), `.\deploy\deploy.ps1 -SkipProvision -SkipBuild` (redeploy existing package)
 
 ## Common Patterns
 

@@ -16,6 +16,7 @@
 | Vector search (RAG) | ✅ Done | LanceDB embedded vector DB, text-embedding-3-large, LLM-based query intent extraction, multi-query RRF fusion |
 | Work item integration | ✅ Done | Paste ADO work item URL → fetch bug → extract screenshots → anchor search dates |
 | Daily data generation (cached) | ✅ Done | Incremental, skip cached commits, --from/--to date range |
+| Azure deployment | ✅ Done | Single App Service (API + UI), Managed Identity, Oryx build |
 | C2C Cosmos DB pilot tracker | ❌ Planned | DB-level pilot ramp tracking |
 | Queryable DB storage | ❌ Planned | Currently JSON files |
 
@@ -845,7 +846,111 @@ To stay within acceptable chat response times:
 
 ---
 
-## 12. Open Questions
+## 12. Deployment
+
+### Architecture
+
+The application is deployed as a single Azure App Service (Linux, Node 20 LTS, B1 tier) that serves both the Express API and the React UI as static files from the same origin.
+
+```
+User → Azure App Service (commit-ai-resolver.azurewebsites.net)
+         ├── /api/*    → Express API routes
+         ├── /mcp      → MCP endpoint
+         └── /*        → React UI (static files from ui/dist/)
+```
+
+### Azure Resources
+
+| Resource | Type | Details |
+|---|---|---|
+| `commit-ai-resolver-rg` | Resource Group | West US 2 |
+| `commit-ai-resolver` | App Service | Linux B1, Node 20 LTS |
+| `commit-ai-resolver-plan` | App Service Plan | Linux B1 |
+| System-assigned MI | Managed Identity | Azure OpenAI access (Cognitive Services OpenAI User) |
+| User-assigned MI | Managed Identity | Azure DevOps access (added as ADO org user) |
+
+### Deployment Scripts
+
+All scripts are in the `deploy/` directory:
+
+| Script | Purpose |
+|---|---|
+| `deploy.ps1` | Full provisioning + deployment (creates resources, assigns RBAC, builds UI, packages, deploys) |
+| `prepare-api.ps1` | Packages API + UI into a zip for deployment (used by deploy.ps1) |
+
+### Quick Deploy (Code Only)
+
+```powershell
+# Skip provisioning, just rebuild and redeploy
+.\deploy\deploy.ps1 -SkipProvision
+
+# Skip both provisioning and build (redeploy existing package)
+.\deploy\deploy.ps1 -SkipProvision -SkipBuild
+```
+
+### Full Deploy (First Time)
+
+```powershell
+.\deploy\deploy.ps1 `
+    -ResourceGroup "commit-ai-resolver-rg" `
+    -AppName "commit-ai-resolver" `
+    -Location "westus2" `
+    -AriaIngestionToken "<token>"
+```
+
+### How It Works
+
+1. **`prepare-api.ps1`** copies `api/`, `src/services/`, `src/config/`, and `ui/dist/` into a staging directory, generates a `startup.sh` script, and creates a zip with forward-slash paths (Linux-compatible)
+2. **`deploy.ps1`** deploys the zip via `az webapp deployment source config-zip`, which triggers **Oryx build** on the server — Oryx runs `npm install`, compresses `node_modules` to `tar.gz`, and sets up extraction on startup
+3. On container startup, Oryx extracts `node_modules.tar.gz` to `/node_modules`, then runs `startup.sh`
+4. **`startup.sh`** creates symlinks for persistent data (`/home/data` → `/home/site/data`) and shared source (`/home/site/wwwroot/src` → `/home/site/src`), then starts `node server.js`
+
+### Data Persistence
+
+- **Daily JSON files and LanceDB** are stored at `/home/data/` (persistent across redeployments)
+- Data is uploaded separately via the Kudu ZIP API, not included in the deployment package
+- `startup.sh` symlinks `/home/site/data → /home/data` so relative paths (`../data/`) resolve correctly
+
+### App Settings
+
+| Setting | Value | Purpose |
+|---|---|---|
+| `PORT` | `4399` | Express server port |
+| `AZURE_CLIENT_ID` | `<MI client ID>` | User-assigned Managed Identity for ADO access |
+| `ARIA_INGESTION_TOKEN` | `<token>` | 1DS telemetry ingestion |
+| `ARIA_PROJECT_ID` | (optional) | 1DS project ID |
+| `SCM_DO_BUILD_DURING_DEPLOYMENT` | `true` | Enables Oryx build |
+| `WEBSITES_CONTAINER_START_TIME_LIMIT` | `300` | Container startup timeout (seconds) |
+
+### Authentication Setup
+
+After deployment, register the production redirect URI in the Azure AD app registration:
+- Platform: **Single-page application**
+- URI: `https://commit-ai-resolver.azurewebsites.net`
+
+### ADO Access via Managed Identity
+
+The user-assigned Managed Identity must be added as a user in the Azure DevOps organization:
+1. Go to ADO Organization Settings → Users
+2. Add the MI's service principal (Object ID) as a user
+3. Grant appropriate project access for commit fetching
+
+### Uploading Data
+
+Data files are uploaded separately to persistent storage via the Kudu ZIP API:
+
+```powershell
+$token = az account get-access-token --query accessToken -o tsv
+Compress-Archive -Path data\* -DestinationPath data.zip
+curl -X PUT "https://commit-ai-resolver.scm.azurewebsites.net/api/zip/data/" `
+    -H "Authorization: Bearer $token" `
+    -H "Content-Type: application/zip" `
+    --data-binary "@data.zip"
+```
+
+---
+
+## 13. Open Questions
 
 1. How are release tags structured in each repo? Are they consistent or repo-specific?
 2. Where do pilot flag definitions live — in code, in a config service, or both?

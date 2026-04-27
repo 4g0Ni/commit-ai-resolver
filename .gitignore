@@ -188,3 +188,8 @@ tools/fetch-pipeline-status.ps1
 
 # Playwright CLI artifacts
 .playwright-cli/
+
+# Deployment artifacts
+deploy/*.zip
+deploy/.staging/
+deploy/.staging-lock/

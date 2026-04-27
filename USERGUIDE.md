@@ -531,6 +531,89 @@ commit-ai-resolver/
 
 ---
 
+## Deployment to Azure
+
+The application deploys to a single Azure App Service that serves both the API and UI.
+
+**Live URL:** https://commit-ai-resolver.azurewebsites.net
+
+### Prerequisites
+
+- **Azure CLI** — logged in with `az login`
+- **Node.js** v18+
+- UI built (`cd ui && npm run build`)
+
+### Deploy Commands
+
+```powershell
+# Full deploy (first time — provisions resources + deploys)
+.\deploy\deploy.ps1
+
+# Redeploy code only (resources already exist)
+.\deploy\deploy.ps1 -SkipProvision
+
+# Redeploy without rebuilding (use existing package)
+.\deploy\deploy.ps1 -SkipProvision -SkipBuild
+```
+
+### What Gets Deployed
+
+The `deploy/prepare-api.ps1` script packages:
+- `api/` — Express server, agents, telemetry
+- `src/services/` and `src/config/` — business logic (symlinked from `/home/site/src`)
+- `ui/dist/` — built React app (served as static files)
+- `startup.sh` — container startup script (creates symlinks, starts server)
+
+**Not included in the package:**
+- `data/` — uploaded separately to `/home/data` via Kudu ZIP API (persists across redeployments)
+- `node_modules/` — installed on the server by Oryx build
+
+### Upload Data Files
+
+Daily JSON files and the LanceDB vector store must be uploaded separately:
+
+```powershell
+$token = az account get-access-token --query accessToken -o tsv
+Compress-Archive -Path data\* -DestinationPath data.zip
+curl -X PUT "https://commit-ai-resolver.scm.azurewebsites.net/api/zip/data/" `
+    -H "Authorization: Bearer $token" `
+    -H "Content-Type: application/zip" `
+    --data-binary "@data.zip"
+```
+
+### App Settings
+
+Configure via Azure portal or CLI:
+
+```powershell
+az webapp config appsettings set --name commit-ai-resolver --resource-group commit-ai-resolver-rg --settings `
+    "PORT=4399" `
+    "AZURE_CLIENT_ID=<user-assigned-MI-client-id>" `
+    "ARIA_INGESTION_TOKEN=<token>" `
+    "SCM_DO_BUILD_DURING_DEPLOYMENT=true" `
+    "WEBSITES_CONTAINER_START_TIME_LIMIT=300"
+```
+
+### Post-Deployment Checklist
+
+1. Register `https://commit-ai-resolver.azurewebsites.net` as a redirect URI in the Azure AD app registration (Single-page application platform)
+2. Add the user-assigned Managed Identity as a user in the ADO organization (for commit fetching)
+3. Verify: `curl https://commit-ai-resolver.azurewebsites.net/` returns 200
+4. Verify: navigate to the URL in a browser and sign in
+
+### Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| 503 after deploy | Oryx build not triggered | Use `az webapp deployment source config-zip` (not `az webapp deploy --type zip`) |
+| `Cannot find package 'dotenv'` | node_modules missing | Redeploy with `SCM_DO_BUILD_DURING_DEPLOYMENT=true` |
+| `Cannot find module '../src/...'` | Symlink missing | Check `startup.sh` creates `ln -sfn "$DEPLOY_DIR/src" /home/site/src` |
+| rsync path errors with backslashes | Windows zip tool | `prepare-api.ps1` uses .NET ZipFile with forward-slash normalization |
+| ADO 401 errors in logs | MI not registered in ADO | Add MI service principal as user in ADO org settings |
+| MSAL redirect error | Redirect URI not registered | Add production URL to Azure AD app registration |
+
+---
+
 ## Adding a New Repository
 
 Edit `src/config/repositories.js`:
