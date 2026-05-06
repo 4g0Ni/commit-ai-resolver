@@ -6,9 +6,12 @@
 import Database from 'better-sqlite3';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { mkdirSync } from 'fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DB_PATH = join(__dirname, '..', 'data', 'feedback.db');
+const DATA_BASE = process.env.DATA_DIR || join(__dirname, '..', 'data');
+mkdirSync(DATA_BASE, { recursive: true });
+const DB_PATH = join(DATA_BASE, 'feedback.db');
 
 const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
@@ -208,6 +211,14 @@ export function getUsageMetrics() {
             retentionRate,
         },
     };
+}
+
+/**
+ * Delete all rows from chat_feedback and chat_queries tables.
+ */
+export function clearDatabase() {
+    db.exec('DELETE FROM chat_feedback');
+    db.exec('DELETE FROM chat_queries');
 }
 
 export default db;

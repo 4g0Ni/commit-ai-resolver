@@ -4,7 +4,7 @@
 
 .DESCRIPTION
   Provisions and deploys:
-  - Azure App Service (Linux, Node 20) for Express API + React UI
+  - Azure App Service (Windows, Node 20) for Express API + React UI
   - Managed Identity + RBAC for Azure OpenAI access
   The UI is served as static files from the same App Service (no SWA needed).
 
@@ -12,7 +12,7 @@
   Azure resource group name. Default: commit-ai-resolver-rg
 
 .PARAMETER AppName
-  Base name for resources. Default: commit-ai-resolver
+  Base name for resources. Default: commit-ai-resolver-win
 
 .PARAMETER Location
   Azure region. Default: westus2
@@ -47,7 +47,7 @@
 [CmdletBinding()]
 param(
     [string]$ResourceGroup = "commit-ai-resolver-rg",
-    [string]$AppName = "commit-ai-resolver",
+    [string]$AppName = "commit-ai-resolver-win",
     [string]$Location = "westus2",
     [string]$OpenAIResourceGroup,
     [string]$OpenAIResourceName = "yizha-maz2xf24-swedencentral",
@@ -100,6 +100,7 @@ Write-Host "  Resource Group:    $ResourceGroup" -ForegroundColor Gray
 Write-Host "  App Service:       $AppServiceName" -ForegroundColor Gray
 Write-Host "  App Service Plan:  $AppServicePlan" -ForegroundColor Gray
 Write-Host "  Location:          $Location" -ForegroundColor Gray
+Write-Host "  OS:                Windows" -ForegroundColor Gray
 
 # ===============================
 # Provision Azure Resources
@@ -112,12 +113,11 @@ if (-not $SkipProvision) {
     Write-Success "Resource group ready"
 
     # --- App Service ---
-    Write-Step "Creating App Service Plan: $AppServicePlan (Linux B1)..."
+    Write-Step "Creating App Service Plan: $AppServicePlan (Windows B1)..."
     az appservice plan create `
         --name $AppServicePlan `
         --resource-group $ResourceGroup `
         --sku B1 `
-        --is-linux `
         --output none
     Write-Success "App Service Plan ready"
 
@@ -126,16 +126,15 @@ if (-not $SkipProvision) {
         --name $AppServiceName `
         --resource-group $ResourceGroup `
         --plan $AppServicePlan `
-        --runtime "NODE:20-lts" `
+        --runtime "NODE:20LTS" `
         --output none
     Write-Success "App Service ready"
 
     Write-Step "Configuring App Service settings..."
     $appSettings = @(
-        "PORT=4399",
         "WEBSITE_NODE_DEFAULT_VERSION=~20",
-        "SCM_DO_BUILD_DURING_DEPLOYMENT=true",
-        "WEBSITES_CONTAINER_START_TIME_LIMIT=300"
+        "DATA_DIR=D:\home\data",
+        "SCM_DO_BUILD_DURING_DEPLOYMENT=false"
     )
     if ($AriaIngestionToken) { $appSettings += "ARIA_INGESTION_TOKEN=$AriaIngestionToken" }
     if ($AriaProjectId) { $appSettings += "ARIA_PROJECT_ID=$AriaProjectId" }
@@ -146,18 +145,19 @@ if (-not $SkipProvision) {
         --settings @appSettings `
         --output none
 
-    # Set startup command
+    # Set startup command (no startup.sh on Windows — just the node command)
     az webapp config set `
         --name $AppServiceName `
         --resource-group $ResourceGroup `
-        --startup-file "/home/site/wwwroot/startup.sh" `
+        --startup-file "node server.js" `
         --output none
 
-    # Enable websockets (needed for SSE)
+    # Enable websockets (needed for SSE) and 64-bit platform (needed for LanceDB native binary)
     az webapp config set `
         --name $AppServiceName `
         --resource-group $ResourceGroup `
         --web-sockets-enabled true `
+        --use-32bit-worker-process false `
         --output none
 
     Write-Success "App settings configured"
@@ -234,10 +234,12 @@ if (-not (Test-Path $apiZip)) {
     throw "Package not found: $apiZip. Run without -SkipBuild or run prepare-api.ps1 first."
 }
 
-az webapp deployment source config-zip `
+az webapp deploy `
     --name $AppServiceName `
     --resource-group $ResourceGroup `
-    --src $apiZip `
+    --src-path $apiZip `
+    --type zip `
+    --clean true `
     --output none
 
 Write-Success "Deployed to https://$AppServiceName.azurewebsites.net"

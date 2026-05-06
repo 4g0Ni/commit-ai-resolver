@@ -876,7 +876,8 @@ All scripts are in the `deploy/` directory:
 | Script | Purpose |
 |---|---|
 | `deploy.ps1` | Full provisioning + deployment (creates resources, assigns RBAC, builds UI, packages, deploys) |
-| `prepare-api.ps1` | Packages API + UI into a zip for deployment (used by deploy.ps1) |
+| `prepare-api.ps1` | Packages API + UI + scripts into a zip for deployment (used by deploy.ps1) |
+| `reset-remote.ps1` | Interactive remote data management via Kudu API (refresh, reset, rebuild embeddings) |
 
 ### Quick Deploy (Code Only)
 
@@ -900,7 +901,7 @@ All scripts are in the `deploy/` directory:
 
 ### How It Works
 
-1. **`prepare-api.ps1`** copies `api/`, `src/services/`, `src/config/`, and `ui/dist/` into a staging directory, generates a `startup.sh` script, and creates a zip with forward-slash paths (Linux-compatible)
+1. **`prepare-api.ps1`** copies `api/`, `src/services/`, `src/config/`, `scripts/`, and `ui/dist/` into a staging directory, generates a `startup.sh` script, and creates a zip with forward-slash paths (Linux-compatible)
 2. **`deploy.ps1`** deploys the zip via `az webapp deployment source config-zip`, which triggers **Oryx build** on the server — Oryx runs `npm install`, compresses `node_modules` to `tar.gz`, and sets up extraction on startup
 3. On container startup, Oryx extracts `node_modules.tar.gz` to `/node_modules`, then runs `startup.sh`
 4. **`startup.sh`** creates symlinks for persistent data (`/home/data` → `/home/site/data`) and shared source (`/home/site/wwwroot/src` → `/home/site/src`), then starts `node server.js`
@@ -910,6 +911,71 @@ All scripts are in the `deploy/` directory:
 - **Daily JSON files and LanceDB** are stored at `/home/data/` (persistent across redeployments)
 - Data is uploaded separately via the Kudu ZIP API, not included in the deployment package
 - `startup.sh` symlinks `/home/site/data → /home/data` so relative paths (`../data/`) resolve correctly
+
+### Data Management (Reset / Refresh / Rebuild)
+
+The system provides tools to manage data on both local and deployed environments.
+
+#### CLI Script (`scripts/reset-and-refresh.js`)
+
+```bash
+# Reset all data + backfill 90 days
+node scripts/reset-and-refresh.js
+
+# Reset + backfill custom window
+node scripts/reset-and-refresh.js --days 60
+
+# Only reset (no backfill)
+node scripts/reset-and-refresh.js --reset-only
+
+# Backfill missing commits only (skip existing, preserve data)
+node scripts/reset-and-refresh.js --refresh-only --days 90
+
+# Rebuild vector embeddings from existing daily JSON (no ADO fetch)
+node scripts/reset-and-refresh.js --rebuild-embeddings
+```
+
+**What gets cleared (reset):**
+- Daily JSON files (`data/daily/*.json`)
+- LanceDB vector store (`data/lancedb/`)
+- SQLite database (`data/feedback.db` — chat queries, feedback)
+- Refresh checkpoint (`data/refresh-checkpoint.json`)
+- Diffs cache (`data/diffs/`)
+
+**Refresh-only mode** fetches commits day-by-day and performs commit-level deduplication — existing summaries are preserved, only new commits are fetched and summarized.
+
+**Rebuild-embeddings mode** reads all existing daily JSON files and regenerates vector embeddings without re-fetching from ADO. Useful after lancedb corruption or deletion.
+
+#### Remote Data Management (`deploy/reset-remote.ps1`)
+
+Interactive PowerShell menu for managing data on the deployed Azure App Service:
+
+```powershell
+# Interactive menu
+.\deploy\reset-remote.ps1
+
+# Non-interactive
+.\deploy\reset-remote.ps1 -Mode refresh-only -Days 90
+.\deploy\reset-remote.ps1 -Mode rebuild-embeddings
+.\deploy\reset-remote.ps1 -Mode reset-and-refresh -Days 90
+```
+
+| Option | Description |
+|---|---|
+| 1) Refresh only | Backfill missing commits (preserves existing data) |
+| 2) Reset partial | Clear daily JSON + checkpoint only (preserves vector DB, feedback) |
+| 3) Reset ALL | Clear everything (daily JSON, vector DB, feedback, metrics, diffs, checkpoint) |
+| 4) Reset ALL + Refresh | Clear everything and backfill commits |
+| 5) Rebuild embeddings | Regenerate vector DB from existing daily JSON |
+
+The script uses Azure AD bearer tokens for Kudu API authentication. For reset operations that delete SQLite files, the App Service is stopped first to release file locks.
+
+Alternatively, SSH into the server and run the script directly:
+
+```bash
+az webapp ssh --name commit-ai-resolver --resource-group commit-ai-resolver-rg
+cd /home/site/wwwroot && node scripts/reset-and-refresh.js --refresh-only --days 90
+```
 
 ### App Settings
 

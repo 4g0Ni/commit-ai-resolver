@@ -13,9 +13,10 @@
   },
   "dependencies": {
     "@azure/identity": "^4.0.0",
-    "@lancedb/lancedb": "^0.27.2",
     "apache-arrow": "^18.1.0",
+    "better-sqlite3": "^12.9.0",
     "diff": "^7.0.0",
-    "openai": "^6.33.0"
+    "openai": "^6.33.0",
+    "sqlite-vec": "^0.1.9"
   }
 }

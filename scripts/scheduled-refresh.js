@@ -6,7 +6,7 @@
  *   node scripts/scheduled-refresh.js --loop 60    — Run every 60 minutes
  */
 
-import { refreshAllCommits, startScheduledRefresh } from '../services/scheduled-refresh.js';
+import { refreshAllCommits, startScheduledRefresh } from '../src/services/scheduled-refresh.js';
 
 const args = process.argv.slice(2);
 const loopIdx = args.indexOf('--loop');

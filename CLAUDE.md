@@ -17,7 +17,8 @@ api/           — Express backend (REST API + SSE streaming chat)
 ui/            — React (Vite) frontend
   src/components/  — React components
   src/api.js       — API client functions
-deploy/        — Azure deployment scripts (prepare-api.ps1, deploy.ps1)
+deploy/        — Azure deployment scripts (prepare-api.ps1, deploy.ps1, reset-remote.ps1)
+scripts/       — CLI utilities (reset-and-refresh.js)
 data/          — Runtime data (daily JSON, diffs, LanceDB vector store) — gitignored
 ```
 
@@ -160,13 +161,14 @@ When adding a new repo, update:
 
 - **Target:** Single Azure App Service (Linux B1, Node 20 LTS) at `commit-ai-resolver.azurewebsites.net`
 - **Architecture:** Express API + React UI served from the same origin (no separate SWA)
-- **Scripts:** `deploy/deploy.ps1` (full provision + deploy), `deploy/prepare-api.ps1` (package API + UI into zip)
+- **Scripts:** `deploy/deploy.ps1` (full provision + deploy), `deploy/prepare-api.ps1` (package API + UI into zip), `deploy/reset-remote.ps1` (remote data management via Kudu)
 - **Build system:** Oryx (triggered by `az webapp deployment source config-zip`) — runs `npm install` on server, compresses `node_modules` to `tar.gz`
 - **Data persistence:** `/home/data/` (survives redeployments). Uploaded separately via Kudu ZIP API, not included in deployment package
 - **Startup:** `startup.sh` creates symlinks (`/home/site/data → /home/data`, `/home/site/src → wwwroot/src`) then runs `node server.js`
 - **Identity:** System-assigned MI for Azure OpenAI, user-assigned MI (set via `AZURE_CLIENT_ID`) for ADO access
 - **Zip creation:** Uses .NET `ZipFile` (not `Compress-Archive`) to ensure forward-slash paths for Linux compatibility
 - **Deploy commands:** `.\deploy\deploy.ps1 -SkipProvision` (redeploy code), `.\deploy\deploy.ps1 -SkipProvision -SkipBuild` (redeploy existing package)
+- **Data management:** `.\deploy\reset-remote.ps1` (interactive menu) or `scripts/reset-and-refresh.js` (CLI). Modes: `--refresh-only` (backfill missing commits, skip existing), `--reset-only` (clear all data), `--rebuild-embeddings` (regenerate vector DB from daily JSON without re-fetching from ADO). Remote management uses Kudu VFS API to upload and execute launcher scripts on the server.
 
 ## Common Patterns
 

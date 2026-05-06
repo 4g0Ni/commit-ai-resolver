@@ -44,9 +44,44 @@ New-Item -ItemType Directory -Path $srcDest -Force | Out-Null
 Copy-Item -Path (Join-Path $RepoRoot "src\services") -Destination (Join-Path $srcDest "services") -Recurse -Force
 Copy-Item -Path (Join-Path $RepoRoot "src\config") -Destination (Join-Path $srcDest "config") -Recurse -Force
 
-Write-Step "Skipping data directory (uploaded separately)..."
-# Data is uploaded separately to /home/data via Kudu API to avoid bloating the zip.
-# The startup script (startup.sh) creates a symlink: /home/site/wwwroot/data -> /home/data
+Write-Step "Fixing import paths for flat layout..."
+# In the repo, api/server.js imports ../src/. In the staging dir, server.js and src/ are siblings,
+# so we rewrite '../src/' to './src/'.
+$serverJs = Join-Path $StagingDir "server.js"
+$content = [System.IO.File]::ReadAllText($serverJs)
+$content = $content -replace '\.\./src/', './src/'
+[System.IO.File]::WriteAllText($serverJs, $content)
+
+Write-Step "Copying scripts..."
+$scriptsDest = Join-Path $StagingDir "scripts"
+New-Item -ItemType Directory -Path $scriptsDest -Force | Out-Null
+Copy-Item -Path (Join-Path $RepoRoot "scripts\*.js") -Destination $scriptsDest -Force
+
+Write-Step "Creating web.config for HttpPlatformHandler..."
+$webConfig = @'
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <system.webServer>
+    <webSocket enabled="true" />
+    <handlers>
+      <add name="httpPlatformHandler" path="*" verb="*" modules="httpPlatformHandler" resourceType="Unspecified"/>
+    </handlers>
+    <httpPlatform processPath="%ProgramFiles%\nodejs\20.20.2\node.exe"
+                  arguments="server.js"
+                  startupTimeLimit="60"
+                  stdoutLogEnabled="true"
+                  stdoutLogFile="D:\home\LogFiles\node">
+      <environmentVariables>
+        <environmentVariable name="PORT" value="%HTTP_PLATFORM_PORT%" />
+        <environmentVariable name="NODE_ENV" value="production" />
+      </environmentVariables>
+    </httpPlatform>
+    <httpErrors existingResponse="PassThrough" />
+  </system.webServer>
+</configuration>
+'@
+$webConfigPath = Join-Path $StagingDir "web.config"
+[System.IO.File]::WriteAllText($webConfigPath, $webConfig)
 
 Write-Step "Copying UI dist..."
 $uiDist = Join-Path $RepoRoot "ui\dist"
@@ -59,34 +94,6 @@ if (Test-Path $uiDist) {
     Write-Host "  [WARN] ui/dist not found - run 'npm run build' in ui/ first" -ForegroundColor Yellow
 }
 
-Write-Step "Creating startup script..."
-# Startup script symlinks persistent /home/data to the deployment's expected ../data path,
-# seeds initial data on first deploy, then starts the server.
-$startup = @'
-#!/bin/bash
-set -e
-
-DEPLOY_DIR="/home/site/wwwroot"
-PERSISTENT_DATA="/home/data"
-
-# Persistent data at /home/data (survives redeployments)
-mkdir -p "$PERSISTENT_DATA/daily" "$PERSISTENT_DATA/lancedb"
-
-# Symlink so relative paths (../data/) resolve to persistent storage
-# db.js uses join(__dirname, '..', 'data') which resolves to /home/site/data
-ln -sfn "$PERSISTENT_DATA" /home/site/data
-
-# server.js imports ../src/ — symlink so it resolves outside wwwroot
-ln -sfn "$DEPLOY_DIR/src" /home/site/src
-
-echo "[startup] Data dir: $PERSISTENT_DATA (symlinked)"
-echo "[startup] Starting server..."
-cd "$DEPLOY_DIR"
-exec node server.js
-'@
-# Use ASCII to avoid BOM (UTF-8 BOM breaks the shebang on Linux)
-$startup | Set-Content -Encoding ASCII -NoNewline -Path (Join-Path $StagingDir "startup.sh")
-
 Write-Step "Updating package.json for App Service..."
 # The api/package.json was already copied. Just ensure "type": "module" and start script are set.
 # The dependencies from api/package.json are preserved so npm install works correctly.
@@ -94,25 +101,23 @@ $pkgPath = Join-Path $StagingDir "package.json"
 $pkg = Get-Content $pkgPath -Raw | ConvertFrom-Json
 $pkg.scripts.start = "node server.js"
 if (-not $pkg.type) { $pkg | Add-Member -NotePropertyName "type" -NotePropertyValue "module" -Force }
-$pkg | ConvertTo-Json -Depth 10 | Set-Content -Encoding UTF8 -Path $pkgPath
+$pkgJson = $pkg | ConvertTo-Json -Depth 10
+[System.IO.File]::WriteAllText($pkgPath, $pkgJson)
 
-Write-Step "Preparing dependencies..."
-# Skip local npm install -- let Oryx build on App Service handle this.
-# This avoids platform-specific native module issues (e.g., better-sqlite3).
-$lockFile = Join-Path $ScriptDir ".staging-lock\package-lock.json"
-if (-not (Test-Path $lockFile)) { $lockFile = Join-Path $RepoRoot "api\package-lock.json" }
-if (Test-Path $lockFile) {
-    Copy-Item -Path $lockFile -Destination (Join-Path $StagingDir "package-lock.json") -Force
-    Write-Success "package-lock.json included for Oryx build"
-}
-
-# Remove all node_modules -- Oryx will install on the server
-Get-ChildItem -Path $StagingDir -Recurse -Directory -Filter "node_modules" -ErrorAction SilentlyContinue |
-    ForEach-Object { Remove-Item -Path $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
-Write-Success "Stripped node_modules from package"
-
-# Ensure .npmrc points to public registry (corporate .npmrc on server may have stale tokens)
-"registry=https://registry.npmjs.org/" | Set-Content -Encoding UTF8 -Path (Join-Path $StagingDir ".npmrc")
+Write-Step "Installing dependencies locally (Windows x64)..."
+# Kudu's build system uses 32-bit Node which can't install LanceDB (requires x64).
+# Install locally and ship node_modules in the zip instead.
+Push-Location $StagingDir
+try {
+    # Ensure .npmrc points to public registry
+    "registry=https://registry.npmjs.org/" | Set-Content -Encoding ASCII -Path (Join-Path $StagingDir ".npmrc")
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    npm install --omit=dev --registry https://registry.npmjs.org/ 2>&1 | Write-Host
+    $ErrorActionPreference = $prevEAP
+    if ($LASTEXITCODE -ne 0) { throw "npm install failed" }
+    Write-Success "Dependencies installed (node_modules included in package)"
+} finally { Pop-Location }
 
 Write-Step "Creating zip package..."
 if (Test-Path $OutputPath) { Remove-Item $OutputPath -Force }

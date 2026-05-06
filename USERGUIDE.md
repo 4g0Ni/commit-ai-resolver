@@ -485,8 +485,11 @@ commit-ai-resolver/
 │   ├── tests/
 │   │   ├── test-search-e2e.js        # E2E tests (74 tests, 13 suites)
 │   │   ├── test-vector-store.js      # Unit tests for vector store
+│   │   ├── test-lancedb-upsert.js    # LanceDB resilience tests (corruption recovery)
 │   │   └── test-vector-search-integration.js  # Integration tests
 │   └── package.json
+├── scripts/                          # CLI utilities
+│   └── reset-and-refresh.js          # Reset data + backfill commits + rebuild embeddings
 ├── api/                              # Express backend API
 │   ├── server.js                     # REST endpoints + agentic chat pipeline
 │   ├── db.js                         # SQLite telemetry DB (queries, feedback, usage metrics)
@@ -519,6 +522,10 @@ commit-ai-resolver/
 │   │       ├── FeedbackPanel.jsx     # User feedback overlay (thumbs up/down)
 │   │       └── UsageMetrics.jsx      # Usage metrics dashboard (DAU/MAU, latency, feedback rates)
 │   └── package.json
+├── deploy/
+│   ├── deploy.ps1                    # Full provisioning + deployment
+│   ├── prepare-api.ps1               # Package API + UI + scripts into zip
+│   └── reset-remote.ps1              # Remote data management via Kudu API
 ├── data/
 │   ├── daily/                        # Generated daily JSON files
 │   │   ├── index.json                # Dates index
@@ -526,7 +533,8 @@ commit-ai-resolver/
 │   ├── lancedb/                      # LanceDB vector database (auto-generated)
 │   └── diffs/                        # LLM input diffs (for inspection)
 ├── README.md                         # Product specification
-└── USERGUIDE.md                      # This file
+├── USERGUIDE.md                      # This file
+└── package.json                      # Root package.json (ESM: "type": "module")
 ```
 
 ---
@@ -562,6 +570,7 @@ The `deploy/prepare-api.ps1` script packages:
 - `api/` — Express server, agents, telemetry
 - `src/services/` and `src/config/` — business logic (symlinked from `/home/site/src`)
 - `ui/dist/` — built React app (served as static files)
+- `scripts/` — CLI utilities (reset-and-refresh.js)
 - `startup.sh` — container startup script (creates symlinks, starts server)
 
 **Not included in the package:**
@@ -611,6 +620,89 @@ az webapp config appsettings set --name commit-ai-resolver --resource-group comm
 | rsync path errors with backslashes | Windows zip tool | `prepare-api.ps1` uses .NET ZipFile with forward-slash normalization |
 | ADO 401 errors in logs | MI not registered in ADO | Add MI service principal as user in ADO org settings |
 | MSAL redirect error | Redirect URI not registered | Add production URL to Azure AD app registration |
+
+---
+
+## Data Management (Reset / Refresh / Rebuild)
+
+### Local CLI
+
+```bash
+# Reset all data + backfill 90 days of commits
+node scripts/reset-and-refresh.js
+
+# Backfill missing commits only (preserves existing summaries)
+node scripts/reset-and-refresh.js --refresh-only --days 90
+
+# Only reset data (no backfill)
+node scripts/reset-and-refresh.js --reset-only
+
+# Rebuild vector embeddings from existing daily JSON (no ADO fetch)
+node scripts/reset-and-refresh.js --rebuild-embeddings
+
+# Custom backfill window
+node scripts/reset-and-refresh.js --days 60
+```
+
+### What Gets Cleared (Reset)
+
+| Data | Location | Description |
+|---|---|---|
+| Daily JSON | `data/daily/*.json` | Commit summaries per day |
+| LanceDB | `data/lancedb/` | Vector embeddings for RAG search |
+| SQLite DB | `data/feedback.db` | Chat queries, feedback, usage metrics |
+| Checkpoint | `data/refresh-checkpoint.json` | Last successful refresh timestamp per repo |
+| Diffs cache | `data/diffs/` | Cached commit diffs |
+
+### Refresh-Only Mode
+
+Fetches commits day-by-day and performs **commit-level deduplication** — existing summaries and embeddings are preserved. Only new commits (not yet in daily JSON) are fetched from ADO, summarized by LLM, and embedded. Safe to run repeatedly.
+
+### Rebuild Embeddings
+
+Regenerates the LanceDB vector store from existing daily JSON files without re-fetching from ADO. Use this after:
+- LanceDB corruption (e.g., "Invalid range 0..0" errors)
+- Accidentally deleting `data/lancedb/`
+- Changing the embedding schema
+
+### Remote Server Management
+
+#### Option 1: Interactive Menu (PowerShell)
+
+```powershell
+.\deploy\reset-remote.ps1
+```
+
+| Option | Description |
+|---|---|
+| 1) Refresh only | Backfill missing commits (preserves existing data) |
+| 2) Reset partial | Clear daily JSON + checkpoint only (preserves vector DB, feedback) |
+| 3) Reset ALL | Clear everything |
+| 4) Reset ALL + Refresh | Clear everything and backfill commits |
+| 5) Rebuild embeddings | Regenerate vector DB from existing daily JSON |
+
+Non-interactive:
+```powershell
+.\deploy\reset-remote.ps1 -Mode refresh-only -Days 90
+.\deploy\reset-remote.ps1 -Mode rebuild-embeddings
+```
+
+#### Option 2: SSH
+
+```bash
+az webapp ssh --name commit-ai-resolver --resource-group commit-ai-resolver-rg
+cd /home/site/wwwroot && node scripts/reset-and-refresh.js --refresh-only --days 90
+```
+
+#### Monitoring
+
+```bash
+# Stream live logs
+az webapp log tail --name commit-ai-resolver --resource-group commit-ai-resolver-rg
+
+# Or via SSH
+tail -f /home/data/backfill.log
+```
 
 ---
 

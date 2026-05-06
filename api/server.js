@@ -32,7 +32,7 @@ import { isInitializeRequest } from '@modelcontextprotocol/server';
 import { createMcpServer } from './mcp.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = join(__dirname, '..', 'data', 'daily');
+const DATA_DIR = join(process.env.DATA_DIR || join(__dirname, '..', 'data'), 'daily');
 const NO_AUTH = process.argv.includes('--no-auth') || process.env.NO_AUTH === '1';
 const PORT = process.env.PORT || 4399;
 

@@ -11,7 +11,7 @@
  * Persists per-repo checkpoints to disk for retry and backfill on restart.
  */
 
-import { readFile, writeFile, readdir, mkdir } from 'fs/promises';
+import { readFile, writeFile, readdir, mkdir, rm, unlink } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { existsSync } from 'fs';
@@ -19,11 +19,14 @@ import { REPOSITORIES } from '../config/repositories.js';
 import { fetchCommitsBetweenDates } from './ado-git-client.js';
 import { summarizeCommits } from './commit-summarizer.js';
 import { generateEmbeddings } from './embedding-client.js';
-import { upsertVectors } from './vector-store.js';
+import { upsertVectors, closeVectorStore } from './vector-store.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = join(__dirname, '..', '..', 'data', 'daily');
-const CHECKPOINT_PATH = join(__dirname, '..', '..', 'data', 'refresh-checkpoint.json');
+const DATA_ROOT = process.env.DATA_DIR || join(__dirname, '..', '..', 'data');
+const DATA_DIR = join(DATA_ROOT, 'daily');
+const CHECKPOINT_PATH = join(DATA_ROOT, 'refresh-checkpoint.json');
+const VECTORS_DB_PATH = process.env.VECTORS_DB || join(DATA_ROOT, 'vectors.db');
+const DIFFS_DIR = join(DATA_ROOT, 'diffs');
 const DEFAULT_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 const MAX_RETRIES = 3;
 const EMBEDDING_BATCH_SIZE = 16;
@@ -213,10 +216,206 @@ async function embedAndIndex(formattedCommits, repoName, dateStr) {
     }
 
     if (allEntries.length > 0) {
-        const count = await upsertVectors(allEntries);
-        return count;
+        try {
+            const count = await upsertVectors(allEntries);
+            return count;
+        } catch (err) {
+            console.error(`    Vector upsert error: ${err.message}`);
+            return 0;
+        }
     }
     return 0;
+}
+
+// ── Reset & Backfill ──
+
+/**
+ * Delete all data: daily JSON, LanceDB, SQLite tables, checkpoint, diffs.
+ * Requires clearDatabase from api/db.js to be passed in (avoids circular import).
+ */
+export async function resetAllData(clearDatabaseFn) {
+    console.log('Resetting all data...');
+
+    // 1. Daily JSON files
+    if (existsSync(DATA_DIR)) {
+        const files = await readdir(DATA_DIR);
+        for (const f of files) {
+            await unlink(join(DATA_DIR, f));
+        }
+        console.log(`  Deleted ${files.length} daily JSON files.`);
+    }
+
+    // 2. SQLite vector store (close connection first to release Windows file lock)
+    closeVectorStore();
+    let vecDeleted = 0;
+    for (const suffix of ['', '-wal', '-shm']) {
+        const p = VECTORS_DB_PATH + suffix;
+        if (existsSync(p)) {
+            await unlink(p);
+            vecDeleted++;
+        }
+    }
+    if (vecDeleted > 0) console.log('  Deleted vector store (vectors.db).');
+
+    // 3. SQLite database
+    if (clearDatabaseFn) {
+        clearDatabaseFn();
+        console.log('  Cleared SQLite database.');
+    }
+
+    // 4. Checkpoint
+    if (existsSync(CHECKPOINT_PATH)) {
+        await unlink(CHECKPOINT_PATH);
+        console.log('  Deleted refresh checkpoint.');
+    }
+
+    // 5. Diffs cache
+    if (existsSync(DIFFS_DIR)) {
+        await rm(DIFFS_DIR, { recursive: true, force: true });
+        console.log('  Deleted diffs cache.');
+    }
+
+    console.log('Reset complete.\n');
+}
+
+/**
+ * Backfill commits for all repos from `days` days ago until now.
+ * Fetches day by day to stay well under the ADO API's default 100-result limit.
+ * Runs the full pipeline: fetch → summarize → daily JSON → embed → index.
+ *
+ * @param {number} days - Number of days to backfill (default: 90)
+ * @param {boolean} skipExisting - If true, skip commits already stored in daily JSON (default: false)
+ */
+export async function backfillCommits(days = 90, skipExisting = false) {
+    const toDate = new Date();
+    const fromDate = new Date(toDate.getTime() - days * 24 * 60 * 60 * 1000);
+    console.log(`Backfilling commits from ${fromDate.toISOString()} to ${toDate.toISOString()} (${days} days, skipExisting=${skipExisting})...\n`);
+
+    // Build daily windows (oldest first)
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const windows = [];
+    let windowStart = new Date(fromDate);
+    while (windowStart < toDate) {
+        const windowEnd = new Date(Math.min(windowStart.getTime() + DAY_MS, toDate.getTime()));
+        windows.push({ from: new Date(windowStart), to: windowEnd, dateStr: windowStart.toISOString().slice(0, 10) });
+        windowStart = windowEnd;
+    }
+
+    // Pre-load existing commit IDs per repo+date for skip checking
+    const existingCommitIds = {}; // { "repoName/dateStr": Set<commitId> }
+    if (skipExisting && existsSync(DATA_DIR)) {
+        const files = await readdir(DATA_DIR);
+        for (const f of files) {
+            if (!f.endsWith('.json') || f === 'index.json') continue;
+            try {
+                const raw = await readFile(join(DATA_DIR, f), 'utf-8');
+                const day = JSON.parse(raw);
+                const dateStr = f.replace('.json', '');
+                for (const [repoName, repoData] of Object.entries(day.repositories || {})) {
+                    const ids = new Set((repoData.commits || []).map(c => c.commitId));
+                    if (ids.size > 0) existingCommitIds[`${repoName}/${dateStr}`] = ids;
+                }
+            } catch { /* skip corrupt files */ }
+        }
+        const totalExisting = Object.values(existingCommitIds).reduce((s, ids) => s + ids.size, 0);
+        console.log(`  Loaded ${totalExisting} existing commit IDs from daily JSON.\n`);
+    }
+
+    const checkpoint = {};
+
+    for (const repo of Object.values(REPOSITORIES)) {
+        console.log(`  Fetching ${repo.name} (${windows.length} days)...`);
+        let totalCommits = 0;
+        let totalIndexed = 0;
+        let totalSkipped = 0;
+
+        try {
+            for (let i = 0; i < windows.length; i++) {
+                const { from: wFrom, to: wTo, dateStr } = windows[i];
+                const commits = await fetchCommitsBetweenDates(repo, wFrom, wTo);
+                if (commits.length === 0) continue;
+
+                // Filter out commits that already exist in daily JSON
+                let toProcess = commits;
+                if (skipExisting) {
+                    const existingIds = existingCommitIds[`${repo.name}/${dateStr}`];
+                    if (existingIds) {
+                        toProcess = commits.filter(c => !existingIds.has(c.commitId));
+                        const skipped = commits.length - toProcess.length;
+                        totalSkipped += skipped;
+                        if (toProcess.length === 0) continue;
+                    }
+                }
+
+                totalCommits += toProcess.length;
+                console.log(`    [${i + 1}/${windows.length}] ${dateStr}: ${toProcess.length} new commits${commits.length !== toProcess.length ? ` (${commits.length - toProcess.length} existing skipped)` : ''}. Summarizing...`);
+                const summarized = await summarizeCommits(repo, toProcess);
+
+                const formatted = summarized.map(formatCommitForOutput);
+                const newCount = await mergeDailyJson(dateStr, repo.name, summarized);
+                if (newCount > 0) {
+                    const indexed = await embedAndIndex(formatted, repo.name, dateStr);
+                    totalIndexed += indexed;
+                }
+                await updateIndex(dateStr);
+            }
+
+            const skipMsg = totalSkipped > 0 ? `, ${totalSkipped} existing skipped` : '';
+            console.log(`  ${repo.name}: done (${totalCommits} new commits, ${totalIndexed} indexed${skipMsg}).\n`);
+            checkpoint[repo.name] = { lastSuccessAt: new Date().toISOString(), retryCount: 0 };
+        } catch (err) {
+            console.error(`  ${repo.name}: ERROR — ${err.message}`);
+            checkpoint[repo.name] = { lastSuccessAt: null, retryCount: 1, lastError: err.message };
+        }
+    }
+
+    await mkdir(dirname(CHECKPOINT_PATH), { recursive: true });
+    await saveCheckpoint(checkpoint);
+    console.log('Backfill complete.\n');
+}
+
+/**
+ * Rebuild all vector embeddings from existing daily JSON files.
+ * Useful after deleting lancedb/ without re-fetching from ADO.
+ */
+export async function rebuildEmbeddings() {
+    console.log('Rebuilding embeddings from existing daily JSON...\n');
+
+    if (!existsSync(DATA_DIR)) {
+        console.log('  No daily JSON directory found. Nothing to rebuild.');
+        return;
+    }
+
+    const files = (await readdir(DATA_DIR)).filter(f => f.endsWith('.json') && f !== 'index.json').sort();
+    console.log(`  Found ${files.length} daily JSON files.\n`);
+
+    let totalIndexed = 0;
+    for (const file of files) {
+        const dateStr = file.replace('.json', '');
+        try {
+            const raw = await readFile(join(DATA_DIR, file), 'utf-8');
+            const day = JSON.parse(raw);
+            for (const [repoName, repoData] of Object.entries(day.repositories || {})) {
+                const commits = repoData.commits || [];
+                if (commits.length === 0) continue;
+
+                const formatted = commits.map(c => ({
+                    shortId: c.shortId,
+                    commitId: c.commitId,
+                    author: c.author,
+                    summary: c.summary,
+                    url: c.url,
+                }));
+                const indexed = await embedAndIndex(formatted, repoName, dateStr);
+                totalIndexed += indexed;
+            }
+            console.log(`  ${dateStr}: embedded`);
+        } catch (err) {
+            console.error(`  ${dateStr}: ERROR — ${err.message}`);
+        }
+    }
+
+    console.log(`\nRebuild complete. ${totalIndexed} commits embedded.\n`);
 }
 
 // ── Core refresh logic ──

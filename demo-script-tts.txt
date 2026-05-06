@@ -1,0 +1,81 @@
+Commit AI Resolver is a daily change tracking and regression analysis tool for Microsoft Advertising repositories.
+It automatically fetches commits, summarizes them with AI using code diff analysis, and provides a searchable dashboard with an intelligent chat interface.
+So you can quickly find what changed and investigate live-site issues without manually reading every PR.
+
+The main dashboard shows a timeline of daily commits across five key repos: Campaign UI, Middle Tier, UI Server, AnB, and Campaign DB.
+Each day is summarized with commit counts, risk levels, and change types at a glance.
+Clicking a day expands the detail view.
+Each commit has an AI-generated summary based on the actual code diff, not just the PR title.
+This is important because PR titles are often vague or inaccurate.
+Our summaries tell you what the code actually changed.
+
+Let's walk through a real scenario.
+A manual tester has filed a bug.
+Let me paste the ADO work item link directly into the chat.
+The system reads the bug description automatically, including any attached screenshots.
+This is multimodal support.
+It can parse the text description, repro steps, and even analyze images the tester attached to understand what went wrong visually.
+You don't need to manually summarize the bug, just drop the link.
+
+Based on the bug details, it identifies the relevant feature area and time window, then searches through AI-generated commit summaries to find suspect commits.
+Traditionally, you'd read the bug, mentally map it to a code area, then scroll through dozens of PRs reading vague titles like "code cleanup" or "fix issue."
+That can take 30 minutes or more.
+
+It returns a list of suspicious commits ranked by relevance, showing who authored them, what code actually changed, and why they might be related to this bug.
+
+Now I ask it to investigate further.
+It digs deeper into each suspect commit, analyzing the specific code changes, explaining how they could have caused the reported behavior, and confirming which commit is the most likely culprit with a clear explanation of the causal chain.
+
+This is the key value: from a bug link to a confirmed suspect commit in under a minute, with full reasoning you can share directly with the dev who owns the fix.
+
+Here's another common scenario.
+I'll ask: can you find the UI changes from Yi Zhang where he added logs for ad editor view?
+You want to find what a specific person changed in a specific feature area.
+Normally, you'd search through PRs by author, read each PR title, but titles are often vague like "update files" or "fix issue."
+You'd have to open the actual PR diff to confirm what changed.
+That's time-consuming when someone has dozens of commits.
+
+With Commit AI Resolver, you just describe what you're looking for in plain language.
+The system searches through AI summaries generated from the actual code diffs.
+So even if the PR title said "minor update," our summary captures that logging was added to the ad editor view.
+You get accurate results regardless of how well the PR was titled.
+
+Now a follow-up question: what about similar changes from GitHub Copilot?
+Follow-up questions work with conversation context.
+Here I'm asking about the same type of change, logging in ad editor, but from a different author.
+This is useful when multiple people work on the same feature area and you want to see the full picture of what was modified, by whom, without manually cross-referencing PRs.
+
+Notice how it finds relevant commits even though the query is conversational.
+It understands "similar changes" means the same feature area, ad editor logging, and filters to a different author.
+You'd never get this from a simple PR title search.
+
+Beyond the web dashboard, Commit AI Resolver is available as an MCP server and as a Claude Code skill.
+This means any DRI agent or AI workflow can query commit data programmatically, and this matters a lot for real workflows.
+
+Here I'm asking: what recent changes are related to asset performance prediction score?
+This is a feature that spans multiple repos and multiple authors.
+In a traditional workflow, you'd have to know which repos to check, search through each one's PR history, and read through dozens of diffs.
+With the MCP tool, one natural language query returns everything relevant across all tracked repos.
+
+Why does this matter as an MCP integration?
+Think about the DRI routine.
+When you're on-call and an alert fires, say prediction scores are suddenly inaccurate, the first question is always "what changed recently?"
+Today, the DRI manually checks deployment logs, opens ADO, browses PRs, and reads diffs.
+That's 20 to 30 minutes before you even start debugging.
+
+With MCP, a DRI triage agent can do this automatically.
+It receives the alert, calls our search commits tool to find recent changes in the prediction score area, cross-references with deployment timelines, and presents the DRI with a shortlist of suspect commits.
+All before the human finishes reading the ICM ticket.
+
+It's not just DRI either.
+A release validation agent can query what config flags changed today before signing off a deployment.
+A code review agent can pull related recent changes to give reviewers broader context.
+Any agent that needs to answer "what changed?" can plug in Commit AI Resolver as an MCP tool.
+No custom integration needed, just connect and query.
+
+To recap: Commit AI Resolver solves the problem of understanding what actually changed across your codebase.
+It goes beyond PR titles by analyzing real code diffs with AI.
+Testers can trace bugs to suspect commits in seconds.
+Developers can review changes by person or feature area without reading every PR.
+And with MCP and skill integration, DRI agents can query commit intelligence programmatically as part of their incident triage workflow.
+Thank you.

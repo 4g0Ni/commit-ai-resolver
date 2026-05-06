@@ -12,7 +12,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DIFFS_DIR = join(__dirname, '..', '..', 'data', 'diffs');
+const DIFFS_DIR = join(process.env.DATA_DIR || join(__dirname, '..', '..', 'data'), 'diffs');
 const DOMAIN_DIR = join(__dirname, '..', '..', 'docs', 'domain');
 
 // Cache domain knowledge per repo (loaded once per process)

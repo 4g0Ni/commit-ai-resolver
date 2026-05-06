@@ -11,7 +11,6 @@
   "dependencies": {
     "@azure/identity": "^4.0.0",
     "@cfworker/json-schema": "^4.1.1",
-    "@lancedb/lancedb": "^0.27.2",
     "@microsoft/1ds-core-js": "^4.3.11",
     "@microsoft/1ds-post-js": "^4.3.11",
     "@modelcontextprotocol/node": "^2.0.0-alpha.2",
@@ -25,6 +24,7 @@
     "jsonwebtoken": "^9.0.3",
     "jwks-rsa": "^3.2.2",
     "openai": "^6.33.0",
+    "sqlite-vec": "^0.1.9",
     "zod": "^4.3.6"
   }
 }

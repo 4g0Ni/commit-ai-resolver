@@ -30,62 +30,78 @@ tell you what the code actually changed."
 ---------------------------------------------------------------------
 (Open the chat panel)
 
-"Let's walk through a real scenario. Imagine a manual tester files a bug:
-'Campaign budget validation broke after last Tuesday's deployment.' As the
-DRI, you need to find which commit caused it. Traditionally, you'd scroll
-through dozens of PRs, read each title — which may say something unhelpful
-like 'code cleanup' or 'fix issue' — and then open the actual diff to
-understand what changed. That can take 30 minutes or more."
+"Let's walk through a real scenario. A manual tester has filed a bug —
+let me paste the ADO work item link directly into the chat."
 
-(Type query: "What changes were made to campaign budget validation logic
-in CMUI in the last week?")
+(Paste: https://msasg.visualstudio.com/Bing_Ads/_workitems/edit/10552393)
 
-"With Commit AI Resolver, you just ask. The system searches through
-AI-generated summaries that are based on the actual code changes, not PR
-titles. It returns the suspicious commits ranked by relevance, with clear
-explanations of what each commit modified."
+"The system reads the bug description automatically — including any
+attached screenshots. This is multimodal support: it can parse the text
+description, repro steps, and even analyze images the tester attached to
+understand what went wrong visually. You don't need to manually summarize
+the bug — just drop the link."
 
-(Show the streaming response with cited commits)
+(Show the AI reading the bug and identifying the affected area)
 
-"Now I can immediately see which commits touched budget validation, who
-authored them, and what specifically changed — without opening a single PR.
-I can hand this list directly to the dev who owns the area for confirmation."
+"Based on the bug details, it identifies the relevant feature area and
+time window, then searches through AI-generated commit summaries to find
+suspect commits. Traditionally, you'd read the bug, mentally map it to a
+code area, then scroll through dozens of PRs reading vague titles like
+'code cleanup' or 'fix issue.' That can take 30 minutes or more."
+
+(Show the streaming response with suspect commits listed)
+
+"It returns a list of suspicious commits ranked by relevance — showing
+who authored them, what code actually changed, and why they might be
+related to this bug."
+
+(Type follow-up: "Investigate these commits")
+
+"Now I ask it to investigate further. It digs deeper into each suspect
+commit — analyzing the specific code changes, explaining how they could
+have caused the reported behavior, and confirming which commit is the
+most likely culprit with a clear explanation of the causal chain."
+
+(Show the detailed investigation response)
+
+"This is the key value: from a bug link to a confirmed suspect commit
+in under a minute — with full reasoning you can share directly with the
+dev who owns the fix."
 
 
-[1:50–2:50] Scenario 2: Understanding Changes by Person or Feature Area
---------------------------------------------------------------------------
-(Type query: "What did <author name> change in the authentication area
-this week?")
+[1:50–2:50] Scenario 2: Finding Changes by Person and Feature Area
+--------------------------------------------------------------------
+(Type query: "Can you find the UI changes from Yi Zhang where he added
+logs for ad editor view?")
 
-"Here's another common scenario. You want to understand what a specific
-developer changed, or what happened in a feature area. PR titles often
-don't tell the full story — a PR titled 'minor refactor' might actually
-restructure the entire auth middleware."
+"Here's another common scenario. You want to find what a specific person
+changed in a specific feature area. Normally, you'd search through PRs by
+author, read each PR title — but titles are often vague like 'update files'
+or 'fix issue.' You'd have to open the actual PR diff to confirm what
+changed. That's time-consuming when someone has dozens of commits."
+
+(Show the streaming response with relevant commits)
+
+"With Commit AI Resolver, you just describe what you're looking for in
+plain language. The system searches through AI summaries generated from
+the actual code diffs — so even if the PR title said 'minor update,' our
+summary captures that logging was added to the ad editor view. You get
+accurate results regardless of how well the PR was titled."
+
+(Type follow-up: "What about similar changes from GitHub Copilot?")
+
+"Follow-up questions work with conversation context. Here I'm asking
+about the same type of change — logging in ad editor — but from a
+different author. This is useful when multiple people work on the same
+feature area and you want to see the full picture of what was modified,
+by whom, without manually cross-referencing PRs."
 
 (Show the response)
 
-"Because our summaries are generated from the actual code diff, you get an
-accurate picture regardless of how the PR was titled. You can search by
-author, by feature area, by risk level, or any combination — in natural
-language."
-
-(Type follow-up: "Were any of those config or feature flag changes?")
-
-"Follow-up questions work with conversation context. Here I'm narrowing
-down to just config changes, which are often the cause of regressions
-that get deployed without code review."
-
-
-[2:50–3:40] Scenario 2 continued: Diff-Based Summaries vs PR Titles
-----------------------------------------------------------------------
-(Show a side-by-side: a commit with a vague PR title vs its AI summary)
-
-"Let me highlight the key difference. Here's a commit with the PR title
-'Update files.' Not very helpful. But our AI summary, generated from the
-actual code diff, says: 'Modified the campaign budget cap validation to
-allow values above 10M for enterprise accounts, added a new feature flag
-gate for the rollout.' That's the level of detail you get automatically
-for every commit, every day."
+"Notice how it finds relevant commits even though the query is
+conversational. It understands 'similar changes' means the same feature
+area — ad editor logging — and filters to a different author. You'd never
+get this from a simple PR title search."
 
 
 [3:40–4:30] MCP & Skill Integration for DRI Agents
@@ -94,20 +110,41 @@ for every commit, every day."
 
 "Beyond the web dashboard, Commit AI Resolver is available as an MCP server
 and as a Claude Code skill. This means any DRI agent or AI workflow can
-query commit data programmatically."
+query commit data programmatically — and this matters a lot for real
+workflows."
 
-(Show an MCP tool call example — e.g., search_commits or get_daily_summary)
+(Type in Claude Code: "What recent changes are related to asset
+performance prediction score?")
 
-"For example, an on-call DRI agent investigating a live-site incident can
-call our MCP tools to search for suspect commits, filter by risk level or
-repo, and get daily summaries — all without a human opening the dashboard."
+(Show the skill/MCP returning relevant commits)
 
-(Show skill invocation in Claude Code)
+"Here I'm asking about recent changes to asset performance prediction
+score — a feature that spans multiple repos and multiple authors. In a
+traditional workflow, you'd have to know which repos to check, search
+through each one's PR history, and read through dozens of diffs. With
+the MCP tool, one natural language query returns everything relevant
+across all tracked repos."
 
-"In Claude Code, the commit-resolver skill lets you search commits right
-from your terminal. This integrates naturally into existing DRI workflows —
-your triage agent can pull commit context alongside alerts, ICM tickets,
-and deployment logs to build a complete incident picture."
+"Why does this matter as an MCP integration? Think about the DRI routine.
+When you're on-call and an alert fires — say, prediction scores are
+suddenly inaccurate — the first question is always 'what changed recently?'
+Today, the DRI manually checks deployment logs, opens ADO, browses PRs,
+and reads diffs. That's 20-30 minutes before you even start debugging."
+
+"With MCP, a DRI triage agent can do this automatically. It receives the
+alert, calls our search_commits tool to find recent changes in the
+prediction score area, cross-references with deployment timelines, and
+presents the DRI with a shortlist of suspect commits — all before the
+human finishes reading the ICM ticket."
+
+(Show the MCP tool call and response in the agent flow)
+
+"It's not just DRI either. A release validation agent can query what
+config flags changed today before signing off a deployment. A code review
+agent can pull related recent changes to give reviewers broader context.
+Any agent that needs to answer 'what changed?' can plug in Commit AI
+Resolver as an MCP tool — no custom integration needed, just connect
+and query."
 
 
 [4:30–5:00] Closing
