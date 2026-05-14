@@ -6,6 +6,7 @@ import Timeline from './components/Timeline';
 import ChatBox from './components/ChatBox';
 import FeedbackPanel from './components/FeedbackPanel';
 import UsageMetrics from './components/UsageMetrics';
+import ConnectMcpModal from './components/ConnectMcpModal';
 import './App.css';
 
 function LoginScreen() {
@@ -76,6 +77,7 @@ function App() {
 
     const [showFeedback, setShowFeedback] = useState(false);
     const [showMetrics, setShowMetrics] = useState(false);
+    const [showConnectMcp, setShowConnectMcp] = useState(false);
     const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
 
     useEffect(() => {
@@ -102,6 +104,9 @@ function App() {
                     <button className="feedback-header-btn" onClick={() => setShowFeedback(true)}>
                         Feedback
                     </button>
+                    <button className="feedback-header-btn" onClick={() => setShowConnectMcp(true)}>
+                        Connect MCP
+                    </button>
                     <button className="theme-toggle-btn" onClick={toggleTheme} title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}>
                         {theme === 'dark' ? '\u2600\uFE0F' : '\uD83C\uDF19'}
                     </button>
@@ -127,6 +132,7 @@ function App() {
             </div>
             {showFeedback && <FeedbackPanel onClose={() => setShowFeedback(false)} />}
             {showMetrics && <UsageMetrics onClose={() => setShowMetrics(false)} />}
+            {showConnectMcp && <ConnectMcpModal onClose={() => setShowConnectMcp(false)} />}
         </div>
     );
 }

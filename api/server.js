@@ -89,6 +89,14 @@ app.use(express.json());
 // --- Azure AD JWT auth middleware ---
 const AZURE_CLIENT_ID = 'bc4d2d3c-b205-42f4-90f6-8bac756fd7f5';
 const AZURE_TENANT_ID = '72f988bf-86f1-41af-91ab-2d7cd011db47';
+const MCP_RESOURCE_URI = `api://${AZURE_CLIENT_ID}`;
+// /api accepts ID tokens (frontend MSAL flow); /mcp accepts access tokens (OAuth resource server flow).
+const ACCEPTED_AUDIENCES = [AZURE_CLIENT_ID, MCP_RESOURCE_URI];
+// v1.0 issuer is also accepted because Entra v2 access tokens for v1-style resources ship with v1 iss.
+const ACCEPTED_ISSUERS = [
+    `https://login.microsoftonline.com/${AZURE_TENANT_ID}/v2.0`,
+    `https://sts.windows.net/${AZURE_TENANT_ID}/`,
+];
 
 const jwksRsaClient = jwksClient({
     jwksUri: `https://login.microsoftonline.com/${AZURE_TENANT_ID}/discovery/v2.0/keys`,
@@ -103,18 +111,38 @@ function getSigningKey(header, callback) {
     });
 }
 
+/** Build the absolute base URL of this server from the request, honoring proxy headers. */
+function getBaseUrl(req) {
+    const proto = req.headers['x-forwarded-proto']?.split(',')[0].trim() || req.protocol;
+    const host = req.headers['x-forwarded-host']?.split(',')[0].trim() || req.headers.host;
+    return `${proto}://${host}`;
+}
+
+/**
+ * Reject the request with a 401 carrying the MCP-spec WWW-Authenticate header so
+ * compliant clients can discover the authorization server via PRM.
+ */
+function send401Unauthorized(req, res, message) {
+    const prmUrl = `${getBaseUrl(req)}/.well-known/oauth-protected-resource`;
+    res.set(
+        'WWW-Authenticate',
+        `Bearer realm="commit-ai-resolver", resource_metadata="${prmUrl}"`
+    );
+    res.status(401).json({ error: message });
+}
+
 function authMiddleware(req, res, next) {
     const authHeader = req.headers.authorization;
     if (!authHeader?.startsWith('Bearer ')) {
-        return res.status(401).json({ error: 'Authentication required' });
+        return send401Unauthorized(req, res, 'Authentication required');
     }
     const token = authHeader.slice(7);
     jwt.verify(token, getSigningKey, {
-        audience: AZURE_CLIENT_ID,
-        issuer: `https://login.microsoftonline.com/${AZURE_TENANT_ID}/v2.0`,
+        audience: ACCEPTED_AUDIENCES,
+        issuer: ACCEPTED_ISSUERS,
         algorithms: ['RS256'],
     }, (err, decoded) => {
-        if (err) return res.status(401).json({ error: 'Invalid token' });
+        if (err) return send401Unauthorized(req, res, 'Invalid token');
         req.user = {
             id: decoded.oid,
             email: decoded.preferred_username || decoded.upn || decoded.email,
@@ -124,10 +152,13 @@ function authMiddleware(req, res, next) {
     });
 }
 
-app.use('/api', NO_AUTH ? (req, res, next) => {
+const noAuthStub = (req, res, next) => {
     req.user = { id: 'test-user', email: 'test@test.local', name: 'Test User' };
     next();
-} : authMiddleware);
+};
+const requireAuth = NO_AUTH ? noAuthStub : authMiddleware;
+
+app.use('/api', requireAuth);
 
 if (NO_AUTH) console.log('⚠ Auth disabled (--no-auth)');
 
@@ -811,7 +842,176 @@ const mcpDeps = {
     loadDayData,
 };
 
-app.post('/mcp', async (req, res) => {
+// --- OAuth Protected Resource Metadata (RFC 9728 / MCP auth spec 2025-06-18) ---
+// Public discovery doc so MCP clients can find the authorization server.
+// We point at our own base URL (not Entra directly) so the SDK fetches our
+// /.well-known/oauth-authorization-server, which advertises our DCR shim.
+// Entra ID does not implement RFC 7591 dynamic client registration; the shim
+// satisfies that handshake by handing back the pre-provisioned Entra client_id.
+function protectedResourceMetadata(req) {
+    const base = getBaseUrl(req);
+    return {
+        resource: `${base}/mcp`,
+        authorization_servers: [base],
+        scopes_supported: [`${MCP_RESOURCE_URI}/mcp.access`],
+        bearer_methods_supported: ['header'],
+        resource_documentation: `${base}/`,
+    };
+}
+
+// --- OAuth Authorization Server Metadata (RFC 8414) ---
+// Advertises our pass-through endpoints to Entra plus a DCR shim.
+const ENTRA_AUTHORIZE_URL = `https://login.microsoftonline.com/${AZURE_TENANT_ID}/oauth2/v2.0/authorize`;
+const ENTRA_TOKEN_URL = `https://login.microsoftonline.com/${AZURE_TENANT_ID}/oauth2/v2.0/token`;
+const MCP_SCOPE = `${MCP_RESOURCE_URI}/mcp.access`;
+
+function authorizationServerMetadata(req) {
+    const base = getBaseUrl(req);
+    return {
+        issuer: base,
+        authorization_endpoint: `${base}/oauth/authorize`,
+        token_endpoint: `${base}/oauth/token`,
+        registration_endpoint: `${base}/oauth/register`,
+        scopes_supported: [MCP_SCOPE, 'openid', 'profile', 'email', 'offline_access'],
+        response_types_supported: ['code'],
+        grant_types_supported: ['authorization_code', 'refresh_token'],
+        code_challenge_methods_supported: ['S256'],
+        token_endpoint_auth_methods_supported: ['none'],
+    };
+}
+
+app.get('/.well-known/oauth-protected-resource', (req, res) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    res.json(protectedResourceMetadata(req));
+});
+
+app.get('/.well-known/oauth-protected-resource/mcp', (req, res) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    res.json(protectedResourceMetadata(req));
+});
+
+app.get('/.well-known/oauth-authorization-server', (req, res) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    res.json(authorizationServerMetadata(req));
+});
+
+// Public download for the MCP setup script. Resolves the same way UI_DIST does:
+// in dev the script lives in ../deploy; in the deployed package it sits in ./install
+// (placed there by deploy/prepare-api.ps1).
+const INSTALL_SCRIPT = existsSync(join(__dirname, 'install', 'setup-commit-resolver.ps1'))
+    ? join(__dirname, 'install', 'setup-commit-resolver.ps1')
+    : join(__dirname, '..', 'deploy', 'setup-commit-resolver.ps1');
+
+// Skill source for standalone installs (script downloaded from /install/...
+// won't have the skill files alongside it). Same dev/deployed lookup pattern.
+const SKILL_SOURCE_DIR = existsSync(join(__dirname, 'install', 'skills', 'commit-resolver'))
+    ? join(__dirname, 'install', 'skills', 'commit-resolver')
+    : join(__dirname, '..', 'deploy', 'skills', 'commit-resolver');
+
+// Whitelist of skill files served via /install/skills/commit-resolver/:file.
+// Anything not in this list 404s — guards against path traversal and keeps
+// the contract explicit when the skill grows new files.
+const SKILL_FILES = ['SKILL.md'];
+
+app.get('/install/setup-commit-resolver.ps1', (req, res) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    if (!existsSync(INSTALL_SCRIPT)) {
+        return res.status(404).type('text/plain').send('Setup script not bundled with this deployment.');
+    }
+    res.set('Content-Type', 'text/plain; charset=utf-8');
+    res.set('Content-Disposition', 'attachment; filename="setup-commit-resolver.ps1"');
+    res.sendFile(INSTALL_SCRIPT);
+});
+
+// Manifest the installer reads first to discover which files make up the skill.
+// Lets us add files without re-shipping the installer.
+app.get('/install/skills/commit-resolver/manifest.json', (req, res) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    res.json({ name: 'commit-resolver', files: SKILL_FILES });
+});
+
+// Serves the commit-resolver skill files so the standalone installer can pull
+// them down on demand.
+app.get('/install/skills/commit-resolver/:file', (req, res) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    const fileName = req.params.file;
+    if (!SKILL_FILES.includes(fileName)) {
+        return res.status(404).type('text/plain').send('Not found.');
+    }
+    const filePath = join(SKILL_SOURCE_DIR, fileName);
+    if (!existsSync(filePath)) {
+        return res.status(404).type('text/plain').send('Skill file not bundled with this deployment.');
+    }
+    res.set('Content-Type', 'text/plain; charset=utf-8');
+    res.sendFile(filePath);
+});
+
+// RFC 7591 Dynamic Client Registration shim. Entra ID has no DCR endpoint;
+// MCP SDKs require one. Hand every "registration" the same pre-provisioned
+// Entra public client. PKCE protects the actual auth flow regardless of how
+// the SDK obtained the client_id.
+app.post('/oauth/register', express.json(), (req, res) => {
+    const body = req.body || {};
+    const redirectUris = Array.isArray(body.redirect_uris) ? body.redirect_uris : [];
+    res.set('Access-Control-Allow-Origin', '*');
+    res.status(201).json({
+        client_id: AZURE_CLIENT_ID,
+        client_id_issued_at: Math.floor(Date.now() / 1000),
+        redirect_uris: redirectUris,
+        grant_types: ['authorization_code', 'refresh_token'],
+        response_types: ['code'],
+        token_endpoint_auth_method: 'none',
+        application_type: 'native',
+    });
+});
+
+// /authorize pass-through. Preserve the SDK's PKCE params and redirect_uri,
+// but ensure the scope set always includes our MCP API scope so Entra issues
+// an access token with aud=api://<clientId> (not just an ID token).
+app.get('/oauth/authorize', (req, res) => {
+    const params = new URLSearchParams();
+    for (const [k, v] of Object.entries(req.query)) {
+        if (k === 'scope' || k === 'resource') continue;
+        if (Array.isArray(v)) v.forEach(val => params.append(k, val));
+        else if (v != null) params.append(k, String(v));
+    }
+    const requestedScope = typeof req.query.scope === 'string' ? req.query.scope : '';
+    const scopes = new Set(requestedScope.split(/\s+/).filter(Boolean));
+    scopes.add(MCP_SCOPE);
+    scopes.add('openid');
+    scopes.add('profile');
+    scopes.add('offline_access');
+    params.set('scope', [...scopes].join(' '));
+    res.redirect(302, `${ENTRA_AUTHORIZE_URL}?${params.toString()}`);
+});
+
+// /token proxy. Forwards the form-encoded body verbatim to Entra and returns
+// the response unchanged. Entra mints the real access token; we never re-sign.
+app.post('/oauth/token', express.urlencoded({ extended: true }), async (req, res) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    try {
+        const form = new URLSearchParams();
+        for (const [k, v] of Object.entries(req.body || {})) {
+            if (k === 'resource') continue;
+            if (Array.isArray(v)) v.forEach(val => form.append(k, val));
+            else if (v != null) form.append(k, String(v));
+        }
+        const upstream = await fetch(ENTRA_TOKEN_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
+            body: form.toString(),
+        });
+        const text = await upstream.text();
+        res.status(upstream.status)
+            .type(upstream.headers.get('content-type') || 'application/json')
+            .send(text);
+    } catch (err) {
+        console.error('[oauth/token] proxy error:', err);
+        res.status(502).json({ error: 'server_error', error_description: err.message });
+    }
+});
+
+app.post('/mcp', requireAuth, async (req, res) => {
     const sessionId = req.headers['mcp-session-id'];
     try {
         if (sessionId && mcpSessions.has(sessionId)) {
@@ -853,7 +1053,7 @@ app.post('/mcp', async (req, res) => {
     }
 });
 
-app.get('/mcp', async (req, res) => {
+app.get('/mcp', requireAuth, async (req, res) => {
     const sessionId = req.headers['mcp-session-id'];
     if (!sessionId || !mcpSessions.has(sessionId)) {
         return res.status(404).send('Session not found');
@@ -861,7 +1061,7 @@ app.get('/mcp', async (req, res) => {
     await mcpSessions.get(sessionId).transport.handleRequest(req, res);
 });
 
-app.delete('/mcp', async (req, res) => {
+app.delete('/mcp', requireAuth, async (req, res) => {
     const sessionId = req.headers['mcp-session-id'];
     if (!sessionId || !mcpSessions.has(sessionId)) {
         return res.status(404).send('Session not found');
@@ -879,7 +1079,12 @@ if (existsSync(UI_DIST)) {
     app.use(express.static(UI_DIST));
     // SPA fallback: serve index.html for non-API routes
     app.use((req, res, next) => {
-        if (req.method !== 'GET' || req.path.startsWith('/api/') || req.path.startsWith('/mcp')) return next();
+        if (req.method !== 'GET'
+            || req.path.startsWith('/api/')
+            || req.path.startsWith('/mcp')
+            || req.path.startsWith('/install/')
+            || req.path.startsWith('/oauth/')
+            || req.path.startsWith('/.well-known/')) return next();
         res.sendFile(join(UI_DIST, 'index.html'));
     });
 }

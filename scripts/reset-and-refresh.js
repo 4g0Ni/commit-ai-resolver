@@ -8,6 +8,16 @@
  *   node scripts/reset-and-refresh.js --refresh-only          — Backfill 90 days, skip days that already have data
  *   node scripts/reset-and-refresh.js --refresh-only --days 60 — Backfill 60 days, skip existing
  *   node scripts/reset-and-refresh.js --rebuild-embeddings    — Rebuild vector embeddings from existing daily JSON
+ *
+ * Backfill semantics:
+ *   --refresh-only is the safe, idempotent path. It walks each day in the window and only
+ *   processes commits whose IDs are NOT already in the daily JSON for that date. Existing
+ *   summaries, embeddings, and vector rows are preserved. Re-running it after a partial run
+ *   resumes from where it stopped without touching prior work.
+ *
+ *   Without --refresh-only, the script first calls resetAllData() which DELETES daily JSON,
+ *   vectors.db, diffs cache, the checkpoint, and feedback DB. Use only when you want a full
+ *   rebuild from scratch.
  */
 
 import { resetAllData, backfillCommits, rebuildEmbeddings } from '../src/services/scheduled-refresh.js';

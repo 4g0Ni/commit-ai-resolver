@@ -49,6 +49,43 @@ MSAL caches tokens in `localStorage` with `storeAuthStateInCookie: true`, so use
 
 ---
 
+## Connecting from MCP clients
+
+The dashboard exposes the same commit data as an MCP server so you can query it directly from Claude Desktop, Claude Code, or VS Code. The easiest way to connect is the **Connect MCP** button in the dashboard header.
+
+### One-click setup (recommended)
+
+1. Click **Connect MCP** in the dashboard header.
+2. Click **Download setup-commit-resolver.ps1** in the modal.
+3. In PowerShell, run:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\setup-commit-resolver.ps1
+   ```
+   This wires the MCP server into Claude Desktop, Claude Code, and VS Code, and drops the `commit-resolver` skill into `~/.claude/skills`.
+4. Restart your MCP client (quit and reopen Claude Desktop / Code / VS Code).
+5. Invoke the skill — e.g. ask *"what changed in CMUI yesterday?"*. A browser tab pops up for Microsoft sign-in the first time. Tokens are cached after that.
+
+### Direct download
+
+If you don't have access to the dashboard, the same script is served at:
+```
+https://commit-ai-resolver-win.azurewebsites.net/install/setup-commit-resolver.ps1
+```
+
+### Authentication
+
+The MCP endpoint uses Microsoft Entra ID (OAuth 2.1, MCP auth spec 2025-06-18). Discovery is handled via `/.well-known/oauth-protected-resource` and `/.well-known/oauth-authorization-server`. Because Entra ID does not implement RFC 7591 dynamic client registration, the server runs a thin DCR shim that hands clients the pre-provisioned Entra `client_id` and proxies authorize/token to Entra. Tokens are issued and signed by Entra; the server validates them via JWKS.
+
+### Uninstall
+
+```powershell
+.\setup-commit-resolver.ps1 -Uninstall
+```
+
+This restores all backed-up MCP client configs and removes the skill bundle.
+
+---
+
 ## Prerequisites
 
 1. **Node.js** v18+

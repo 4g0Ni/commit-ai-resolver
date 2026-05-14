@@ -210,7 +210,7 @@ if (-not $SkipBuild) {
     Write-Step "Building UI..."
     Push-Location (Join-Path $RepoRoot "ui")
     try {
-        npm install --registry https://registry.npmjs.org/ 2>&1 | Out-Null
+        npm install --legacy-peer-deps --registry https://registry.npmjs.org/ 2>&1 | Out-Null
         $ErrorActionPreference = "Continue"
         npm run build 2>&1 | Write-Host
         $ErrorActionPreference = "Stop"

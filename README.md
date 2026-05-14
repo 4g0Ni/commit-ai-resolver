@@ -994,6 +994,34 @@ After deployment, register the production redirect URI in the Azure AD app regis
 - Platform: **Single-page application**
 - URI: `https://commit-ai-resolver.azurewebsites.net`
 
+#### MCP OAuth (one-time app reg config)
+
+> **For end users:** the easiest way to connect a client is the **Connect MCP** button in the dashboard header, which serves a one-shot installer (`/install/setup-commit-resolver.ps1`). See [USERGUIDE.md → Connecting from MCP clients](USERGUIDE.md#connecting-from-mcp-clients). The rest of this section covers the one-time tenant setup behind it.
+
+The `/mcp` endpoint is an OAuth 2.1 protected resource (per MCP auth spec 2025-06-18). Because Entra ID does not implement RFC 7591 dynamic client registration — which the Claude Code / VS Code MCP SDKs require — the server runs a thin **DCR shim** at `/oauth/register` and proxies `/oauth/authorize` and `/oauth/token` to Entra. Tokens are still issued and signed by Entra; the server only mediates the OAuth handshake and validates the resulting access tokens via JWKS.
+
+Discovery docs served by the API:
+- `/.well-known/oauth-protected-resource` (RFC 9728) — points clients at our auth server metadata.
+- `/.well-known/oauth-authorization-server` (RFC 8414) — advertises our pass-through endpoints + the DCR shim.
+
+Manual app-registration setup on `bc4d2d3c-b205-42f4-90f6-8bac756fd7f5` (one-time):
+
+1. **Application ID URI** set to `api://bc4d2d3c-b205-42f4-90f6-8bac756fd7f5` (Expose an API → Set).
+2. **A scope** named `mcp.access` exposed under that URI (Expose an API → Add a scope). Admin + user consent both fine.
+3. **Loopback redirect** under the **Mobile and desktop applications** platform: add `http://localhost` (no port, no path). Entra treats it as a wildcard for any loopback port, which the MCP SDK uses for its PKCE callback. **Important:** do *not* also list the loopback URI under the Single-page application platform — Entra picks SPA on collision and blocks server-side token redemption (`AADSTS9002327`). Keep SPA for the UI's redirect URIs only (e.g. `http://localhost:5173`, the deployed Azure URLs).
+
+To verify the wiring without a client:
+```bash
+curl https://commit-ai-resolver-win.azurewebsites.net/.well-known/oauth-authorization-server
+# → registration_endpoint, authorization_endpoint, token_endpoint all under our domain
+
+curl -i -X POST https://commit-ai-resolver-win.azurewebsites.net/mcp \
+  -H 'Content-Type: application/json' -d '{}'
+# → HTTP/1.1 401 with WWW-Authenticate: Bearer ... resource_metadata="..."
+```
+
+For local development, run `node api/server.js --no-auth` to bypass the gate entirely.
+
 ### ADO Access via Managed Identity
 
 The user-assigned Managed Identity must be added as a user in the Azure DevOps organization:

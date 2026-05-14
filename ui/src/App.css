@@ -1876,6 +1876,120 @@
   max-width: 1000px;
 }
 
+.connect-mcp-panel {
+  max-width: 640px;
+}
+
+.connect-mcp-body {
+  padding: 20px 24px 24px;
+  overflow-y: auto;
+}
+
+.connect-mcp-intro {
+  margin: 0 0 20px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.connect-mcp-intro code,
+.connect-mcp-hint code,
+.connect-mcp-footer code {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 0.88em;
+  color: var(--text-primary);
+}
+
+.connect-mcp-steps {
+  margin: 0;
+  padding: 0 0 0 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.connect-mcp-steps li::marker {
+  color: var(--accent-primary);
+  font-weight: 600;
+}
+
+.connect-mcp-step-title {
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.connect-mcp-step-body {
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.connect-mcp-download {
+  display: inline-block;
+  background: var(--accent-primary);
+  color: #fff;
+  padding: 8px 14px;
+  border-radius: 6px;
+  font-weight: 600;
+  text-decoration: none;
+  margin-bottom: 8px;
+}
+
+.connect-mcp-download:hover {
+  filter: brightness(1.1);
+  color: #fff;
+}
+
+.connect-mcp-hint {
+  font-size: 0.88em;
+  color: var(--text-tertiary, var(--text-secondary));
+}
+
+.connect-mcp-code {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.88em;
+}
+
+.connect-mcp-code code {
+  flex: 1;
+  background: transparent;
+  border: none;
+  padding: 0;
+  white-space: nowrap;
+  overflow-x: auto;
+}
+
+.connect-mcp-copy {
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  border-radius: 4px;
+  padding: 3px 10px;
+  font-size: 0.85em;
+  cursor: pointer;
+}
+
+.connect-mcp-copy:hover {
+  background: var(--bg-hover, var(--bg-elevated));
+  color: var(--text-primary);
+}
+
+.connect-mcp-footer {
+  margin: 24px 0 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-subtle);
+  font-size: 0.88em;
+  color: var(--text-secondary);
+}
+
 .usage-metrics-body {
   padding: 20px;
   overflow-y: auto;

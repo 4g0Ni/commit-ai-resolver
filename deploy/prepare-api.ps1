@@ -94,6 +94,21 @@ if (Test-Path $uiDist) {
     Write-Host "  [WARN] ui/dist not found - run 'npm run build' in ui/ first" -ForegroundColor Yellow
 }
 
+Write-Step "Copying install script..."
+$installDest = Join-Path $StagingDir "install"
+New-Item -ItemType Directory -Path $installDest -Force | Out-Null
+Copy-Item -Path (Join-Path $RepoRoot "deploy\setup-commit-resolver.ps1") -Destination $installDest -Force
+Write-Success "Install script included in package"
+
+Write-Step "Copying skill bundle..."
+$skillSrc = Join-Path $RepoRoot "deploy\skills"
+if (Test-Path $skillSrc) {
+    Copy-Item -Path $skillSrc -Destination $installDest -Recurse -Force
+    Write-Success "Skill bundle included in package (install/skills/)"
+} else {
+    Write-Host "  [WARN] deploy/skills not found - standalone installer won't be able to fetch the skill" -ForegroundColor Yellow
+}
+
 Write-Step "Updating package.json for App Service..."
 # The api/package.json was already copied. Just ensure "type": "module" and start script are set.
 # The dependencies from api/package.json are preserved so npm install works correctly.
