@@ -18,7 +18,7 @@
 | Daily data generation (cached) | ✅ Done | Incremental, skip cached commits, --from/--to date range |
 | Azure deployment | ✅ Done | Single App Service (API + UI), Managed Identity, Oryx build |
 | C2C Cosmos DB pilot tracker | ❌ Planned | DB-level pilot ramp tracking |
-| Queryable DB storage | ❌ Planned | Currently JSON files |
+| Queryable storage | ✅ Done | Daily JSON files + LanceDB vector store (filtered queries via vector store SQL pre-filters on author/repo/date) |
 
 ### Repositories in Scope
 
@@ -841,8 +841,8 @@ To stay within acceptable chat response times:
 | Multi-query RRF search | Primary + secondary + title queries with Reciprocal Rank Fusion | ✅ Done |
 | Bug screenshot support | Extract images from work item HTML, fetch with auth, pass as multimodal content | ✅ Done |
 | Clarification UI | Chat UI support for system clarification questions (distinct from answers) | ✅ Done |
-| Iteration progress UI | Show "Searching... attempt N/3" progress indicator in the chat interface | TBD |
-| Streaming support | Stream the final answer to the UI for perceived latency improvement | TBD |
+| Iteration progress UI | Show iteration count in the chat interface | ✅ Done — UI shows "Search refined N time(s)" in the response metadata |
+| Streaming support | Stream the final answer to the UI for perceived latency improvement | ✅ Done — SSE (`event: status` / `token` / `complete`) end-to-end |
 
 ---
 
@@ -1046,10 +1046,18 @@ curl -X PUT "https://commit-ai-resolver.scm.azurewebsites.net/api/zip/data/" `
 
 ## 13. Open Questions
 
-1. How are release tags structured in each repo? Are they consistent or repo-specific?
-2. Where do pilot flag definitions live — in code, in a config service, or both?
-3. What is the current dynamic config management system (Experimentation platform, feature management service, etc.)?
-4. Should the chat interface be a standalone web app, a Teams bot, or integrated into an existing portal?
-5. What access control is needed — should all engineers see all repos, or scope by team?
-6. Are there existing ADO dashboards or telemetry systems (Kusto, Application Insights) to integrate with for the visualization layer?
-7. What is the token budget / cost ceiling for daily LLM processing?
+Still open:
+
+1. **Runtime config / experimentation service** — Which platform drives runtime pilot ramps that happen outside code deployments? Needed to scope the C2C Cosmos DB pilot tracker (§3.1, §6.1).
+2. **LLM QPS / 429 handling** — We use our own Azure OpenAI deployments (no $ ceiling), but daily summarization occasionally hits 429s under the 25-concurrent-call setting. Open: tune concurrency, add backoff, or request higher TPM quota.
+
+### Resolved
+
+| # | Question | Resolution |
+|---|---|---|
+| 1 | Release tag structure | Per-repo, 3 strategies codified in `src/config/repositories.js`: `dateSorted` (CampaignUI), `rolling` (MT: STAGING ↔ LKG), `versioned` (AppUI/AnB/DB) |
+| 2 | Pilot flag locations | Code-side enumerated in §3.1 (`Dynamic.config`, `DynamicConfigValues.cs`, `sharedfeatures.config`, `appsettings*.json`, `.cscfg`/`.csdef`/`Web.config`). Runtime ramps deferred to C2C tracker |
+| 4 | Chat surface | Standalone React app + MCP endpoint (DCR shim for Claude Code / VS Code clients). No Teams bot |
+| 5 | Access control | Entra ID JWT on `/api/*`, MCP via OAuth 2.1 `mcp.access` scope. All tenant users see all repos (no team scoping) |
+| 6 | Telemetry integration | Aria / 1DS → Kusto tables `commitairesolver_tracing` and `commitairesolver_errors`. Usage metrics in local SQLite, exposed via `/api/metrics/usage` |
+

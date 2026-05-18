@@ -113,6 +113,27 @@ WHAT IS NOT A CONFIG CHANGE (do NOT use changeType "config" or "mixed" for these
 - AKS packaging artifacts: serviceConfig.ini, build dependencies, package folder layouts, config flattener file lists. These are BUILD/DEPLOY scaffolding, not feature flags. Use changeType "code".
 - Dependabot or automated dependency bumps (image digests, package versions). Use changeType "code".
 
+TEST FILE HANDLING (audit-derived, 2026-05-15):
+- Files matching /test/, /tests/, /jest/, /selenium/, /cloud-test/, .test.{js,ts,jsx,tsx}, .spec.{js,ts}, *-tests.{js,ts}, *-test-* are TEST CODE.
+- For commits where the ONLY changed files are tests: riskLevel "LOW" unless the test reveals a behavior change in shared/production code. Lead the summary with "Test coverage for X" or "Adds E2E suite for Y" — do NOT describe test code as if it were production logic.
+- In affectedAreas, name the production area being tested ("Campaign Grid", not "campaign-grid-tests.js"). Never put the test framework or filename in affectedAreas.
+- For mixed test+production commits: focus the summary on the production change. Mention tests only if they materially expand coverage of a risky area (auth, billing, pilot-gated paths).
+- Test mocks, fixtures, and selenium page objects are still test code — same rules apply.
+
+BUILD SCRIPT HANDLING:
+- gulpfile.js, .buildxl.pipeline.config.js, build-and-deploy.{ps1,sh}, build.cake, and similar build orchestration files affect WHAT gets built and tested, but not the runtime product. Use changeType "code", riskLevel typically LOW.
+- Risk MEDIUM only if the change enables/disables major test suites in CI, alters deploy targets/environments, or removes packages from the build pipeline.
+- ALWAYS state in the summary which packages/areas the build change scopes — e.g., "excludes adsappsbae from BuildXL pipeline" not just "updates pipeline config".
+
+PACKAGE.JSON CHANGES:
+- A package.json with ONLY "version", "dependencies", "devDependencies", or "peerDependencies" changes is a dependency bump. Use riskLevel LOW, summary "Bumps <pkg> from X.Y.Z to A.B.C in <package-name>". Do not invent feature impact.
+- A package.json with changes to "scripts", "main", "exports", or "files" is a real packaging/runtime change — keep risk MEDIUM and describe the consumer impact (which scripts run differently, which exports moved).
+
+DESIGN-DOC FILES (.design-docs/, knowledge-docs/, knowledge.md):
+- These are planning/reference artifacts. Use changeType "code", riskLevel LOW.
+- Title prefix: "Design doc:" or "Plan:" — never describe them as feature work or imply the documented feature has shipped.
+- Do NOT include the documented feature in affectedAreas unless production code in the same commit also touches it.
+
 CONFIG KEY NAMING:
 - Use the SHORT flag/setting name, not XPath or XML path. Example: use "NewGoogleLoginGSI" not "/Configuration/Features/NewGoogleLoginGSI/@value" or "FlightSet[@name='NewGoogleLoginGSI']".
 - When a commit adds or removes a feature flag that has multiple XML elements (feature declaration + flight set + ap-config override), emit ONE configChange row with the flag name as key, not separate rows per XML element.

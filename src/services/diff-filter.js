@@ -48,6 +48,30 @@ const AUTO_SUMMARY_PATTERNS = [
     // NOTE: appsettings*.json, DynamicConfig*, sharedfeatures.config, .cscfg
     // are NOT auto-skipped — they contain production-affecting config/pilot values
     // and must go through LLM for structured configChanges extraction.
+    // --- Audit-driven additions (2026-05-15): AI / developer tooling ---
+    { pattern: /\.skill\.md$/i, reason: 'AI skill definition' },
+    { pattern: /\.prompt\.md$/i, reason: 'AI prompt definition' },
+    { pattern: /\.agent\.md$/i, reason: 'AI agent definition' },
+    { pattern: /CLAUDE\.md$/i, reason: 'Claude Code project instructions' },
+    { pattern: /\.cursorrules$/i, reason: 'Cursor AI rules' },
+    { pattern: /\.github\/copilot/i, reason: 'GitHub Copilot config' },
+    { pattern: /\/\.claude\//i, reason: 'Claude tooling directory' },
+    // --- Audit-driven additions: design docs (17/17 ceremony in audit) ---
+    { pattern: /\.design-docs\//i, reason: 'design documentation' },
+    { pattern: /knowledge-docs\//i, reason: 'knowledge docs' },
+    { pattern: /knowledge\.md$/i, reason: 'AI reference doc' },
+    // --- Audit-driven additions: project setup pinning ---
+    { pattern: /global\.json$/i, reason: '.NET SDK pin' },
+    { pattern: /\.editorconfig$/i, reason: 'editor config' },
+    { pattern: /nuget\.config$/i, reason: 'NuGet feed config' },
+    { pattern: /\.npmrc$/i, reason: 'npm registry config' },
+    // --- Audit-driven additions: test runner config (NOT test files themselves) ---
+    { pattern: /jest\.config\.[jt]s$/i, reason: 'Jest runner config' },
+    { pattern: /karma\.conf\.[jt]s$/i, reason: 'Karma runner config' },
+    { pattern: /\.istanbul\.yml$/i, reason: 'coverage config' },
+    // --- Audit-driven additions: package.json metadata (1 real / 11 ceremony in audit) ---
+    // Note: 1 false-skip rate accepted — version/dep bumps dominate this file type.
+    { pattern: /\bpackage\.json$/i, reason: 'package metadata / dependency bump' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -87,11 +111,14 @@ const repoFilters = {
     },
     AdsAppsDB: {
         autoSummary: [
-            { pattern: /\.sql$/i, reason: 'SQL script' },
-            { pattern: /Generated/i, reason: 'auto-generated code' },
+            // NOTE (2026-05-15 audit): blanket /\.sql$/i rule was too broad —
+            // 42 SQL files flagged as "real" production schema/proc/seed changes.
+            // Only auto-skip clearly generated or build-artifact SQL paths.
             { pattern: /\/Migrations\//i, reason: 'database migration' },
-            { pattern: /StoredProcedures/i, reason: 'stored procedure definition' },
             { pattern: /\/dacpac\//i, reason: 'DACPAC build artifact' },
+            { pattern: /Generated/i, reason: 'auto-generated code' },
+            // Removed: /\.sql$/i — covered real schema/proc edits
+            // Removed: /StoredProcedures/i — covered real procedure body edits
         ],
         ignore: [],
     },
@@ -108,7 +135,9 @@ const repoFilters = {
         autoSummary: [
             { pattern: /\/loc\//i, reason: 'localization strings' },
             { pattern: /\.resjson$/i, reason: 'resource JSON strings' },
-            { pattern: /\.cshtml$/i, reason: 'Razor view template' },
+            // NOTE (2026-05-15 audit): blanket /\.cshtml$/i rule dropped —
+            // 7 Razor views surfaced with real pilot-token / logic-density signals.
+            // .cshtml views in AdsAppUI carry pilot gating, so let them flow to LLM.
             // NOTE: .cscfg, .csdef, Web.config, appsettings*.json, sharedfeatures.config,
             // AllowedFeature.cs, PermissionProvider.cs are NOT auto-skipped —
             // they are the primary pilot/config control files for AdsAppUI.

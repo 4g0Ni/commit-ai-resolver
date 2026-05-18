@@ -71,6 +71,17 @@ If you don't have access to the dashboard, the same script is served at:
 ```
 https://commit-ai-resolver-win.azurewebsites.net/install/setup-commit-resolver.ps1
 ```
+The downloaded script is fully standalone — it pulls the skill files from the server on the fly, so you don't need to clone the repo.
+
+### What the installer touches
+
+The installer wires the MCP server into every Claude config it can find:
+- `%APPDATA%\Claude\claude_desktop_config.json` (Claude Desktop)
+- `%USERPROFILE%\.claude\mcp.json` (Claude Code CLI — global)
+- `%USERPROFILE%\.claude.json` under `projects.*.mcpServers` (Claude Code CLI per-project overrides — needed because per-project entries shadow the global config when working inside that directory)
+- `%APPDATA%\Code\User\mcp.json` (and the Insiders variant if present)
+
+It also drops the skill at `%USERPROFILE%\.claude\skills\commit-resolver\`. Every modified file is backed up under `%USERPROFILE%\.commit-resolver-setup-state\` so `-Uninstall` can restore it.
 
 ### Authentication
 
