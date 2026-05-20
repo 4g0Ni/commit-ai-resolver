@@ -85,7 +85,7 @@ src/
 | LLM summarization | ✅ Implemented | `commit-summarizer.js`, `llm-helper.js` |
 | Diff fetching & noise filtering | Partial | `ado-git-client.js` |
 | Pilot flag/config tracking | Not started | — |
-| C2C Cosmos DB pilot ramp tracker | Not started | — |
+| ~~C2C Cosmos DB pilot ramp tracker~~ | Removed (low ROI) | — |
 | DB storage & ingestion pipeline | Not started | — |
 | Daily report generation | Not started | — |
 | Date chart / dashboard UI | Not started | — |

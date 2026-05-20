@@ -46,6 +46,10 @@ function resolveRepo(input) {
  * @param {function} deps.getVectorStats - () => Promise<stats>
  * @param {function} deps.listAvailableDates - () => Promise<string[]>
  * @param {function} deps.loadDayData - (date) => Promise<dayData>
+ * @param {function} deps.fetchCommitChanges - (repoConfig, commitId) => Promise<{changes}>
+ * @param {function} deps.fetchFilteredDiffs - (repoConfig, commitId, changes) => Promise<string[]>
+ * @param {function} deps.classifyChanges - (changes, repoName) => {needsDiff, autoSummary, ignored}
+ * @param {object}   deps.REPOSITORIES - repo config map keyed by canonical repo name
  */
 export function createMcpServer(deps) {
     const server = new McpServer({
@@ -299,6 +303,177 @@ export function createMcpServer(deps) {
             } catch (err) {
                 return {
                     content: [{ type: 'text', text: `Failed to list dates: ${err.message}` }],
+                    isError: true,
+                };
+            }
+        }
+    );
+
+    // --- Tool: get_commit_diff ---
+    server.registerTool(
+        'get_commit_diff',
+        {
+            title: 'Get Commit Diff',
+            description: 'Fetch the file-level diff for a single commit. Returns the patch text for code files, ' +
+                'with noise files (lock files, generated code, localization, build artifacts) filtered out. ' +
+                'Use this when you need to see what actually changed beyond the LLM summary.',
+            inputSchema: z.object({
+                commitId: z.string().describe('Full or short commit SHA'),
+                repo: z.string().describe(
+                    'Repository name or alias (required — SHAs are not unique across repos). ' +
+                    'Canonical: AdsAppsCampaignUI, AdsAppsMT, AdsAppUI, AnB, AdsAppsDB. ' +
+                    'Aliases: CMUI, MT, UIServer, AnB, CMDB.'
+                ),
+                maxFiles: z.number().optional().describe('Max files to include diffs for (default 20, max 50)'),
+                includePatch: z.boolean().optional().describe(
+                    'When true (default), return full patch text. When false, return only file paths + change types.'
+                ),
+            }),
+        },
+        async ({ commitId, repo, maxFiles, includePatch }) => {
+            try {
+                const resolvedRepo = resolveRepo(repo);
+                if (!resolvedRepo) {
+                    return {
+                        content: [{
+                            type: 'text',
+                            text: `Unknown repository "${repo}". Valid repos: ${VALID_REPOS.join(', ')}.`,
+                        }],
+                        isError: true,
+                    };
+                }
+                const repoConfig = deps.REPOSITORIES[resolvedRepo];
+                const cap = Math.min(maxFiles || 20, 50);
+                const wantPatch = includePatch !== false;
+
+                const { changes } = await deps.fetchCommitChanges(repoConfig, commitId);
+                const { needsDiff, autoSummary, ignored } = deps.classifyChanges(changes, resolvedRepo);
+
+                const fileList = needsDiff.slice(0, cap).map(c => ({
+                    path: c.path,
+                    changeType: c.changeType,
+                }));
+
+                const result = {
+                    commitId,
+                    repo: resolvedRepo,
+                    totalFiles: changes.length,
+                    analyzableFiles: needsDiff.length,
+                    autoSkipped: autoSummary.length,
+                    ignored: ignored.length,
+                    truncated: needsDiff.length > cap,
+                    files: fileList,
+                };
+
+                if (wantPatch && needsDiff.length > 0) {
+                    const subset = needsDiff.slice(0, cap);
+                    const diffs = await deps.fetchFilteredDiffs(repoConfig, commitId, subset);
+                    result.patches = diffs;
+                }
+
+                return {
+                    content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+                };
+            } catch (err) {
+                return {
+                    content: [{ type: 'text', text: `Failed to fetch diff: ${err.message}` }],
+                    isError: true,
+                };
+            }
+        }
+    );
+
+    // --- Tool: list_commits_by_filter ---
+    server.registerTool(
+        'list_commits_by_filter',
+        {
+            title: 'List Commits by Filter',
+            description: 'List commits matching metadata filters (repo, date range, change type) without a search query. ' +
+                'Use when you want all commits in a window rather than the most semantically relevant ones.',
+            inputSchema: z.object({
+                repo: z.string().optional().describe(
+                    'Repository filter. Canonical names or aliases (CMUI, MT, UIServer, AnB, CMDB).'
+                ),
+                dateFrom: z.string().optional().describe('Start date (YYYY-MM-DD, inclusive)'),
+                dateTo: z.string().optional().describe('End date (YYYY-MM-DD, inclusive)'),
+                changeType: z.enum(['config', 'code', 'mixed']).optional().describe(
+                    'Filter by change type. config = configuration/feature flag changes. ' +
+                    'code = source code changes. mixed = both.'
+                ),
+                limit: z.number().optional().describe('Max commits to return (default 50, max 200)'),
+            }),
+        },
+        async ({ repo, dateFrom, dateTo, changeType, limit }) => {
+            try {
+                const resolvedRepo = resolveRepo(repo);
+                if (repo && !resolvedRepo) {
+                    return {
+                        content: [{
+                            type: 'text',
+                            text: `Unknown repository "${repo}". Valid repos: ${VALID_REPOS.join(', ')}.`,
+                        }],
+                        isError: true,
+                    };
+                }
+                const cap = Math.min(limit || 50, 200);
+
+                let dates = await deps.listAvailableDates();
+                if (dateFrom) dates = dates.filter(d => d >= dateFrom);
+                if (dateTo) dates = dates.filter(d => d <= dateTo);
+                dates.sort((a, b) => b.localeCompare(a)); // newest first
+
+                const collected = [];
+                for (const date of dates) {
+                    if (collected.length >= cap) break;
+                    let dayData;
+                    try {
+                        dayData = await deps.loadDayData(date);
+                    } catch (err) {
+                        if (err.code === 'ENOENT') continue;
+                        throw err;
+                    }
+                    const repoEntries = resolvedRepo
+                        ? (dayData.repositories[resolvedRepo] ? [[resolvedRepo, dayData.repositories[resolvedRepo]]] : [])
+                        : Object.entries(dayData.repositories);
+
+                    for (const [repoName, repoData] of repoEntries) {
+                        for (const c of repoData.commits) {
+                            const ct = c.summary?.changeType;
+                            if (changeType && ct !== changeType) continue;
+                            collected.push({
+                                shortId: c.shortId,
+                                commitId: c.commitId,
+                                repo: repoName,
+                                date: c.date,
+                                author: c.author,
+                                title: c.summary?.title || c.title,
+                                summary: c.summary?.summary,
+                                riskLevel: c.summary?.riskLevel,
+                                changeType: ct,
+                                affectedAreas: c.summary?.affectedAreas,
+                                flags: c.summary?.flags,
+                                breakingChange: c.summary?.breakingChange,
+                                url: c.url,
+                            });
+                            if (collected.length >= cap) break;
+                        }
+                        if (collected.length >= cap) break;
+                    }
+                }
+
+                if (collected.length === 0) {
+                    return { content: [{ type: 'text', text: 'No commits found matching the filters.' }] };
+                }
+
+                return {
+                    content: [{
+                        type: 'text',
+                        text: JSON.stringify({ count: collected.length, commits: collected }, null, 2),
+                    }],
+                };
+            } catch (err) {
+                return {
+                    content: [{ type: 'text', text: `List failed: ${err.message}` }],
                     isError: true,
                 };
             }

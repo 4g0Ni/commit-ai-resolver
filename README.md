@@ -17,7 +17,7 @@
 | Work item integration | ✅ Done | Paste ADO work item URL → fetch bug → extract screenshots → anchor search dates |
 | Daily data generation (cached) | ✅ Done | Incremental, skip cached commits, --from/--to date range |
 | Azure deployment | ✅ Done | Single App Service (API + UI), Managed Identity, Oryx build |
-| C2C Cosmos DB pilot tracker | ❌ Planned | DB-level pilot ramp tracking |
+| C2C Cosmos DB pilot tracker | 🚫 Removed (low ROI) | DB-level pilot ramp tracking — descoped |
 | Queryable storage | ✅ Done | Daily JSON files + LanceDB vector store (filtered queries via vector store SQL pre-filters on author/repo/date) |
 
 ### Repositories in Scope
@@ -853,7 +853,7 @@ To stay within acceptable chat response times:
 The application is deployed as a single Azure App Service (Linux, Node 20 LTS, B1 tier) that serves both the Express API and the React UI as static files from the same origin.
 
 ```
-User → Azure App Service (commit-ai-resolver.azurewebsites.net)
+User → Azure App Service (commit-ai-resolver-win.azurewebsites.net)
          ├── /api/*    → Express API routes
          ├── /mcp      → MCP endpoint
          └── /*        → React UI (static files from ui/dist/)
@@ -992,7 +992,22 @@ cd /home/site/wwwroot && node scripts/reset-and-refresh.js --refresh-only --days
 
 After deployment, register the production redirect URI in the Azure AD app registration:
 - Platform: **Single-page application**
-- URI: `https://commit-ai-resolver.azurewebsites.net`
+- URI: `https://commit-ai-resolver-win.azurewebsites.net`
+
+#### MCP tools
+
+The `/mcp` endpoint exposes the following tools to connected agents:
+
+| Tool | Purpose |
+|---|---|
+| `search_commits` | Semantic vector search over commit summaries. Filters: repo, author, date range, riskLevel, changeType. |
+| `get_commit` | Look up one or more commits by short SHA. |
+| `get_daily_summary` | Return all commits for a date, grouped by repo, with risk/breaking/config stats. |
+| `list_available_dates` | List dates that have data, optionally bounded by from/to. |
+| `list_commits_by_filter` | List commits by metadata only (repo, date range, changeType) — no query string required. Use when you want all commits in a window rather than the most relevant ones. |
+| `get_commit_diff` | Fetch file-level diffs for a single commit. Applies the noise filter (lock files, generated code, localization, build artifacts) before returning. `includePatch:false` returns just the file list cheaply. |
+
+Resource: `commit://stats` — vector store stats (total indexed commits, tracked repos, date range).
 
 #### MCP OAuth (one-time app reg config)
 

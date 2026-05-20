@@ -186,6 +186,8 @@ import { agenticSearch } from './agents/orchestrator.js';
 // --- Deep investigation ---
 import { investigateDiffs } from './agents/diff-investigator.js';
 import { fetchCommitChanges, fetchCommitDiff, fetchWorkItem } from '../src/services/ado-git-client.js';
+import { fetchFilteredDiffs } from '../src/services/commit-summarizer.js';
+import { classifyChanges } from '../src/services/diff-filter.js';
 import { REPOSITORIES } from '../src/config/repositories.js';
 import { detectWorkItemUrls } from '../src/services/workitem-detector.js';
 
@@ -840,6 +842,10 @@ const mcpDeps = {
     getVectorStats,
     listAvailableDates,
     loadDayData,
+    fetchCommitChanges,
+    fetchFilteredDiffs,
+    classifyChanges,
+    REPOSITORIES,
 };
 
 // --- OAuth Protected Resource Metadata (RFC 9728 / MCP auth spec 2025-06-18) ---
@@ -968,16 +974,22 @@ app.post('/oauth/register', express.json(), (req, res) => {
 // /authorize pass-through. Preserve the SDK's PKCE params and redirect_uri,
 // but ensure the scope set always includes our MCP API scope so Entra issues
 // an access token with aud=api://<clientId> (not just an ID token).
+// Scopes use the GUID form (<clientId>/mcp.access) rather than api://<clientId>/mcp.access
+// because the api:// form triggers AADSTS90009 when client_id and resource app are the same
+// registration. Entra accepts both forms and issues an access token with the same audience.
 app.get('/oauth/authorize', (req, res) => {
     const params = new URLSearchParams();
+    const apiPrefix = `api://${AZURE_CLIENT_ID}/`;
+    const guidPrefix = `${AZURE_CLIENT_ID}/`;
+    const normalizeScope = s => s.startsWith(apiPrefix) ? guidPrefix + s.slice(apiPrefix.length) : s;
     for (const [k, v] of Object.entries(req.query)) {
         if (k === 'scope' || k === 'resource') continue;
         if (Array.isArray(v)) v.forEach(val => params.append(k, val));
         else if (v != null) params.append(k, String(v));
     }
     const requestedScope = typeof req.query.scope === 'string' ? req.query.scope : '';
-    const scopes = new Set(requestedScope.split(/\s+/).filter(Boolean));
-    scopes.add(MCP_SCOPE);
+    const scopes = new Set(requestedScope.split(/\s+/).filter(Boolean).map(normalizeScope));
+    scopes.add(normalizeScope(MCP_SCOPE));
     scopes.add('openid');
     scopes.add('profile');
     scopes.add('offline_access');
@@ -985,16 +997,33 @@ app.get('/oauth/authorize', (req, res) => {
     res.redirect(302, `${ENTRA_AUTHORIZE_URL}?${params.toString()}`);
 });
 
-// /token proxy. Forwards the form-encoded body verbatim to Entra and returns
-// the response unchanged. Entra mints the real access token; we never re-sign.
+// /token proxy. Forwards the form-encoded body to Entra with two adjustments:
+//   1. Strip the OAuth 2.1 'resource' parameter (Entra v2 token endpoint does not accept it
+//      and rejects requests that include it).
+//   2. Rewrite any scope of the form 'api://<AZURE_CLIENT_ID>/<x>' to '<AZURE_CLIENT_ID>/<x>'.
+//      When the client_id and the resource app are the same registration, the api:// form
+//      triggers AADSTS90009 ("application is requesting a token for itself"). The GUID form
+//      is functionally equivalent and Entra accepts it. This matters on refresh_token grants
+//      where the MCP SDK replays the original scope verbatim.
 app.post('/oauth/token', express.urlencoded({ extended: true }), async (req, res) => {
     res.set('Access-Control-Allow-Origin', '*');
     try {
         const form = new URLSearchParams();
+        const apiPrefix = `api://${AZURE_CLIENT_ID}/`;
+        const guidPrefix = `${AZURE_CLIENT_ID}/`;
         for (const [k, v] of Object.entries(req.body || {})) {
             if (k === 'resource') continue;
-            if (Array.isArray(v)) v.forEach(val => form.append(k, val));
-            else if (v != null) form.append(k, String(v));
+            const values = Array.isArray(v) ? v : [v];
+            for (const raw of values) {
+                if (raw == null) continue;
+                let val = String(raw);
+                if (k === 'scope') {
+                    val = val.split(/\s+/).filter(Boolean).map(s =>
+                        s.startsWith(apiPrefix) ? guidPrefix + s.slice(apiPrefix.length) : s
+                    ).join(' ');
+                }
+                form.append(k, val);
+            }
         }
         const upstream = await fetch(ENTRA_TOKEN_URL, {
             method: 'POST',

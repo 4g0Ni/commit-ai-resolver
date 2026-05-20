@@ -159,7 +159,7 @@ When adding a new repo, update:
 
 ## Deployment
 
-- **Target:** Single Azure App Service (Linux B1, Node 20 LTS) at `commit-ai-resolver.azurewebsites.net`
+- **Target:** Single Azure App Service (Linux B1, Node 20 LTS) at `commit-ai-resolver-win.azurewebsites.net`
 - **Architecture:** Express API + React UI served from the same origin (no separate SWA)
 - **Scripts:** `deploy/deploy.ps1` (full provision + deploy), `deploy/prepare-api.ps1` (package API + UI into zip), `deploy/reset-remote.ps1` (remote data management via Kudu)
 - **Build system:** Oryx (triggered by `az webapp deployment source config-zip`) — runs `npm install` on server, compresses `node_modules` to `tar.gz`

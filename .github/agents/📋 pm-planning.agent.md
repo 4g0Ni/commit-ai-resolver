@@ -76,7 +76,7 @@ When reviewing progress:
 | P0 | React dashboard (chart, metrics, detail) | Done |
 | P0 | LLM chat with agentic RAG search | Done |
 | P0 | Vector search with LanceDB | Done |
-| P1 | C2C Cosmos DB pilot ramp tracking | Not started |
+| ~~P1~~ | ~~C2C Cosmos DB pilot ramp tracking~~ | Removed (low ROI) |
 | P1 | Queryable DB storage (replace JSON files) | Not started |
 | P2 | Teams bot / Copilot integration | Not started |
 | P2 | CI/CD pipeline | Not started |

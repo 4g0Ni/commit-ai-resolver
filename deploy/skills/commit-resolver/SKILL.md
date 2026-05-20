@@ -1,13 +1,13 @@
 ---
 name: commit-resolver
 description: |
-  Commit AI Resolver — search and retrieve recent commit data from Microsoft Advertising repositories.
   Use when investigating live-site issues, finding suspect commits, checking config/flag changes,
-  or retrieving daily commit summaries. Queries the Commit AI Resolver MCP server for semantic
-  vector search over commit summaries with filtering by repo, author, date, risk level, and change type.
-version: 1.3.0
+  or retrieving daily commit summaries for Microsoft Advertising repositories (AdsAppsCampaignUI,
+  AdsAppsMT, AdsAppUI, AnB, AdsAppsDB). Trigger phrases: "recent commits", "what changed",
+  "suspect commits", "config changes", "flag changes", "daily summary", "commit resolver".
+version: 1.6.2
 user-invocable: true
-allowed-tools: Bash, Read, Grep, Glob, AskUserQuestion
+allowed-tools: Bash, Read, Grep, Glob, AskUserQuestion, Skill
 ---
 
 # Commit AI Resolver Skill
@@ -39,7 +39,7 @@ The `/mcp` endpoint is gated by Microsoft Entra ID OAuth 2.1 (per MCP auth spec 
 
 For local iteration without OAuth, run the server with `--no-auth` — the gate is bypassed and a stub user is injected.
 
-The server exposes 4 tools and 1 resource over Streamable HTTP.
+The server exposes 6 tools and 1 resource over Streamable HTTP.
 
 ## MCP Tools Reference
 
@@ -117,6 +117,41 @@ List all dates that have commit data. Optionally filter by range.
 
 **Example:** `list_available_dates({ from: "2026-04-01" })`
 
+### 5. `get_commit_diff` — Inspect Actual Changes
+
+Fetch the file-level diff for a single commit when the LLM summary isn't specific enough to confirm what changed. Noise files (lock files, generated code, localization, build artifacts) are filtered out automatically by the same rules the daily summarizer uses.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `commitId` | string | **Yes** | Full or short SHA |
+| `repo` | string | **Yes** | Repository name or alias — required because SHAs are not unique across our 5 repos |
+| `maxFiles` | number | No | Max files to include diffs for (default 20, max 50) |
+| `includePatch` | boolean | No | When `true` (default) returns full patch text. When `false` returns only file paths + change types (cheap inspection) |
+
+Response includes `totalFiles`, `analyzableFiles`, `autoSkipped`, `ignored`, `truncated` (true when `analyzableFiles > maxFiles`), the `files` list, and `patches` (only when `includePatch` is true).
+
+**Examples:**
+- `get_commit_diff({ commitId: "8019434c", repo: "MT", includePatch: false })` — quick file-list scan
+- `get_commit_diff({ commitId: "8019434c", repo: "MT", maxFiles: 50 })` — full patch text up to 50 files
+
+### 6. `list_commits_by_filter` — Metadata-Only Listing
+
+List commits matching pure metadata filters, without needing a semantic query. Use when you want **all** commits in a window (e.g., for a release-notes pass) rather than the most semantically relevant ones.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `repo` | string | No | Repository filter (accepts aliases) |
+| `dateFrom` | string | No | Start date (YYYY-MM-DD, inclusive) |
+| `dateTo` | string | No | End date (YYYY-MM-DD, inclusive) |
+| `changeType` | enum | No | `config`, `code`, or `mixed` |
+| `limit` | number | No | Max commits to return (default 50, max 200) |
+
+Results are sorted newest-first.
+
+**Examples:**
+- `list_commits_by_filter({ repo: "MT", dateFrom: "2026-05-12", dateTo: "2026-05-18" })` — full week of MT changes
+- `list_commits_by_filter({ changeType: "config", limit: 100 })` — recent config-only commits across all repos
+
 ## Resource
 
 - `commit://stats` — Vector store statistics (total indexed commits, repos, date range)
@@ -139,6 +174,19 @@ From the bug title/repro, write down:
 
 Bug titles use user words; commit messages use engineer words. You must search for both.
 
+### Step 1.5 — Smell test: is this a config / pilot bug?
+
+Config and pilot flips are invisible to a path-scoped search and frequently live in a **different repo** from the broken feature (e.g., a flag is defined in `AdsAppUI`'s `sharedfeatures.config` but consumed in `CMUI`). Before firing search queries, decide whether this bug smells like a config/pilot change.
+
+Symptoms that suggest config/pilot flip rather than a code change:
+- "Stopped working overnight / this morning" with no obvious deploy correlation
+- Behavior differs by account, tenant, or ring (e.g., "only for some users")
+- Feature visibly **appearing or disappearing** (rather than misbehaving)
+- User explicitly asks "is this a pilot?" / "is this rolled out?" / "is the flag on?"
+- A previously-shipping feature suddenly regresses with no related code commits in the feature folder
+
+If **any** of these match, mark the investigation as a **config/pilot suspect** and run **both** the regular code-change flow (Steps 2–4) **and** the cross-repo config flow (Step 6) in parallel.
+
 ### Step 2 — Fire 3–5 `search_commits` queries in parallel
 
 Each query covers a different angle. Take the **union** of results, not a single best query.
@@ -148,6 +196,8 @@ Angles to cover:
 - **Underlying shared component / renderer** (e.g. "UI generator", "summary page renderer", "panel primitive")
 - **Symptom in engineer words** (e.g. "width layout wider style responsive")
 - **Suspected change family** (e.g. "Fluent V2 component variants", "theme migration", "pilot flag flip")
+- **Flag / pilot name guesses** (only when the bug text itself names something flag-shaped — e.g., the user wrote "the X experiment", "the Y rollout", or referenced a specific feature toggle by name). Do NOT invent flag names from training-data memory.
+- **Unusual URL params, test overrides, or escape hatches in the bug** (e.g., a repro URL containing `?debug=1`, `?cctest=1`, `?force=...`, or any non-standard query parameter). These usually exist because recent code added them as gating/escape hatches; searching for the parameter name surfaces the commit that introduced it.
 
 Each query must include:
 - `repo` filter (use the alias, e.g. `CMUI`)
@@ -159,13 +209,60 @@ Each query must include:
 
 The embedding score alone is unreliable when vocabulary mismatches. Once you have the union of results, scan each commit's `affectedAreas` array for direct overlap with the bug's feature/component. A commit whose `affectedAreas` contains the bug's feature should be promoted above higher-scoring commits whose areas are unrelated, even if its raw score is lower.
 
+**Also factor in recency.** Bugs found in production are usually caused by recent changes — a regression typically surfaces within a day or two of the commit that introduced it, rarely later than 3–4 days. When two candidates have comparable `affectedAreas` overlap, **prefer the one dated closer to the bug report date**.
+
+Caveat: this is a heuristic, not a rule. Latent bugs (edge-case branches, low-traffic flows, internal-only paths) can sit unnoticed for weeks before someone trips over them. If the strongest area-overlap candidate is older than ~5 days, do not dismiss it — present it alongside the more recent candidates and note the date gap so the user can judge.
+
 ### Step 4 — `get_commit` on top 3 candidates
 
 Pull full details for the top 3 candidates and present them with: commit URL, author, date, risk level, summary, and your reasoning for ranking.
 
+If the summary alone isn't specific enough to confirm a candidate (e.g., the summary mentions a broad area but you need to see the exact code change), call `get_commit_diff({ commitId, repo, includePatch: false })` first for a cheap file-list scan, then call again with `includePatch: true` if a specific file looks relevant. This is especially useful when ranking two candidates with similar summaries.
+
 ### Step 5 — Only if Steps 0–4 yielded nothing: local `git log` with upstream-hop
 
 If semantic search truly returned nothing useful, fall back to local `git log` — but do **not** stop at the feature directory. Open one entry file in the feature dir, read its `import` statements, and run `git log` on each upstream package path too. UI bugs frequently come from shared renderers, not the feature folder. Tell the user that semantic search was unavailable so confidence is lower.
+
+### Step 6 — Cross-repo config / pilot resolution (run when Step 1.5 marked this as a config/pilot suspect)
+
+Run this **in parallel** with Steps 2–4, not after. Config flips in one repo (most often AdsAppUI server config, AdsAppsMT pilot routes, or AdsAppsDB metadata) commonly cause visible bugs in a different repo (most often CMUI) — single-repo search will miss them.
+
+**6a — Cross-repo config sweep.** Call `list_commits_by_filter` or `search_commits` with:
+- `changeType: "config"`
+- **no `repo` filter** (search all repos)
+- `dateFrom` = bug-report-date − 7 days, `dateTo` = bug-report-date
+- For `search_commits`, use a query that names the affected feature in engineer vocabulary
+
+Collect every config commit whose `flags` field is non-empty. Each flag string is a candidate cause.
+
+**6b — Resolve flag consumers via `smartrepo-ask`.** For the top 3 candidate flags (sorted by recency, then by `riskLevel`), invoke the **smartrepo-ask** skill to map flag → consuming repo / file. Example invocation:
+
+> Use the `smartrepo-ask` skill: *"Which packages, files, or features reference the feature flag `BulkEditPanelV2Enabled`? Return file paths and the repo each belongs to."*
+
+`smartrepo-ask` can be slow (default 15-min timeout). Only run it for flags that already passed the cross-repo sweep — don't blanket-call it on every config commit.
+
+**6c — Promote and present.** If a flag's consumer repo / file matches the bug's surface repo / feature area, promote that config commit to the top of the candidate list above any same-repo code candidates from Steps 2–4. Present it as: commit URL + the flag name + which consuming file makes it relevant to the bug.
+
+**6d — Treat smartrepo-ask output as a ranking hint, not ground truth.** It is LLM-generated and can be wrong about consumers. If the user disagrees with the linkage, fall back to Step 4 candidates.
+
+**6e — Cross-repo *code* search on server repos.** Config-only sweep in 6a misses regressions caused by **code changes gated on existing flags** (e.g., a new branch added to `UserWorkflowHelper` behind `RootPageSimplifiedCTA`). For these, also run `search_commits` with `changeType:"code"` (or no changeType filter) against the other repos most likely to contain server-side routing/gating logic:
+
+- Bug surface is **CMUI** → also search **AdsAppUI** (server config + routing) and **AdsAppsMT** (middle-tier APIs)
+- Bug surface is **AdsAppUI** → also search **AdsAppsMT** and **AdsAppsDB**
+- Bug surface is **AdsAppsMT** → also search **AdsAppsDB** and **AdsAppUI**
+
+Use the same engineer-vocabulary queries as Step 2 with the alternate `repo` filter. A code change in the server repo that touches a routing/gating file (`UserWorkflowHelper`, `*Resolver`, `*Router`, `*ViewModelBuilder`) is the most common cross-repo regression source and is invisible to single-repo CMUI search.
+
+## CRITICAL: Date cutoff discipline
+
+**Never include commits dated after the bug report date.** A commit that landed after the bug was filed cannot have caused it — at best it's a related fix.
+
+- `dateTo` MUST equal the bug report date (or earlier).
+- `dateFrom` defaults to bug report date − 7 days; widen only after a narrow window returns nothing plausible.
+- If a returned commit's `date` field is after the bug date, **reject it** even if it matches the vocabulary or area perfectly.
+- If you only have a vague bug date ("filed last week"), pick the **earliest** plausible date as `dateTo` rather than the latest. False negatives are easier to recover from than confidently presenting a wrong culprit.
+
+This rule cost a real investigation: a fix commit dated 11 days after the bug was incorrectly identified as the cause because the search window extended past the bug date. Get the cutoff right first.
 
 ## Search Strategy — Detailed Rules
 

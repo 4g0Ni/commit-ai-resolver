@@ -591,7 +591,7 @@ commit-ai-resolver/
 
 The application deploys to a single Azure App Service that serves both the API and UI.
 
-**Live URL:** https://commit-ai-resolver.azurewebsites.net
+**Live URL:** https://commit-ai-resolver-win.azurewebsites.net
 
 ### Prerequisites
 
@@ -653,9 +653,9 @@ az webapp config appsettings set --name commit-ai-resolver --resource-group comm
 
 ### Post-Deployment Checklist
 
-1. Register `https://commit-ai-resolver.azurewebsites.net` as a redirect URI in the Azure AD app registration (Single-page application platform)
+1. Register `https://commit-ai-resolver-win.azurewebsites.net` as a redirect URI in the Azure AD app registration (Single-page application platform)
 2. Add the user-assigned Managed Identity as a user in the ADO organization (for commit fetching)
-3. Verify: `curl https://commit-ai-resolver.azurewebsites.net/` returns 200
+3. Verify: `curl https://commit-ai-resolver-win.azurewebsites.net/` returns 200
 4. Verify: navigate to the URL in a browser and sign in
 
 ### Troubleshooting

@@ -453,4 +453,4 @@ async function summarizeCommits(repoConfig, commits, onProgress, concurrency = 2
     return results;
 }
 
-export { summarizeCommit, summarizeCommits, COMMIT_SUMMARY_PROMPT, isConfigFile, prettifyMinifiedXml, CONFIG_FILE_PATTERNS };
+export { summarizeCommit, summarizeCommits, fetchFilteredDiffs, COMMIT_SUMMARY_PROMPT, isConfigFile, prettifyMinifiedXml, CONFIG_FILE_PATTERNS };
