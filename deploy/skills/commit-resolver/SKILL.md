@@ -5,7 +5,7 @@ description: |
   or retrieving daily commit summaries for Microsoft Advertising repositories (AdsAppsCampaignUI,
   AdsAppsMT, AdsAppUI, AnB, AdsAppsDB). Trigger phrases: "recent commits", "what changed",
   "suspect commits", "config changes", "flag changes", "daily summary", "commit resolver".
-version: 1.6.2
+version: 1.7.0
 user-invocable: true
 allowed-tools: Bash, Read, Grep, Glob, AskUserQuestion, Skill
 ---
@@ -253,6 +253,67 @@ Collect every config commit whose `flags` field is non-empty. Each flag string i
 
 Use the same engineer-vocabulary queries as Step 2 with the alternate `repo` filter. A code change in the server repo that touches a routing/gating file (`UserWorkflowHelper`, `*Resolver`, `*Router`, `*ViewModelBuilder`) is the most common cross-repo regression source and is invisible to single-repo CMUI search.
 
+## Release-cadence-aware date alignment
+
+**Check-in date ≠ user-impact date.** When correlating a metric or data anomaly with a commit, shift the commit date forward through the deployment pipeline before comparing it to when the anomaly appeared. Skipping this shift causes correct culprits to be dismissed ("the commit landed 4 days before the jump, can't be it") and date-adjacent but innocent commits to be falsely blamed.
+
+### Standard Microsoft Ads release cadence (default assumption)
+
+Releases run on **US business hours / US time zone**. No deploys on weekends.
+
+| Stage | Typical delay from US check-in date |
+|---|---|
+| Check-in to master | T+0 |
+| Deploy to SI / Beta-Prod | T+1 US business day |
+| Flip to Prod | T+2 US business days |
+| Weekend skip | Fri US check-in → Mon SI → Tue Prod |
+
+So a config/flag ramp checked in on **Friday (US)** typically reaches **prod users on Tuesday** (4 calendar days later), not the next day.
+
+### Time-zone gotcha — China check-ins vs US release calendar
+
+Many committers are in China (UTC+8) while the release pipeline runs on US time. The "check-in day" the release calendar cares about is the **US calendar day** when the commit landed, not the local day of the author.
+
+Examples:
+- A commit pushed **Saturday 10:00 AM China time** = **Friday ~10 PM US Eastern / 7 PM US Pacific** — still a Friday US business day, so it makes the same week's SI deploy.
+- A commit pushed **Monday 9:00 AM China time** = **Sunday evening US time** — does *not* make Monday's SI deploy in some setups (release branch may have been cut Friday US); often ships in the next cycle.
+- A commit pushed **Friday 9:00 PM China time** = **Friday morning US time** — clearly hits Friday SI.
+
+Practical rules:
+1. **Do not trust the date string in the commit list at face value** when correlating with deploy windows. The MCP/ADO timestamp may be normalized to UTC, the author's local zone, or US time depending on the source — verify before reasoning about it.
+2. When the suspected check-in is on a **Friday or Monday** (the boundary days), convert the commit timestamp to **US Pacific time** explicitly and re-check which US business day it falls on.
+3. If the commit shows a Saturday/Sunday date in the API but the author is in China, the underlying US time is very likely **Friday evening US** — treat it as a Friday US check-in for cadence purposes.
+
+When in doubt, ask the user which time zone the displayed dates are in, or get the full UTC timestamp from the commit URL on ADO.
+
+### How to apply when investigating a data/metric anomaly
+
+1. **Identify the anomaly date** — the day a metric, count, or behavior visibly shifted (e.g., "row count doubled on 2026-05-19").
+2. **Compute the expected US check-in window** — subtract the cadence delay (and weekend skip) from the anomaly date. For a Tuesday-prod anomaly, the suspect check-in window is the **previous Thursday or Friday (US)**, not Monday.
+3. **Search commits in that shifted window**, not the anomaly date itself. `dateFrom` = anomaly-date − 5 days, `dateTo` = anomaly-date − 1 day is a good default.
+4. **Don't dismiss a commit just because its date doesn't match the anomaly date.** A 4-day gap between a Friday US check-in and a Tuesday prod-visible jump is exactly what the cadence predicts.
+5. **Convert author-local timestamps to US time** before judging which US business day a commit really lands in (especially for boundary days). See the time-zone gotcha above.
+6. **Pilot ramps amplify this.** A flag ramped from 50% → 100% can roughly double the affected metric. If the anomaly ratio looks like ~2x (or matches another ramp percentage), prioritize config commits with non-empty `flags` from the shifted window.
+
+### Worked example — Task Engine execution-count jump
+
+Anomaly: `GetTaskExecutionPercentage` row count for same-day buckets jumped from a stuck `1,196` (5/14–5/18) to `2,264` on **2026-05-19** (Tuesday), roughly 1.89×.
+
+Naive analysis: search around 5/19 → finds two TaskEngine MISE auth commits dated 5/18 and 5/19. Both look temporally plausible, but their *prod deploy* lands on 5/20–5/21 under the cadence, **after** the jump. So they can't be the cause.
+
+Cadence-shifted analysis: 5/19 prod ⇒ expected US check-in window is **Friday 5/15 (US)**, with the weekend skipping past Sat/Sun deploys. `list_commits_by_filter` against AdsAppsMT for 5/14–5/16 surfaces `1fb6a016` (Qiyang Cao, 5/15): "Ramp `SupportStartDateSortInGetTaskExecutionPercentage` to 100% in prod." Flag ramp from 50% → 100% predicts ~2× volume — matches the 1.89× observed.
+
+**Lesson:** Without the cadence shift, the real culprit (`1fb6a016`) looks 4 days too early and would be dismissed. The date-adjacent but innocent MISE auth commits would be falsely promoted. Always shift the date window backward through the deploy pipeline before ranking candidates, and convert author-local times to US time when the check-in falls on a boundary day.
+
+### When the cadence doesn't apply
+
+- **Hotfixes / emergency rollouts** can deploy same-day. If the user mentions "hotfix," "Sev2," or "emergency," widen the window to include the anomaly date itself.
+- **Dynamic config / pilot flags** sometimes apply within minutes of a config push, bypassing the build/deploy cycle. For `changeType: "config"` commits the delay can be T+0 to T+1, not T+2. Ask the user or check the flag's rollout system if unsure.
+- **Per-ring rollouts** (e.g., SI-only, Beta-only) change which environments see the change first. If the anomaly is from SI/Beta data, use T+1; if from Prod, use T+2 + weekend.
+- **Release freezes** (mobile cuts, holidays, end-of-year) extend the delay further. Confirm with the user if any freeze was active.
+
+When in doubt, **present both windows** — the cadence-shifted candidate and the same-day candidate — and let the user pick.
+
 ## CRITICAL: Date cutoff discipline
 
 **Never include commits dated after the bug report date.** A commit that landed after the bug was filed cannot have caused it — at best it's a related fix.
@@ -261,6 +322,7 @@ Use the same engineer-vocabulary queries as Step 2 with the alternate `repo` fil
 - `dateFrom` defaults to bug report date − 7 days; widen only after a narrow window returns nothing plausible.
 - If a returned commit's `date` field is after the bug date, **reject it** even if it matches the vocabulary or area perfectly.
 - If you only have a vague bug date ("filed last week"), pick the **earliest** plausible date as `dateTo` rather than the latest. False negatives are easier to recover from than confidently presenting a wrong culprit.
+- **For metric / data anomalies (not bug reports), the cutoff is different.** Use `dateTo = anomaly-date − 1 day`, because same-day commits have not yet deployed to prod under the standard cadence and cannot have caused the jump. See the "Release-cadence-aware date alignment" section above for the full shifted window.
 
 This rule cost a real investigation: a fix commit dated 11 days after the bug was incorrectly identified as the cause because the search window extended past the bug date. Get the cutoff right first.
 
