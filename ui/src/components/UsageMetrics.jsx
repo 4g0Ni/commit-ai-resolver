@@ -1,16 +1,28 @@
 import { useState, useEffect } from 'react';
 import { fetchUsageMetrics } from '../api';
 
+const SOURCE_TABS = [
+    { key: 'all', label: 'All' },
+    { key: 'ui', label: 'UI' },
+    { key: 'api', label: 'API' },
+    { key: 'mcp', label: 'MCP' },
+];
+
 function UsageMetrics({ onClose }) {
-    const [data, setData] = useState(null);
+    const [metrics, setMetrics] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [source, setSource] = useState('all');
 
     useEffect(() => {
         fetchUsageMetrics()
-            .then(setData)
+            .then(setMetrics)
             .catch(err => console.error('Failed to load metrics:', err))
             .finally(() => setLoading(false));
     }, []);
+
+    const data = metrics?.[source];
+    const showQualityPanels = source === 'all' || source === 'ui';
+    const showToolBreakdown = source === 'mcp';
 
     const maxVolume = data?.dailyVolume?.length
         ? Math.max(...data.dailyVolume.map(d => d.count))
@@ -38,6 +50,22 @@ function UsageMetrics({ onClose }) {
                     <div className="feedback-loading">Failed to load metrics.</div>
                 ) : (
                     <div className="usage-metrics-body">
+                        {/* Source tabs */}
+                        <div className="usage-source-tabs">
+                            {SOURCE_TABS.map(t => (
+                                <button
+                                    key={t.key}
+                                    className={`filter-btn ${source === t.key ? 'active' : ''}`}
+                                    onClick={() => setSource(t.key)}
+                                >
+                                    {t.label}
+                                    <span className="usage-source-count">
+                                        {metrics?.[t.key]?.summary?.total ?? 0}
+                                    </span>
+                                </button>
+                            ))}
+                        </div>
+
                         {/* Summary cards */}
                         <div className="usage-stats-row">
                             <div className="usage-stat-card">
@@ -130,6 +158,7 @@ function UsageMetrics({ onClose }) {
 
                         <div className="usage-grid">
                             {/* Confidence distribution */}
+                            {showQualityPanels && (
                             <div className="usage-section">
                                 <h3 className="usage-section-title">Confidence Distribution</h3>
                                 <div className="usage-conf-bars">
@@ -152,8 +181,10 @@ function UsageMetrics({ onClose }) {
                                     ))}
                                 </div>
                             </div>
+                            )}
 
                             {/* Search method breakdown */}
+                            {showQualityPanels && (
                             <div className="usage-section">
                                 <h3 className="usage-section-title">Search Methods</h3>
                                 {data.methodBreakdown.length === 0 ? (
@@ -169,8 +200,29 @@ function UsageMetrics({ onClose }) {
                                     </div>
                                 )}
                             </div>
+                            )}
+
+                            {/* MCP tool breakdown */}
+                            {showToolBreakdown && (
+                            <div className="usage-section">
+                                <h3 className="usage-section-title">MCP Tool Breakdown</h3>
+                                {!data.toolBreakdown || data.toolBreakdown.length === 0 ? (
+                                    <div className="usage-empty">No MCP tool calls yet</div>
+                                ) : (
+                                    <div className="usage-method-list">
+                                        {data.toolBreakdown.map((t, i) => (
+                                            <div key={i} className="usage-method-row">
+                                                <span className="usage-method-name">{t.tool}</span>
+                                                <span className="usage-method-count">{t.count}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                            )}
 
                             {/* Feedback & Quality */}
+                            {showQualityPanels && (
                             <div className="usage-section">
                                 <h3 className="usage-section-title">Feedback & Quality</h3>
                                 <div className="usage-fe-cards">
@@ -202,6 +254,7 @@ function UsageMetrics({ onClose }) {
                                     </div>
                                 </div>
                             </div>
+                            )}
                         </div>
 
                         {/* Engagement & Performance */}

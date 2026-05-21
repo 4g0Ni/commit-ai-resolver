@@ -7,6 +7,8 @@
 
 import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import { randomUUID } from 'crypto';
+import { logQuery } from './db.js';
 
 /** Display name → internal repo name mapping (case-insensitive lookup built at runtime). */
 const REPO_ALIASES = {
@@ -57,6 +59,44 @@ export function createMcpServer(deps) {
         version: '1.0.0',
     });
 
+    // Wrap a tool handler with usage logging into chat_queries (source='mcp').
+    // queryExtractor: optional (args) => string for search-like tools; null otherwise.
+    function logged(toolName, handler, queryExtractor = null) {
+        return async (args) => {
+            const t0 = Date.now();
+            let isError = false;
+            try {
+                const result = await handler(args);
+                if (result?.isError) isError = true;
+                return result;
+            } catch (err) {
+                isError = true;
+                throw err;
+            } finally {
+                try {
+                    logQuery({
+                        id: randomUUID(),
+                        query: queryExtractor ? queryExtractor(args) : null,
+                        response: isError ? null : 'ok',
+                        confidence: isError ? -1 : null,
+                        iterations: null,
+                        searchMethod: null,
+                        resultCount: null,
+                        iterationLog: [],
+                        workItemId: null,
+                        workItemTitle: null,
+                        elapsedMs: Date.now() - t0,
+                        userId: deps.userEmail || null,
+                        source: 'mcp',
+                        toolName,
+                    });
+                } catch (dbErr) {
+                    console.error(`[MCP] Failed to log ${toolName} call:`, dbErr.message);
+                }
+            }
+        };
+    }
+
     // --- Tool: search_commits ---
     server.registerTool(
         'search_commits',
@@ -85,7 +125,7 @@ export function createMcpServer(deps) {
                 topK: z.number().optional().describe('Maximum number of results to return (default 10, max 50)'),
             }),
         },
-        async ({ query, repo, author, dateFrom, dateTo, riskLevel, changeType, topK }) => {
+        logged('search_commits', async ({ query, repo, author, dateFrom, dateTo, riskLevel, changeType, topK }) => {
             try {
                 const resolvedRepo = resolveRepo(repo);
                 if (repo && !resolvedRepo) {
@@ -144,7 +184,7 @@ export function createMcpServer(deps) {
                     isError: true,
                 };
             }
-        }
+        }, (args) => args.query)
     );
 
     // --- Tool: get_commit ---
@@ -158,7 +198,7 @@ export function createMcpServer(deps) {
                 commitIds: z.array(z.string()).describe('Array of short commit IDs (e.g. ["519cdc3f", "a1b2c3d4"])'),
             }),
         },
-        async ({ commitIds }) => {
+        logged('get_commit', async ({ commitIds }) => {
             try {
                 const results = await deps.lookupByCommitIds(commitIds);
                 if (results.length === 0) {
@@ -192,7 +232,7 @@ export function createMcpServer(deps) {
                     isError: true,
                 };
             }
-        }
+        })
     );
 
     // --- Tool: get_daily_summary ---
@@ -209,7 +249,7 @@ export function createMcpServer(deps) {
                 ),
             }),
         },
-        async ({ date, repo }) => {
+        logged('get_daily_summary', async ({ date, repo }) => {
             try {
                 const data = await deps.loadDayData(date);
                 const resolvedRepo = resolveRepo(repo);
@@ -273,7 +313,7 @@ export function createMcpServer(deps) {
                     isError: true,
                 };
             }
-        }
+        })
     );
 
     // --- Tool: list_available_dates ---
@@ -288,7 +328,7 @@ export function createMcpServer(deps) {
                 to: z.string().optional().describe('End date filter (YYYY-MM-DD)'),
             }),
         },
-        async ({ from, to }) => {
+        logged('list_available_dates', async ({ from, to }) => {
             try {
                 let dates = await deps.listAvailableDates();
                 if (from) dates = dates.filter(d => d >= from);
@@ -306,7 +346,7 @@ export function createMcpServer(deps) {
                     isError: true,
                 };
             }
-        }
+        })
     );
 
     // --- Tool: get_commit_diff ---
@@ -330,7 +370,7 @@ export function createMcpServer(deps) {
                 ),
             }),
         },
-        async ({ commitId, repo, maxFiles, includePatch }) => {
+        logged('get_commit_diff', async ({ commitId, repo, maxFiles, includePatch }) => {
             try {
                 const resolvedRepo = resolveRepo(repo);
                 if (!resolvedRepo) {
@@ -380,7 +420,7 @@ export function createMcpServer(deps) {
                     isError: true,
                 };
             }
-        }
+        })
     );
 
     // --- Tool: list_commits_by_filter ---
@@ -403,7 +443,7 @@ export function createMcpServer(deps) {
                 limit: z.number().optional().describe('Max commits to return (default 50, max 200)'),
             }),
         },
-        async ({ repo, dateFrom, dateTo, changeType, limit }) => {
+        logged('list_commits_by_filter', async ({ repo, dateFrom, dateTo, changeType, limit }) => {
             try {
                 const resolvedRepo = resolveRepo(repo);
                 if (repo && !resolvedRepo) {
@@ -477,7 +517,7 @@ export function createMcpServer(deps) {
                     isError: true,
                 };
             }
-        }
+        })
     );
 
     // --- Resource: commit://stats ---

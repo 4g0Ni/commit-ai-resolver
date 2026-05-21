@@ -21,7 +21,7 @@ async function authFetch(url, options = {}) {
     const authHeaders = await getAuthHeaders();
     const res = await fetch(url, {
         ...options,
-        headers: { ...options.headers, ...authHeaders },
+        headers: { 'X-Client': 'ui', ...options.headers, ...authHeaders },
     });
     if (res.status === 401) {
         await msalInstance.acquireTokenRedirect(loginRequest);
@@ -80,6 +80,7 @@ export async function sendChatMessageStream(message, history = [], { onStatus, o
         headers: {
             'Content-Type': 'application/json',
             'Accept': 'text/event-stream',
+            'X-Client': 'ui',
             ...authHeaders,
         },
         body: JSON.stringify({ message, history }),

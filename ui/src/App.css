@@ -1876,6 +1876,41 @@
   max-width: 1000px;
 }
 
+.usage-source-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.usage-source-tabs .filter-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  font-size: 12px;
+}
+
+.usage-source-tabs .filter-btn.active {
+  background: var(--accent-primary, #2563eb);
+  color: #fff;
+  border-color: var(--accent-primary, #2563eb);
+}
+
+.usage-source-count {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.usage-source-tabs .filter-btn.active .usage-source-count {
+  background: rgba(255, 255, 255, 0.25);
+  color: #fff;
+}
+
 .connect-mcp-panel {
   max-width: 640px;
 }

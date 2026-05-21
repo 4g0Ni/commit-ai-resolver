@@ -30,6 +30,8 @@ export const INFO_COLUMNS = [
     'IterationIndex',
     'UserId',
     'SessionId',
+    'Source',
+    'ToolName',
 ];
 
 export const ERROR_COLUMNS = [

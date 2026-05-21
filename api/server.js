@@ -403,6 +403,7 @@ app.post('/api/chat', async (req, res) => {
 
         const queryId = randomUUID();
         const wantsStream = req.headers.accept?.includes('text/event-stream');
+        const clientSource = req.headers['x-client'] === 'ui' ? 'ui' : 'api';
 
         if (useVectors && wantsStream) {
             // --- SSE streaming agentic pipeline ---
@@ -465,6 +466,7 @@ app.post('/api/chat', async (req, res) => {
                 ElapsedMs: totalMs,
                 SuspectsCount: result.suspects?.length || 0,
                 SessionId: req.headers['x-session-id'] || null,
+                Source: clientSource,
             });
 
             try {
@@ -481,6 +483,7 @@ app.post('/api/chat', async (req, res) => {
                     workItemTitle: workItemContext?.title,
                     elapsedMs: totalMs,
                     userId: req.user?.email || req.user?.id,
+                    source: clientSource,
                 });
             } catch (dbErr) {
                 console.error('  [Telemetry] Failed to log query:', dbErr.message);
@@ -533,6 +536,7 @@ app.post('/api/chat', async (req, res) => {
                 ElapsedMs: totalMs,
                 SuspectsCount: result.suspects?.length || 0,
                 SessionId: req.headers['x-session-id'] || null,
+                Source: clientSource,
             });
 
             // Log to telemetry DB
@@ -550,6 +554,7 @@ app.post('/api/chat', async (req, res) => {
                     workItemTitle: workItemContext?.title,
                     elapsedMs: totalMs,
                     userId: req.user?.email || req.user?.id,
+                    source: clientSource,
                 });
             } catch (dbErr) {
                 console.error('  [Telemetry] Failed to log query:', dbErr.message);
@@ -621,6 +626,7 @@ ${contextText}
                     workItemTitle: workItemContext?.title,
                     elapsedMs: Date.now() - t2,
                     userId: req.user?.email || req.user?.id,
+                    source: clientSource,
                 });
             } catch (dbErr) {
                 console.error('  [Telemetry] Failed to log query:', dbErr.message);
@@ -777,6 +783,7 @@ app.post('/api/feedback', async (req, res) => {
                     response: metadata?.response,
                     confidence: metadata?.confidence,
                     searchMethod: metadata?.searchMethod,
+                    source: req.headers['x-client'] === 'ui' ? 'ui' : 'api',
                 });
                 recordFeedback({ queryId, vote, comment });
             } else {
@@ -1064,7 +1071,8 @@ app.post('/mcp', requireAuth, async (req, res) => {
                     console.log(`[MCP] Session closed: ${sid}`);
                 }
             };
-            const server = createMcpServer(mcpDeps);
+            const sessionDeps = { ...mcpDeps, userEmail: req.user?.email || req.user?.id || null };
+            const server = createMcpServer(sessionDeps);
             await server.connect(transport);
             await transport.handleRequest(req, res, req.body);
             return;
