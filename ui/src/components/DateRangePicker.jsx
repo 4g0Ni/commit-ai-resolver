@@ -34,18 +34,6 @@ function DateRangePicker({
 
     return (
         <div className="date-range-picker">
-            <div className="release-mode-toggle">
-                <label className="toggle-switch">
-                    <input
-                        type="checkbox"
-                        checked={releaseMode}
-                        onChange={e => onReleaseModeChange(e.target.checked)}
-                    />
-                    <span className="toggle-slider"></span>
-                </label>
-                <span className="toggle-label">Release</span>
-            </div>
-
             {releaseMode ? (
                 <div className="release-inputs">
                     {releasesLoading ? (
