@@ -128,17 +128,37 @@ function Timeline({ dates }) {
     }, [fromDate, toDate, loadRangeData]);
 
     const allRepos = useMemo(() => getAllRepos(dayData), [dayData]);
-    const [selectedRepos, setSelectedRepos] = useState([]);
+    const [selectedRepos, setSelectedRepos] = useState(() => {
+        try {
+            const saved = JSON.parse(localStorage.getItem('selectedRepos') || 'null');
+            return Array.isArray(saved) ? saved : [];
+        } catch {
+            return [];
+        }
+    });
     const [selectedRiskLevels, setSelectedRiskLevels] = useState(['HIGH', 'MEDIUM', 'LOW']);
     const [selectedChangeTypes, setSelectedChangeTypes] = useState(['code', 'config', 'mixed']);
     const [authorSearch, setAuthorSearch] = useState('');
 
-    // Sync selectedRepos when allRepos changes (new repos appear after data loads)
+    // Sync selectedRepos when allRepos changes: drop stored entries no longer present,
+    // and default to all repos only when nothing valid is stored.
     useEffect(() => {
-        if (allRepos.length > 0 && selectedRepos.length === 0) {
+        if (allRepos.length === 0) return;
+        const valid = selectedRepos.filter(r => allRepos.includes(r));
+        if (valid.length === 0) {
             setSelectedRepos(allRepos);
+        } else if (valid.length !== selectedRepos.length) {
+            setSelectedRepos(valid);
         }
     }, [allRepos]);
+
+    // Persist repo selection (only once user has actually made selections to avoid
+    // overwriting saved prefs with an empty initial state).
+    useEffect(() => {
+        if (selectedRepos.length > 0) {
+            localStorage.setItem('selectedRepos', JSON.stringify(selectedRepos));
+        }
+    }, [selectedRepos]);
 
     // --- Release mode state ---
     const [releaseMode, setReleaseMode] = useState(false);
