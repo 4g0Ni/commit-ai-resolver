@@ -28,6 +28,7 @@ function App() {
     const isAuthenticated = useIsAuthenticated();
     const { instance, accounts } = useMsal();
     const account = accounts[0];
+    const isAdmin = account?.username?.toLowerCase() === 'yizhang6@microsoft.com';
 
     const [dates, setDates] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -101,9 +102,11 @@ function App() {
                     <button className="feedback-header-btn" onClick={() => setShowMetrics(true)}>
                         Metrics
                     </button>
-                    <button className="feedback-header-btn" onClick={() => setShowFeedback(true)}>
-                        Feedback
-                    </button>
+                    {isAdmin && (
+                        <button className="feedback-header-btn" onClick={() => setShowFeedback(true)}>
+                            Feedback
+                        </button>
+                    )}
                     <button className="feedback-header-btn" onClick={() => setShowConnectMcp(true)}>
                         Connect MCP
                     </button>
@@ -130,7 +133,7 @@ function App() {
                     <ChatBox />
                 </aside>
             </div>
-            {showFeedback && <FeedbackPanel onClose={() => setShowFeedback(false)} />}
+            {showFeedback && isAdmin && <FeedbackPanel onClose={() => setShowFeedback(false)} />}
             {showMetrics && <UsageMetrics onClose={() => setShowMetrics(false)} />}
             {showConnectMcp && <ConnectMcpModal onClose={() => setShowConnectMcp(false)} />}
         </div>

@@ -158,6 +158,15 @@ const noAuthStub = (req, res, next) => {
 };
 const requireAuth = NO_AUTH ? noAuthStub : authMiddleware;
 
+const ADMIN_EMAILS = new Set(['yizhang6@microsoft.com']);
+function requireAdmin(req, res, next) {
+    const email = req.user?.email?.toLowerCase();
+    if (!email || !ADMIN_EMAILS.has(email)) {
+        return res.status(403).json({ error: 'Forbidden' });
+    }
+    next();
+}
+
 app.use('/api', requireAuth);
 
 if (NO_AUTH) console.log('⚠ Auth disabled (--no-auth)');
@@ -805,8 +814,8 @@ app.post('/api/feedback', async (req, res) => {
     }
 });
 
-// GET /api/feedback/stats — aggregated feedback statistics
-app.get('/api/feedback/stats', async (req, res) => {
+// GET /api/feedback/stats — aggregated feedback statistics (admin only)
+app.get('/api/feedback/stats', requireAdmin, async (req, res) => {
     try {
         const stats = getFeedbackStats();
         res.json(stats);
@@ -815,8 +824,8 @@ app.get('/api/feedback/stats', async (req, res) => {
     }
 });
 
-// GET /api/feedback/recent — recent queries with feedback
-app.get('/api/feedback/recent', async (req, res) => {
+// GET /api/feedback/recent — recent queries with feedback (admin only)
+app.get('/api/feedback/recent', requireAdmin, async (req, res) => {
     try {
         const limit = Math.min(parseInt(req.query.limit) || 50, 200);
         const rows = getRecentFeedback(limit);
