@@ -27,8 +27,8 @@ function ConnectMcpModal({ onClose }) {
 
                 <div className="connect-mcp-body">
                     <p className="connect-mcp-intro">
-                        One installer wires this MCP server into Claude Desktop, Claude Code, and VS Code,
-                        and drops the <code>commit-resolver</code> skill into <code>~/.claude/skills</code>.
+                        One installer wires this MCP server into GitHub Copilot CLI, Claude Desktop, Claude Code, and VS Code,
+                        and drops the <code>commit-resolver</code> skill into both <code>~/.copilot/skills</code> (Copilot CLI) and <code>~/.claude/skills</code> (Claude — transitional).
                     </p>
 
                     <ol className="connect-mcp-steps">
@@ -62,8 +62,8 @@ function ConnectMcpModal({ onClose }) {
                         <li>
                             <div className="connect-mcp-step-title">Restart your MCP client</div>
                             <div className="connect-mcp-step-body">
-                                Quit and reopen Claude Desktop, Claude Code, or VS Code so it picks up the
-                                new server config.
+                                Quit and reopen Copilot CLI, Claude Desktop, Claude Code, or VS Code so it picks up the
+                                new server config. (In Copilot CLI you can also run <code>/skills reload</code>.)
                             </div>
                         </li>
 

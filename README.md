@@ -1013,7 +1013,7 @@ Resource: `commit://stats` — vector store stats (total indexed commits, tracke
 
 > **For end users:** the easiest way to connect a client is the **Connect MCP** button in the dashboard header, which serves a one-shot installer (`/install/setup-commit-resolver.ps1`). See [USERGUIDE.md → Connecting from MCP clients](USERGUIDE.md#connecting-from-mcp-clients). The rest of this section covers the one-time tenant setup behind it.
 
-The `/mcp` endpoint is an OAuth 2.1 protected resource (per MCP auth spec 2025-06-18). Because Entra ID does not implement RFC 7591 dynamic client registration — which the Claude Code / VS Code MCP SDKs require — the server runs a thin **DCR shim** at `/oauth/register` and proxies `/oauth/authorize` and `/oauth/token` to Entra. Tokens are still issued and signed by Entra; the server only mediates the OAuth handshake and validates the resulting access tokens via JWKS.
+The `/mcp` endpoint is an OAuth 2.1 protected resource (per MCP auth spec 2025-06-18). Because Entra ID does not implement RFC 7591 dynamic client registration — which the GitHub Copilot CLI / Claude Code / VS Code MCP SDKs require — the server runs a thin **DCR shim** at `/oauth/register` and proxies `/oauth/authorize` and `/oauth/token` to Entra. Tokens are still issued and signed by Entra; the server only mediates the OAuth handshake and validates the resulting access tokens via JWKS.
 
 Discovery docs served by the API:
 - `/.well-known/oauth-protected-resource` (RFC 9728) — points clients at our auth server metadata.
@@ -1072,7 +1072,7 @@ Still open:
 |---|---|---|
 | 1 | Release tag structure | Per-repo, 3 strategies codified in `src/config/repositories.js`: `dateSorted` (CampaignUI), `rolling` (MT: STAGING ↔ LKG), `versioned` (AppUI/AnB/DB) |
 | 2 | Pilot flag locations | Code-side enumerated in §3.1 (`Dynamic.config`, `DynamicConfigValues.cs`, `sharedfeatures.config`, `appsettings*.json`, `.cscfg`/`.csdef`/`Web.config`). Runtime ramps deferred to C2C tracker |
-| 4 | Chat surface | Standalone React app + MCP endpoint (DCR shim for Claude Code / VS Code clients). No Teams bot |
+| 4 | Chat surface | Standalone React app + MCP endpoint (DCR shim for GitHub Copilot CLI / Claude Code / VS Code clients). No Teams bot |
 | 5 | Access control | Entra ID JWT on `/api/*`, MCP via OAuth 2.1 `mcp.access` scope. All tenant users see all repos (no team scoping) |
 | 6 | Telemetry integration | Aria / 1DS → Kusto tables `commitairesolver_tracing` and `commitairesolver_errors`. Usage metrics in local SQLite, exposed via `/api/metrics/usage` |
 

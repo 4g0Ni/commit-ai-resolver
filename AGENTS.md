@@ -1,12 +1,8 @@
-# CLAUDE.md — see AGENTS.md
+# AGENTS.md — Project Guidelines for Copilot CLI
 
-> **Moved.** Project guidelines now live in [`AGENTS.md`](./AGENTS.md), which is auto-loaded by both **GitHub Copilot CLI** (primary) and **Claude Code** (transitional). This file is kept as a pointer for backward compatibility.
+> **Primary agent toolchain:** GitHub Copilot CLI. The Copilot + Core Experiences org standardizes on Copilot CLI as the primary agentic CLI tool by **June 30, 2026**. This file is the canonical agent-instructions document and is auto-loaded by Copilot CLI (it also reads `CLAUDE.md` and `.github/copilot-instructions.md` for backward compatibility).
 >
-> **Why:** Copilot + Core Experiences is standardizing on GitHub Copilot CLI as the primary agentic CLI tool by **June 30, 2026**. Copilot CLI keeps supporting multiple models (Anthropic, OpenAI, Microsoft-internal) — only the toolchain is standardizing.
->
-> **Action:** open `AGENTS.md` for the full guidelines (architecture, coding standards, API/agent rules, repo config, testing, deployment).
-
----
+> **Models:** Copilot CLI supports a broad mix of models (Anthropic, OpenAI, Microsoft-internal). Switch with `/model`. This standardization is about toolchain, not model choice.
 
 ## Project Overview
 
@@ -28,6 +24,9 @@ ui/            — React (Vite) frontend
 deploy/        — Azure deployment scripts (prepare-api.ps1, deploy.ps1, reset-remote.ps1)
 scripts/       — CLI utilities (reset-and-refresh.js)
 data/          — Runtime data (daily JSON, diffs, LanceDB vector store) — gitignored
+.github/
+  agents/      — Repository-level Copilot CLI custom agents (api-backend, ui-dev, qa, etc.)
+  copilot-instructions.md — Pointer to this file (loaded by Copilot CLI)
 ```
 
 **Rules:**
@@ -143,11 +142,19 @@ When adding a new repo, update:
   - For repo config changes: query with repo aliases (e.g., "what changed in CMDB?") to confirm alias resolution works.
 - Build the UI (`npm run build` in `ui/`) to catch compile errors before committing.
 
+## Copilot CLI Workflow
+
+- **Custom agents** live in `.github/agents/` (repo-level) and are auto-discovered. Pick one with `/agent` or call inline (e.g., "use the api-backend agent to add a new route"). See [Copilot CLI docs → custom agents](https://docs.github.com/copilot/how-tos/use-copilot-agents/use-copilot-cli#use-custom-agents).
+- **Skills:** project-level skills live in `.github/skills/` (Copilot CLI also reads `.claude/skills/` for backward compat). The shipped `commit-resolver` skill in `deploy/skills/commit-resolver/` is installed to `~/.copilot/skills/commit-resolver/` by `deploy/setup-commit-resolver.ps1`.
+- **MCP:** add servers with `/mcp add`. The installer wires the Commit AI Resolver MCP into `~/.copilot/mcp-config.json` (Copilot CLI), `~/.claude/mcp.json` (Claude Code transitional), `%APPDATA%\Claude\claude_desktop_config.json` (Claude Desktop), and VS Code.
+- **Modes:** `Shift+Tab` toggles plan mode. `/fleet` enables parallel subagent execution. `/delegate` ships the session to a GitHub-hosted agent that opens a PR.
+- **Feedback:** log Copilot CLI bugs at <https://github.com/1ES-microsoft/GitHub-Copilot-CLI-Request/discussions/new?category=bugs>. Submit eval scenarios at <https://github.com/1ES-microsoft/GitHub-Copilot-CLI-Request/discussions/new?category=new-eval>.
+
 ## Tools & Skills
 
 - **Playwright MCP:** Use Playwright browser tools for UI verification. Navigate to `http://localhost:5173`, take snapshots, click elements, and verify rendering after UI changes.
 - **SmartRepo Skill:** Use the `/smartrepo-ask` or `/smartrepo-summarize` skills to refresh domain knowledge about tracked repositories when working on commit summarization, diff filtering, or intent extraction. This helps ensure config rules and aliases stay accurate as repos evolve.
-- **Exa Search:** Prefer Exa MCP tools (`web_search_exa`, `web_fetch_exa`) over `WebSearch`/`WebFetch` for web research — better results for technical queries.
+- **Web research:** prefer `web_fetch` (built-in) for documentation lookups. Exa MCP (`web_search_exa`, `web_fetch_exa`) is still available when installed.
 
 ## Telemetry
 

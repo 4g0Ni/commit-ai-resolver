@@ -51,7 +51,7 @@ MSAL caches tokens in `localStorage` with `storeAuthStateInCookie: true`, so use
 
 ## Connecting from MCP clients
 
-The dashboard exposes the same commit data as an MCP server so you can query it directly from Claude Desktop, Claude Code, or VS Code. The easiest way to connect is the **Connect MCP** button in the dashboard header.
+The dashboard exposes the same commit data as an MCP server so you can query it directly from **GitHub Copilot CLI** (primary), Claude Desktop, Claude Code, or VS Code. The easiest way to connect is the **Connect MCP** button in the dashboard header.
 
 ### One-click setup (recommended)
 
@@ -61,8 +61,8 @@ The dashboard exposes the same commit data as an MCP server so you can query it 
    ```powershell
    powershell -ExecutionPolicy Bypass -File .\setup-commit-resolver.ps1
    ```
-   This wires the MCP server into Claude Desktop, Claude Code, and VS Code, and drops the `commit-resolver` skill into `~/.claude/skills`.
-4. Restart your MCP client (quit and reopen Claude Desktop / Code / VS Code).
+   This wires the MCP server into GitHub Copilot CLI, Claude Desktop, Claude Code, and VS Code, and drops the `commit-resolver` skill into both `~/.copilot/skills` (Copilot CLI) and `~/.claude/skills` (Claude — transitional).
+4. Restart your MCP client (quit and reopen Copilot CLI / Claude Desktop / Code / VS Code). In Copilot CLI you can also run `/skills reload`.
 5. Invoke the skill — e.g. ask *"what changed in CMUI yesterday?"*. A browser tab pops up for Microsoft sign-in the first time. Tokens are cached after that.
 
 ### Direct download
@@ -75,13 +75,14 @@ The downloaded script is fully standalone — it pulls the skill files from the 
 
 ### What the installer touches
 
-The installer wires the MCP server into every Claude config it can find:
+The installer wires the MCP server into every supported client config it can find:
+- `%USERPROFILE%\.copilot\mcp-config.json` (GitHub Copilot CLI — primary; respects `$COPILOT_HOME`)
 - `%APPDATA%\Claude\claude_desktop_config.json` (Claude Desktop)
 - `%USERPROFILE%\.claude\mcp.json` (Claude Code CLI — global)
 - `%USERPROFILE%\.claude.json` under `projects.*.mcpServers` (Claude Code CLI per-project overrides — needed because per-project entries shadow the global config when working inside that directory)
 - `%APPDATA%\Code\User\mcp.json` (and the Insiders variant if present)
 
-It also drops the skill at `%USERPROFILE%\.claude\skills\commit-resolver\`. Every modified file is backed up under `%USERPROFILE%\.commit-resolver-setup-state\` so `-Uninstall` can restore it.
+It also drops the skill at `%USERPROFILE%\.copilot\skills\commit-resolver\` (Copilot CLI) and `%USERPROFILE%\.claude\skills\commit-resolver\` (Claude — transitional). Every modified file is backed up under `%USERPROFILE%\.commit-resolver-setup-state\` so `-Uninstall` can restore it.
 
 ### Authentication
 

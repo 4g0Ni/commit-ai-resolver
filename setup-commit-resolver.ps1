@@ -1,11 +1,17 @@
-<#
+﻿<#
 .SYNOPSIS
-  Commit AI Resolver Setup — MCP + Skill Configuration for Claude Code
+  Commit AI Resolver Setup — MCP + Skill Configuration (legacy entry point)
 
 .DESCRIPTION
+  >> DEPRECATED for new installs. Prefer `deploy\setup-commit-resolver.ps1`,
+  >> which is the script served at `/install/setup-commit-resolver.ps1` and
+  >> the one shipped via the Connect MCP modal. The deploy/ version also
+  >> wires GitHub Copilot CLI (~/.copilot/mcp-config.json + ~/.copilot/skills)
+  >> in addition to Claude/VS Code.
+
   This script installs:
-  1. MCP server configuration for Claude Code, Claude Desktop, and VS Code
-  2. Commit Resolver skill for Claude Code
+  1. MCP server configuration for GitHub Copilot CLI, Claude Code, Claude Desktop, and VS Code
+  2. Commit Resolver skill for both Copilot CLI and Claude Code
 
   No Azure auth or binary downloads required — this only configures JSON files
   and copies the skill definition.

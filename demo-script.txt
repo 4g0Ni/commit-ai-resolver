@@ -106,14 +106,14 @@ get this from a simple PR title search."
 
 [3:40–4:30] MCP & Skill Integration for DRI Agents
 -----------------------------------------------------
-(Switch to a terminal / Claude Code session)
+(Switch to a terminal / GitHub Copilot CLI session)
 
 "Beyond the web dashboard, Commit AI Resolver is available as an MCP server
-and as a Claude Code skill. This means any DRI agent or AI workflow can
-query commit data programmatically — and this matters a lot for real
-workflows."
+and as a Copilot CLI / Claude Code skill. This means any DRI agent or AI
+workflow can query commit data programmatically — and this matters a lot
+for real workflows."
 
-(Type in Claude Code: "What recent changes are related to asset
+(Type in Copilot CLI: "What recent changes are related to asset
 performance prediction score?")
 
 (Show the skill/MCP returning relevant commits)
@@ -166,6 +166,6 @@ Recording Tips
 - Use a dark theme for better screen recording contrast
 - Have pre-planned queries ready so there's no awkward typing pauses
 - The SSE streaming effect looks great on video — let it play out naturally
-- For the MCP/skill demo, have a Claude Code session ready with the
+- For the MCP/skill demo, have a GitHub Copilot CLI session ready with the
   commit-resolver skill loaded
 - Consider using a real recent bug example to make the demo more compelling

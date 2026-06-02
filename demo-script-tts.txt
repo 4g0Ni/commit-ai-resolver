@@ -49,7 +49,7 @@ Notice how it finds relevant commits even though the query is conversational.
 It understands "similar changes" means the same feature area, ad editor logging, and filters to a different author.
 You'd never get this from a simple PR title search.
 
-Beyond the web dashboard, Commit AI Resolver is available as an MCP server and as a Claude Code skill.
+Beyond the web dashboard, Commit AI Resolver is available as an MCP server and as a GitHub Copilot CLI / Claude Code skill.
 This means any DRI agent or AI workflow can query commit data programmatically, and this matters a lot for real workflows.
 
 Here I'm asking: what recent changes are related to asset performance prediction score?

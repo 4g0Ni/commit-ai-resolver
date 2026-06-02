@@ -1,14 +1,17 @@
-<#
+﻿<#
 .SYNOPSIS
-  Commit AI Resolver installer for Claude Code, Claude Desktop, and VS Code.
+  Commit AI Resolver installer for GitHub Copilot CLI, Claude Code, Claude Desktop, and VS Code.
 
 .DESCRIPTION
   Wires up the deployed Commit AI Resolver MCP server in:
-    1. Claude Desktop  (%APPDATA%\Claude\claude_desktop_config.json)
-    2. Claude Code CLI (%USERPROFILE%\.claude\mcp.json — global)
-    3. Claude Code CLI (%USERPROFILE%\.claude.json projects.* — per-project overrides)
+    1. GitHub Copilot CLI (%USERPROFILE%\.copilot\mcp-config.json — primary)
+    2. Claude Desktop  (%APPDATA%\Claude\claude_desktop_config.json)
+    3. Claude Code CLI (%USERPROFILE%\.claude\mcp.json — global)
+    4. Claude Code CLI (%USERPROFILE%\.claude.json projects.* — per-project overrides)
     4. VS Code         (%APPDATA%\Code\User\mcp.json, plus Insiders if present)
-  Bundles the commit-resolver skill into %USERPROFILE%\.claude\skills\commit-resolver\.
+  Bundles the commit-resolver skill into both:
+    - %USERPROFILE%\.copilot\skills\commit-resolver\  (Copilot CLI — primary)
+    - %USERPROFILE%\.claude\skills\commit-resolver\   (Claude Code — transitional)
   When run from the repo's deploy/ directory, the skill is copied from disk;
   when run as a standalone download, the skill is fetched from the MCP server.
 
@@ -26,7 +29,7 @@
   MCP entry name used in client configs. Default: CommitResolver.
 
 .PARAMETER Timeout
-  Request timeout in seconds (Claude Desktop / Code CLI). Default: 600.
+  Request timeout in seconds (Copilot CLI / Claude Desktop / Code CLI). Default: 600.
 
 .PARAMETER SkipSkill
   Skip installing the skill bundle.
@@ -67,8 +70,20 @@ $script:ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Pare
 
 $Version = "1.0.0"
 $SkillSourceDir = Join-Path $script:ScriptDir "skills\commit-resolver"
+
+# Skill is installed to BOTH Copilot CLI (primary) and Claude Code (transitional)
+# locations so the same skill works regardless of which client the user is on.
+# COPILOT_HOME env var, if set, overrides ~/.copilot per Copilot CLI docs.
+$CopilotHome = if ($env:COPILOT_HOME) { $env:COPILOT_HOME } else { Join-Path $env:USERPROFILE ".copilot" }
+$CopilotSkillsDir = Join-Path $CopilotHome "skills"
+$CopilotSkillDestDir = Join-Path $CopilotSkillsDir "commit-resolver"
+$CopilotMcpConfigPath = Join-Path $CopilotHome "mcp-config.json"
+
 $SkillsDir = Join-Path $env:USERPROFILE ".claude\skills"
 $SkillDestDir = Join-Path $SkillsDir "commit-resolver"
+
+# All skill install destinations (Copilot CLI primary, Claude transitional).
+$AllSkillDestDirs = @($CopilotSkillDestDir, $SkillDestDir)
 
 $StateRoot = Join-Path $env:USERPROFILE ".commit-resolver-setup-state"
 $BackupsRoot = Join-Path $StateRoot "backups"
@@ -88,7 +103,7 @@ function Show-Banner {
     Write-Host ""
     Write-Host "================================================================" -ForegroundColor Cyan
     Write-Host "       Commit AI Resolver Installer v$Version                    " -ForegroundColor Cyan
-    Write-Host "       MCP + Skill for Claude Desktop / Code / VS Code          " -ForegroundColor Cyan
+    Write-Host "       MCP + Skill for Copilot CLI / Claude / VS Code           " -ForegroundColor Cyan
     Write-Host "================================================================" -ForegroundColor Cyan
     Write-Host ""
 }
@@ -208,18 +223,45 @@ function Backup-FileIfNeeded([string]$path) {
     Save-Manifest $manifest
 }
 
-function Backup-SkillDirIfNeeded {
+function Backup-SkillDirIfNeeded([string]$skillDestDir = $null) {
+    # If no specific dir is provided, back up all known skill destinations.
+    $targets = if ($skillDestDir) { @($skillDestDir) } else { $AllSkillDestDirs }
+
     $manifest = Load-Manifest
-    if (-not $manifest.ContainsKey("skillDirExistedBefore")) {
-        $manifest["skillDirExistedBefore"] = (Test-Path $SkillDestDir)
+    if (-not $manifest.ContainsKey("skillDirs") -or $null -eq $manifest["skillDirs"]) {
+        $manifest["skillDirs"] = @{}
     }
-    if ($manifest["skillDirExistedBefore"] -and (-not $manifest["skillDirBackupPath"])) {
-        Ensure-Dir $BackupsRoot
-        $backupDir = Join-Path $BackupsRoot "skill_dir_backup"
-        if (Test-Path $backupDir) { Remove-Item -Path $backupDir -Recurse -Force -ErrorAction SilentlyContinue }
-        Copy-Item -Path $SkillDestDir -Destination $backupDir -Recurse -Force
-        $manifest["skillDirBackupPath"] = $backupDir
+    $skillDirs = Ensure-Hashtable $manifest["skillDirs"]
+
+    # Legacy: single-dir fields used by older installs; migrate into the map so
+    # uninstall still finds the original Claude skill backup.
+    if ($manifest.ContainsKey("skillDirExistedBefore") -and -not $skillDirs.ContainsKey((Get-PathHash $SkillDestDir))) {
+        $legacyKey = Get-PathHash $SkillDestDir
+        $skillDirs[$legacyKey] = @{
+            path           = $SkillDestDir
+            existedBefore  = [bool]$manifest["skillDirExistedBefore"]
+            backupPath     = $manifest["skillDirBackupPath"]
+        }
     }
+
+    foreach ($dir in $targets) {
+        if ([string]::IsNullOrWhiteSpace($dir)) { continue }
+        $key = Get-PathHash $dir
+        if (-not $skillDirs.ContainsKey($key)) {
+            $skillDirs[$key] = @{ path = $dir; existedBefore = (Test-Path $dir); backupPath = $null }
+        }
+        $rec = Ensure-Hashtable $skillDirs[$key]
+        if ($rec["existedBefore"] -and (-not $rec["backupPath"])) {
+            Ensure-Dir $BackupsRoot
+            $backupDir = Join-Path $BackupsRoot ("skill_dir_" + $key)
+            if (Test-Path $backupDir) { Remove-Item -Path $backupDir -Recurse -Force -ErrorAction SilentlyContinue }
+            Copy-Item -Path $dir -Destination $backupDir -Recurse -Force
+            $rec["backupPath"] = $backupDir
+        }
+        $skillDirs[$key] = $rec
+    }
+
+    $manifest["skillDirs"] = $skillDirs
     Save-Manifest $manifest
 }
 
@@ -315,19 +357,11 @@ function Install-Skill {
     Write-Step "Installing commit-resolver skill..."
 
     Backup-SkillDirIfNeeded
-    Ensure-Dir $SkillsDir
 
-    if (Test-Path $SkillDestDir) {
-        Remove-Item -Path $SkillDestDir -Recurse -Force -ErrorAction SilentlyContinue
-    }
-
-    if (Test-Path $SkillSourceDir) {
-        Copy-Item -Path $SkillSourceDir -Destination $SkillDestDir -Recurse -Force
-        Write-Success "Skill installed from local source: $SkillDestDir"
-    } else {
-        # Standalone install path: the script was downloaded from /install/, so
-        # the skill files aren't on disk. Pull them down from the same server
-        # that hosts $McpUrl.
+    # Determine source: local skills/ dir, or pulled from server in standalone mode.
+    $tempSource = $null
+    $effectiveSource = $SkillSourceDir
+    if (-not (Test-Path $SkillSourceDir)) {
         $skillBase = Get-SkillBaseUrl $McpUrl
         Write-Info "Skill source not on disk. Downloading from: $skillBase"
         try {
@@ -337,18 +371,42 @@ function Install-Skill {
             $files = @($manifest.files)
             if ($files.Count -eq 0) { throw "Manifest had no files." }
 
-            Ensure-Dir $SkillDestDir
+            $tempSource = Join-Path ([System.IO.Path]::GetTempPath()) ("commit-resolver-skill-" + [Guid]::NewGuid().ToString("N"))
+            Ensure-Dir $tempSource
             foreach ($f in $files) {
                 $fileUrl = "$skillBase/$f"
-                $destPath = Join-Path $SkillDestDir $f
+                $destPath = Join-Path $tempSource $f
                 Ensure-Dir (Split-Path -Parent $destPath)
                 Invoke-WebRequest -Uri $fileUrl -UseBasicParsing -TimeoutSec 60 -OutFile $destPath -ErrorAction Stop
             }
-            Write-Success "Skill installed from server: $SkillDestDir ($($files.Count) file(s))"
+            $effectiveSource = $tempSource
+            Write-Info "Downloaded $($files.Count) file(s) to temp source."
         } catch {
             Write-Err "Could not download skill from $skillBase : $($_.Exception.Message)"
             Write-Err "If you cloned the repo, run this script from deploy/ instead."
             return $false
+        }
+    }
+
+    try {
+        $okCount = 0
+        foreach ($dest in $AllSkillDestDirs) {
+            try {
+                Ensure-Dir (Split-Path -Parent $dest)
+                if (Test-Path $dest) {
+                    Remove-Item -Path $dest -Recurse -Force -ErrorAction SilentlyContinue
+                }
+                Copy-Item -Path $effectiveSource -Destination $dest -Recurse -Force
+                Write-Success "Skill installed: $dest"
+                $okCount++
+            } catch {
+                Write-Warn "Skill install to $dest failed: $($_.Exception.Message)"
+            }
+        }
+        if ($okCount -eq 0) { return $false }
+    } finally {
+        if ($tempSource -and (Test-Path $tempSource)) {
+            Remove-Item -Path $tempSource -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
 
@@ -362,6 +420,20 @@ function Install-McpConfigs {
     Write-Step "Configuring MCP clients..."
 
     $allOk = $true
+
+    # GitHub Copilot CLI (primary). Per Copilot CLI docs, config lives at
+    # ~/.copilot/mcp-config.json (overridable via COPILOT_HOME). The on-disk
+    # format uses the standard MCP `mcpServers` map shape.
+    try {
+        if (-not (Test-Path $CopilotMcpConfigPath)) {
+            Ensure-Dir (Split-Path -Parent $CopilotMcpConfigPath)
+            Write-JsonFile $CopilotMcpConfigPath @{ mcpServers = @{} }
+        }
+        Upsert-McpServersRoot $CopilotMcpConfigPath
+    } catch {
+        Write-Warn "Copilot CLI config: $($_.Exception.Message)"
+        $allOk = $false
+    }
 
     # Claude Desktop
     $claudeDesktopPath = Join-Path $env:APPDATA "Claude\claude_desktop_config.json"
@@ -513,17 +585,40 @@ function Restore-BackedUpFiles {
 
 function Restore-SkillDir {
     $manifest = Load-Manifest
+
+    # New format: a map of skill dirs.
+    if ($manifest.ContainsKey("skillDirs") -and $null -ne $manifest["skillDirs"]) {
+        $skillDirs = Ensure-Hashtable $manifest["skillDirs"]
+        foreach ($entry in $skillDirs.GetEnumerator()) {
+            $rec = Ensure-Hashtable $entry.Value
+            $path = $rec["path"]
+            if ([string]::IsNullOrWhiteSpace($path)) { continue }
+            $existedBefore = [bool]$rec["existedBefore"]
+            $backupPath = $rec["backupPath"]
+            if (Test-Path $path) {
+                Remove-Item -Path $path -Recurse -Force -ErrorAction SilentlyContinue
+            }
+            if ($existedBefore -and $backupPath -and (Test-Path $backupPath)) {
+                Copy-Item -Path $backupPath -Destination $path -Recurse -Force
+                Write-Success "Restored skill directory: $path"
+            } else {
+                Write-Success "Removed skill directory: $path"
+            }
+        }
+        return
+    }
+
+    # Legacy format: single Claude dir.
     $existedBefore = [bool]$manifest["skillDirExistedBefore"]
     $backupPath = $manifest["skillDirBackupPath"]
-
     if (Test-Path $SkillDestDir) {
         Remove-Item -Path $SkillDestDir -Recurse -Force -ErrorAction SilentlyContinue
     }
     if ($existedBefore -and $backupPath -and (Test-Path $backupPath)) {
         Copy-Item -Path $backupPath -Destination $SkillDestDir -Recurse -Force
-        Write-Success "Restored skill directory"
+        Write-Success "Restored skill directory: $SkillDestDir"
     } else {
-        Write-Success "Removed skill directory"
+        Write-Success "Removed skill directory: $SkillDestDir"
     }
 }
 
@@ -549,7 +644,7 @@ function Invoke-Uninstall {
     Write-Host "                     Uninstall Complete                         " -ForegroundColor Green
     Write-Host "================================================================" -ForegroundColor Green
     Write-Host ""
-    Write-Warn "Restart Claude Desktop, VS Code, and any running Claude Code sessions."
+    Write-Warn "Restart Copilot CLI, Claude Desktop, VS Code, and any running Claude Code sessions."
 }
 
 # ===============================
@@ -567,7 +662,8 @@ function Main {
     Write-Info "MCP URL:    $McpUrl"
     Write-Info "MCP name:   $McpName"
     Write-Info "Skill src:  $SkillSourceDir"
-    Write-Info "Skill dest: $SkillDestDir"
+    Write-Info "Skill dest: $CopilotSkillDestDir (Copilot CLI)"
+    Write-Info "            $SkillDestDir (Claude - transitional)"
     Write-Host ""
 
     Ensure-Dir $StateRoot
@@ -596,12 +692,13 @@ function Main {
     if (-not $SkipSkill) {
         $status = if ($results.Skill) { "[OK]" } else { "[FAIL]" }
         $color  = if ($results.Skill) { "Green" } else { "Red" }
-        Write-Host "  $status Skill:           $SkillDestDir" -ForegroundColor $color
+        Write-Host "  $status Skill:           $CopilotSkillDestDir" -ForegroundColor $color
+        Write-Host "                       + $SkillDestDir" -ForegroundColor $color
     }
     if (-not $SkipMcp) {
         $status = if ($results.Mcp) { "[OK]" } else { "[WARN]" }
         $color  = if ($results.Mcp) { "Green" } else { "Yellow" }
-        Write-Host "  $status MCP wiring:      Claude Desktop / Code CLI / VS Code" -ForegroundColor $color
+        Write-Host "  $status MCP wiring:      Copilot CLI / Claude Desktop / Code CLI / VS Code" -ForegroundColor $color
     }
     $rstatus = if ($results.Reachable) { "[OK]" } else { "[WARN]" }
     $rcolor  = if ($results.Reachable) { "Green" } else { "Yellow" }
@@ -615,8 +712,8 @@ function Main {
     }
 
     Write-Host "Next steps:" -ForegroundColor Cyan
-    Write-Host "  1. Restart Claude Desktop, VS Code, and any open Claude Code sessions." -ForegroundColor Gray
-    Write-Host "  2. In Claude Code, invoke the skill with /commit-resolver" -ForegroundColor Gray
+    Write-Host "  1. Restart Copilot CLI, Claude Desktop, VS Code, and any open Claude Code sessions." -ForegroundColor Gray
+    Write-Host "  2. In Copilot CLI run /skills reload then /skills info commit-resolver to verify." -ForegroundColor Gray
     Write-Host "  3. Or just ask: 'what changed in CMUI yesterday?'" -ForegroundColor Gray
     Write-Host ""
 

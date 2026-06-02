@@ -26,7 +26,14 @@ Search and retrieve recent commit data from Microsoft Advertising repositories v
 
 ## How It Works
 
-This skill uses the **CommitResolver MCP server** configured in `~/.claude/mcp.json`.
+This skill uses the **CommitResolver MCP server** configured in your agentic CLI's MCP file:
+
+- **GitHub Copilot CLI** (primary): `~/.copilot/mcp-config.json`
+- **Claude Code** (transitional): `~/.claude/mcp.json`
+- **Claude Desktop**: `%APPDATA%\Claude\claude_desktop_config.json`
+- **VS Code**: `%APPDATA%\Code\User\mcp.json`
+
+The `deploy/setup-commit-resolver.ps1` installer writes all of these for you.
 
 The default endpoint after running `setup-commit-resolver.ps1` is the deployed Azure App Service:
 `https://commit-ai-resolver-win.azurewebsites.net/mcp`.
@@ -35,7 +42,7 @@ For local development, point the MCP entry at `http://localhost:4399/mcp` (start
 
 ## Authentication
 
-The `/mcp` endpoint is gated by Microsoft Entra ID OAuth 2.1 (per MCP auth spec 2025-06-18). On first connection, your MCP client (Claude Code, Claude Desktop, VS Code) will discover the authorization server via `/.well-known/oauth-protected-resource` and pop a browser tab for Microsoft corporate sign-in. Tokens are cached by the client; subsequent calls are silent.
+The `/mcp` endpoint is gated by Microsoft Entra ID OAuth 2.1 (per MCP auth spec 2025-06-18). On first connection, your MCP client (GitHub Copilot CLI, Claude Code, Claude Desktop, VS Code) will discover the authorization server via `/.well-known/oauth-protected-resource` and pop a browser tab for Microsoft corporate sign-in. Tokens are cached by the client; subsequent calls are silent.
 
 For local iteration without OAuth, run the server with `--no-auth` — the gate is bypassed and a stub user is injected.
 
@@ -387,6 +394,6 @@ Run the installer (no admin needed):
 .\deploy\setup-commit-resolver.ps1 -Uninstall
 ```
 
-This configures the MCP server in Claude Desktop, Claude Code CLI, and VS Code.
+This configures the MCP server and installs the skill into GitHub Copilot CLI, Claude Desktop, Claude Code CLI, and VS Code.
 
 The deployed endpoint requires Microsoft Entra ID sign-in on first use; tokens are cached by your MCP client.
