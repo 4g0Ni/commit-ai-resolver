@@ -1,0 +1,32 @@
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 0   # 0 = disable version-update PRs
+  - package-ecosystem: "npm"
+    directory: "/ui"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 0
+  - package-ecosystem: "npm"
+    directory: "/src"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 0
+  - package-ecosystem: "npm"
+    directory: "/api"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 0
+  - package-ecosystem: "npm"
+    directory: "/tools/mcp-tools"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 0
+  - package-ecosystem: "uv"
+    directory: "/tools/mcp-tools"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 0
