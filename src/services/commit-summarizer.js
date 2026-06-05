@@ -3,9 +3,10 @@
  */
 
 import { llmHelper } from './llm-helper.js';
-import { fetchCommitDiff, fetchCommitChanges, fetchFileContent, fetchFileContentBatch } from './ado-git-client.js';
+import { fetchCommitChanges } from './ado-git-client.js';
 import { classifyChanges, buildSkippedFilesSummary, MAX_FILES_FOR_DIFF, MAX_DIFF_SIZE } from './diff-filter.js';
-import { createPatch } from 'diff';
+import { isConfigFile, prettifyMinifiedXml, CONFIG_FILE_PATTERNS } from './config-files.js';
+import { buildSmartDiff } from './diff-builder.js';
 import { writeFile, mkdir } from 'fs/promises';
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
@@ -300,107 +301,24 @@ async function summarizeCommit(repoConfig, commit) {
     }
 }
 
-/** XML config file patterns that may be minified. */
-const XML_CONFIG_PATTERNS = [
-    /Web\.config$/i,
-    /\.cscfg$/i,
-    /\.csdef$/i,
-    /Dynamic\.config$/i,
-    /sharedfeatures\.config$/i,
-    /\.config$/i,
-];
-
 /**
- * If a file is minified XML (any line > 10KB), split on "><" to get
- * one element per line so the diff is granular for LLM extraction.
- */
-function prettifyMinifiedXml(content, path) {
-    if (!content) return content;
-    if (!XML_CONFIG_PATTERNS.some(p => p.test(path))) return content;
-    // Check if any single line exceeds 10KB — indicates minified XML
-    const lines = content.split('\n');
-    const hasLongLine = lines.some(l => l.length > 10000);
-    if (!hasLongLine) return content;
-    // Split on >< and > < boundaries, preserving the brackets
-    return content.replace(/>\s*</g, '>\n<');
-}
-
-/** Patterns for config/pilot files that should be prioritized in diff ordering. */
-const CONFIG_FILE_PATTERNS = [
-    /\.cscfg$/i,
-    /\.csdef$/i,
-    /Web\.config$/i,
-    /Dynamic\.config$/i,
-    /DynamicConfigValues\.cs$/i,
-    /appsettings.*\.json$/i,
-    /sharedfeatures\.config$/i,
-    /AllowedFeature\.cs$/i,
-    /PermissionProvider\.cs$/i,
-    /IPermissionProvider\.cs$/i,
-    // NOTE: helm-*.yaml and values.yaml are NOT config files — they are k8s infrastructure
-];
-
-function isConfigFile(path) {
-    return CONFIG_FILE_PATTERNS.some(p => p.test(path));
-}
-
-/**
- * Fetch diffs only for specific files (not the full commit).
- * Uses batch API to fetch all file contents in 2 calls instead of 2N.
- * Config/pilot files are prioritized first in the diff ordering so they
- * survive truncation at MAX_DIFF_SIZE.
+ * Build per-file diffs for the given changed files using the smart-diff
+ * builder (raw, untruncated content → adaptive whole-file or hunk+symbol
+ * diff with a per-commit byte budget; config files prioritized & tagged).
+ *
+ * Replaces the legacy "fetch whole minified file → createPatch → truncate at
+ * MAX_DIFF_SIZE" approach, which silently lost the real change when a small
+ * edit lived inside a very large file (e.g. DynamicConfigValues.cs @ 388KB).
+ *
+ * Signature preserved (repoConfig, commitId, filteredChanges) => string[] so
+ * existing callers (summarizeCommit, api/server.js, api/mcp.js) are unchanged.
+ *
+ * @returns {Promise<string[]>}
  */
 async function fetchFilteredDiffs(repoConfig, commitId, filteredChanges) {
-    // Sort config/pilot files first so they survive MAX_DIFF_SIZE truncation
-    filteredChanges = [...filteredChanges].sort((a, b) => {
-        const aConfig = isConfigFile(a.path) ? 0 : 1;
-        const bConfig = isConfigFile(b.path) ? 0 : 1;
-        return aConfig - bConfig;
+    const { diffs } = await buildSmartDiff(repoConfig, commitId, filteredChanges, {
+        budget: MAX_DIFF_SIZE,
     });
-
-    // We need the parent to produce diffs
-    const { fetchCommitById } = await import('./ado-git-client.js');
-    const commitInfo = await fetchCommitById(repoConfig, commitId);
-    const parentCommitId = commitInfo.parents?.[0];
-
-    // Collect paths needed for current and parent versions
-    const currentPaths = filteredChanges
-        .filter(c => c.changeType !== 'delete')
-        .map(c => c.path);
-    const parentPaths = parentCommitId
-        ? filteredChanges.filter(c => c.changeType !== 'add').map(c => c.path)
-        : [];
-
-    // Batch fetch: 2 API calls instead of 2N individual calls
-    const [currentContents, parentContents] = await Promise.all([
-        currentPaths.length > 0
-            ? fetchFileContentBatch(repoConfig, currentPaths, commitId)
-            : new Map(),
-        parentPaths.length > 0
-            ? fetchFileContentBatch(repoConfig, parentPaths, parentCommitId)
-            : new Map(),
-    ]);
-
-    // Build diffs from fetched contents
-    const diffs = filteredChanges.map(change => {
-        let currentContent = currentContents.get(change.path) ?? null;
-        let parentContent = parentContents.get(change.path) ?? null;
-
-        // Prettify minified XML config files for better diff granularity
-        currentContent = prettifyMinifiedXml(currentContent, change.path);
-        parentContent = prettifyMinifiedXml(parentContent, change.path);
-
-        if (change.changeType === 'edit' && parentContent && currentContent) {
-            const patch = createPatch(change.path, parentContent, currentContent, 'Parent', 'Current');
-            return `${change.path} Modified:\n${patch}`;
-        } else if (change.changeType === 'add') {
-            return `Added: ${change.path}\n${currentContent ?? ''}`;
-        } else if (change.changeType === 'delete') {
-            return `Deleted: ${change.path}`;
-        }
-        return `${change.changeType}: ${change.path}`;
-    });
-
     return diffs;
 }
 
@@ -410,10 +328,12 @@ async function fetchFilteredDiffs(repoConfig, commitId, filteredChanges) {
  * @param {object} repoConfig - Repository config
  * @param {Array} commits - Array of formatted commit objects
  * @param {function} onProgress - Optional callback(index, total, commit) for progress
- * @param {number} concurrency - Max parallel LLM calls (default 25)
+ * @param {number} concurrency - Max parallel commits processed at once (default 6).
+ *   Each commit fans out to ~30 parallel ADO blob fetches, so keep this low to
+ *   avoid saturating the network (25 × ~30 ≈ 750 concurrent connections).
  * @returns {Promise<Array>} Commits with llmSummary attached
  */
-async function summarizeCommits(repoConfig, commits, onProgress, concurrency = 25) {
+async function summarizeCommits(repoConfig, commits, onProgress, concurrency = 6) {
     const results = new Array(commits.length);
     let completed = 0;
     const PER_COMMIT_TIMEOUT = 180000; // 3 minutes max per commit

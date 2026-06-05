@@ -336,7 +336,7 @@ async function fetchCommitChanges(repoConfig, commitId) {
  * @param {string} commitId - The commit SHA
  * @returns {Promise<string|null>} File content or null if not found
  */
-async function fetchFileContent(repoConfig, filePath, commitId) {
+async function fetchFileContent(repoConfig, filePath, commitId, opts = {}) {
     const token = await getCredentialToken();
     const params = new URLSearchParams({
         path: filePath,
@@ -362,7 +362,7 @@ async function fetchFileContent(repoConfig, filePath, commitId) {
 
     if (!response.ok) return null;
     const content = await response.text();
-    return minifyContent(content, filePath);
+    return opts.raw === true ? content : minifyContent(content, filePath);
 }
 
 /**
@@ -374,8 +374,9 @@ async function fetchFileContent(repoConfig, filePath, commitId) {
  * @param {string} commitId - The commit SHA
  * @returns {Promise<Map<string, string|null>>} Map of filePath → content (or null)
  */
-async function fetchFileContentBatch(repoConfig, filePaths, commitId) {
+async function fetchFileContentBatch(repoConfig, filePaths, commitId, opts = {}) {
     if (filePaths.length === 0) return new Map();
+    const raw = opts.raw === true;
 
     const token = await getCredentialToken();
     const url = `https://dev.azure.com/${ADO_ORG}/${repoConfig.project}/_apis/git/repositories/${repoConfig.name}/itemsbatch?api-version=7.1`;
@@ -410,13 +411,13 @@ async function fetchFileContentBatch(repoConfig, filePaths, commitId) {
         if (!response.ok) {
             // Fallback to individual fetches if batch API fails
             console.warn(`      ⚠ Batch API failed (${response.status}), falling back to individual fetches`);
-            return fetchFileContentIndividual(repoConfig, filePaths, commitId);
+            return fetchFileContentIndividual(repoConfig, filePaths, commitId, opts);
         }
         batchResult = await response.json();
     } catch (err) {
         clearTimeout(timer);
         console.warn(`      ⚠ Batch API error: ${err.message}, falling back to individual fetches`);
-        return fetchFileContentIndividual(repoConfig, filePaths, commitId);
+        return fetchFileContentIndividual(repoConfig, filePaths, commitId, opts);
     }
 
     const elapsed = Date.now() - start;
@@ -441,8 +442,11 @@ async function fetchFileContentBatch(repoConfig, filePaths, commitId) {
         contentFetches.push({ path: filePaths[i], objectId: item.objectId });
     }
 
-    // Fetch all blob contents in parallel
-    const BATCH_CONCURRENCY = 15;
+    // Fetch all blob contents in parallel.
+    // Kept low (8) to bound per-commit fan-out: current+parent batches run
+    // concurrently, so a 50-file commit peaks at ~2×8 = 16 connections instead
+    // of ~30, avoiding network saturation when many commits are in flight.
+    const BATCH_CONCURRENCY = 8;
     for (let i = 0; i < contentFetches.length; i += BATCH_CONCURRENCY) {
         const batch = contentFetches.slice(i, i + BATCH_CONCURRENCY);
         await Promise.all(batch.map(async ({ path, objectId }) => {
@@ -453,7 +457,7 @@ async function fetchFileContentBatch(repoConfig, filePaths, commitId) {
                 });
                 if (blobResp.ok) {
                     const content = await blobResp.text();
-                    results.set(path, minifyContent(content, path));
+                    results.set(path, raw ? content : minifyContent(content, path));
                 } else {
                     results.set(path, null);
                 }
@@ -469,17 +473,26 @@ async function fetchFileContentBatch(repoConfig, filePaths, commitId) {
 /**
  * Fallback: fetch file contents individually (used when batch API fails).
  */
-async function fetchFileContentIndividual(repoConfig, filePaths, commitId) {
+async function fetchFileContentIndividual(repoConfig, filePaths, commitId, opts = {}) {
+    const raw = opts.raw === true;
     const results = new Map();
-    const CONCURRENCY = 10;
+    const CONCURRENCY = 8;
     for (let i = 0; i < filePaths.length; i += CONCURRENCY) {
         const batch = filePaths.slice(i, i + CONCURRENCY);
         await Promise.all(batch.map(async (path) => {
-            const content = await fetchFileContent(repoConfig, path, commitId);
+            const content = await fetchFileContent(repoConfig, path, commitId, { raw });
             results.set(path, content);
         }));
     }
     return results;
+}
+
+/**
+ * Fetch RAW (untruncated, un-minified) file contents for a set of paths.
+ * Used by the smart diff builder so hunk context and line numbers are faithful.
+ */
+async function fetchRawFileContentBatch(repoConfig, filePaths, commitId) {
+    return fetchFileContentBatch(repoConfig, filePaths, commitId, { raw: true });
 }
 
 /**
@@ -896,6 +909,7 @@ export {
     fetchCommitDiff,
     fetchFileContent,
     fetchFileContentBatch,
+    fetchRawFileContentBatch,
     minifyContent,
     fetchWorkItem,
     fetchReleaseInfo,

@@ -279,6 +279,28 @@ export async function resetAllData(clearDatabaseFn) {
 }
 
 /**
+ * Split a [fromDate, toDate] span into 1-day windows (oldest first).
+ * Querying ADO one day at a time keeps each request well under the API's
+ * default 100-result page cap (which silently drops older commits when a
+ * multi-day span is fetched in a single call) and matches the per-day output.
+ *
+ * @param {Date} fromDate
+ * @param {Date} toDate
+ * @returns {Array<{from: Date, to: Date, dateStr: string}>}
+ */
+function buildDailyWindows(fromDate, toDate) {
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const windows = [];
+    let windowStart = new Date(fromDate);
+    while (windowStart < toDate) {
+        const windowEnd = new Date(Math.min(windowStart.getTime() + DAY_MS, toDate.getTime()));
+        windows.push({ from: new Date(windowStart), to: windowEnd, dateStr: windowStart.toISOString().slice(0, 10) });
+        windowStart = windowEnd;
+    }
+    return windows;
+}
+
+/**
  * Backfill commits for all repos from `days` days ago until now.
  * Fetches day by day to stay well under the ADO API's default 100-result limit.
  * Runs the full pipeline: fetch → summarize → daily JSON → embed → index.
@@ -292,14 +314,7 @@ export async function backfillCommits(days = 90, skipExisting = false) {
     console.log(`Backfilling commits from ${fromDate.toISOString()} to ${toDate.toISOString()} (${days} days, skipExisting=${skipExisting})...\n`);
 
     // Build daily windows (oldest first)
-    const DAY_MS = 24 * 60 * 60 * 1000;
-    const windows = [];
-    let windowStart = new Date(fromDate);
-    while (windowStart < toDate) {
-        const windowEnd = new Date(Math.min(windowStart.getTime() + DAY_MS, toDate.getTime()));
-        windows.push({ from: new Date(windowStart), to: windowEnd, dateStr: windowStart.toISOString().slice(0, 10) });
-        windowStart = windowEnd;
-    }
+    const windows = buildDailyWindows(fromDate, toDate);
 
     // Pre-load existing commit IDs per repo+date for skip checking
     const existingCommitIds = {}; // { "repoName/dateStr": Set<commitId> }
@@ -429,42 +444,57 @@ async function refreshRepo(repo, lastSuccessAt) {
     const toDate = new Date();
     const fromDate = lastSuccessAt ? new Date(lastSuccessAt) : new Date(toDate.getTime() - DEFAULT_INTERVAL_MS);
 
-    console.log(`  Fetching commits for ${repo.name} (${fromDate.toISOString()} → ${toDate.toISOString()})...`);
-    const commits = await fetchCommitsBetweenDates(repo, fromDate, toDate);
-    if (commits.length === 0) {
-        console.log(`  ${repo.name}: no new commits.`);
-        return true;
-    }
+    // Split the (possibly multi-day) gap into per-day windows. Fetching the
+    // whole span in one ADO call hits the API's default 100-result page cap and
+    // silently drops older commits; querying one day at a time avoids that and
+    // matches the per-day output model.
+    const windows = buildDailyWindows(fromDate, toDate);
+    console.log(`  Fetching commits for ${repo.name} (${fromDate.toISOString()} → ${toDate.toISOString()}, ${windows.length} day window(s))...`);
 
-    // Step 1: Summarize
-    console.log(`  ${repo.name}: ${commits.length} commits found. Summarizing...`);
-    const summarized = await summarizeCommits(repo, commits);
-
-    // Group by date for daily JSON files
-    const byDate = {};
-    for (const c of summarized) {
-        const dateStr = c.date.substring(0, 10);
-        if (!byDate[dateStr]) byDate[dateStr] = [];
-        byDate[dateStr].push(c);
-    }
-
-    // Step 2 & 3: Write daily JSON + embed per date group
+    let totalCommits = 0;
     let totalIndexed = 0;
-    for (const [dateStr, dateCommits] of Object.entries(byDate)) {
-        const newCount = await mergeDailyJson(dateStr, repo.name, dateCommits);
-        console.log(`    ${repo.name}/${dateStr}: ${newCount} new commits written to daily JSON.`);
 
-        if (newCount > 0) {
-            const formatted = dateCommits.map(formatCommitForOutput).slice(-newCount);
-            const indexed = await embedAndIndex(formatted, repo.name, dateStr);
-            totalIndexed += indexed;
-            console.log(`    ${repo.name}/${dateStr}: ${indexed} commits indexed to vector store.`);
+    for (let i = 0; i < windows.length; i++) {
+        const { from: wFrom, to: wTo, dateStr } = windows[i];
+        const commits = await fetchCommitsBetweenDates(repo, wFrom, wTo);
+        if (commits.length === 0) continue;
+        if (commits.length >= 100) {
+            console.warn(`    ⚠ ${repo.name}/${dateStr}: ${commits.length} commits — may be hitting ADO's 100-result cap for a single day.`);
         }
 
-        await updateIndex(dateStr);
+        totalCommits += commits.length;
+        console.log(`    [${i + 1}/${windows.length}] ${repo.name}/${dateStr}: ${commits.length} commits found. Summarizing...`);
+        const summarized = await summarizeCommits(repo, commits);
+
+        // Group by actual commit date for daily JSON (a window may straddle a
+        // day boundary, so group rather than assume all belong to dateStr).
+        const byDate = {};
+        for (const c of summarized) {
+            const d = c.date.substring(0, 10);
+            if (!byDate[d]) byDate[d] = [];
+            byDate[d].push(c);
+        }
+
+        for (const [d, dateCommits] of Object.entries(byDate)) {
+            const newCount = await mergeDailyJson(d, repo.name, dateCommits);
+            console.log(`    ${repo.name}/${d}: ${newCount} new commits written to daily JSON.`);
+
+            if (newCount > 0) {
+                const formatted = dateCommits.map(formatCommitForOutput).slice(-newCount);
+                const indexed = await embedAndIndex(formatted, repo.name, d);
+                totalIndexed += indexed;
+                console.log(`    ${repo.name}/${d}: ${indexed} commits indexed to vector store.`);
+            }
+
+            await updateIndex(d);
+        }
     }
 
-    console.log(`  ${repo.name}: done (${totalIndexed} total indexed).`);
+    if (totalCommits === 0) {
+        console.log(`  ${repo.name}: no new commits.`);
+    } else {
+        console.log(`  ${repo.name}: done (${totalCommits} commits, ${totalIndexed} total indexed).`);
+    }
     return true;
 }
 
