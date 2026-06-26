@@ -5,7 +5,40 @@
  * with ranked suspects, commit links, and confidence assessment.
  */
 
-import { compactPathTokens } from '../../src/services/commit-paths.js';
+/**
+ * Collapse changed-file paths into compact `package/filename` tokens for the
+ * LLM context, capped with a "+N more" marker. Inlined here (rather than
+ * imported from src/services) so the agents layer stays self-contained — the
+ * deploy step flattens api/ into the web root and does not rewrite cross-layer
+ * import paths for nested agent files.
+ *
+ * @param {string[]} paths - Changed file paths
+ * @param {number} [max=10] - Max tokens before truncation
+ * @returns {string[]} Compact, de-duplicated, capped token list
+ */
+function compactFileTokens(paths, max = 10) {
+    if (!Array.isArray(paths) || paths.length === 0) return [];
+    const seen = new Set();
+    const tokens = [];
+    for (const p of paths) {
+        if (!p) continue;
+        const segments = p.replace(/^\/+/, '').split('/').filter(Boolean);
+        const base = segments[segments.length - 1] || p;
+        const pkgIdx = segments.lastIndexOf('packages');
+        let token;
+        if (pkgIdx !== -1 && segments[pkgIdx + 1]) token = `${segments[pkgIdx + 1]}/${base}`;
+        else if (segments.length >= 2) token = `${segments[segments.length - 2]}/${base}`;
+        else token = base;
+        if (!seen.has(token)) {
+            seen.add(token);
+            tokens.push(token);
+        }
+    }
+    if (tokens.length <= max) return tokens;
+    const kept = tokens.slice(0, max);
+    kept.push(`+${tokens.length - max} more files`);
+    return kept;
+}
 
 /**
  * @param {AzureOpenAI} llm - OpenAI client
@@ -25,7 +58,7 @@ export async function synthesizeAnswer(llm, results, intent, context, iteration 
         `  Summary: ${r.metadata.summary}\n` +
         (r.metadata.flags?.length ? `  Flags: ${r.metadata.flags.join(', ')}\n` : '') +
         (r.metadata.affectedAreas?.length ? `  Areas: ${r.metadata.affectedAreas.join(', ')}\n` : '') +
-        (r.metadata.changedFiles?.length ? `  Files: ${compactPathTokens(r.metadata.changedFiles, { max: 10 }).join(', ')}\n` : '') +
+        (r.metadata.changedFiles?.length ? `  Files: ${compactFileTokens(r.metadata.changedFiles, 10).join(', ')}\n` : '') +
         `  Similarity: ${r.score.toFixed(3)}`
     ).join('\n\n');
 
@@ -246,7 +279,7 @@ export async function synthesizeAnswerStream(llm, results, intent, context, iter
         `  Summary: ${r.metadata.summary}\n` +
         (r.metadata.flags?.length ? `  Flags: ${r.metadata.flags.join(', ')}\n` : '') +
         (r.metadata.affectedAreas?.length ? `  Areas: ${r.metadata.affectedAreas.join(', ')}\n` : '') +
-        (r.metadata.changedFiles?.length ? `  Files: ${compactPathTokens(r.metadata.changedFiles, { max: 10 }).join(', ')}\n` : '') +
+        (r.metadata.changedFiles?.length ? `  Files: ${compactFileTokens(r.metadata.changedFiles, 10).join(', ')}\n` : '') +
         `  Similarity: ${r.score.toFixed(3)}`
     ).join('\n\n');
 
