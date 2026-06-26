@@ -16,7 +16,14 @@
 [CmdletBinding()]
 param(
     [string]$OutputPath,
-    [string]$StagingDir
+    [string]$StagingDir,
+    # Node runtime the App Service runs (must match web.config processPath).
+    # Native modules are normalized to this runtime's ABI before packaging so a
+    # local `npm rebuild` under a different Node version can't ship a mismatched
+    # binary (root cause of the 2026-06-26 better-sqlite3 ABI outage).
+    [string]$ServerNodeVersion = "20.20.2",
+    # NODE_MODULE_VERSION (ABI tag) for $ServerNodeVersion. Node 20 = 115.
+    [string]$ServerNodeAbi = "115"
 )
 
 $ErrorActionPreference = "Stop"
@@ -133,6 +140,59 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "npm install failed" }
     Write-Success "Dependencies installed (node_modules included in package)"
 } finally { Pop-Location }
+
+Write-Step "Normalizing native modules to server Node $ServerNodeVersion (ABI $ServerNodeAbi)..."
+# The App Service runs Node $ServerNodeVersion. npm install above builds/keeps
+# native binaries for the LOCAL Node version, which may differ (e.g. a prior
+# `npm rebuild` under Node 22). Shipping a mismatched better_sqlite3.node causes
+# an ERR_DLOPEN_FAILED crash loop on startup. Re-fetch the prebuilt binary for
+# the server's runtime and verify its ABI tag before packaging.
+$nativeModules = @('better-sqlite3')
+foreach ($mod in $nativeModules) {
+    $modDir = Join-Path $StagingDir "node_modules\$mod"
+    if (-not (Test-Path $modDir)) {
+        Write-Host "  [skip] $mod not present" -ForegroundColor DarkGray
+        continue
+    }
+    Push-Location $modDir
+    try {
+        $prevEAP = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        npx --yes prebuild-install --runtime node --target $ServerNodeVersion --arch x64 --platform win32 --verbose 2>&1 | Write-Host
+        $installExit = $LASTEXITCODE
+        $ErrorActionPreference = $prevEAP
+        if ($installExit -ne 0) {
+            throw "prebuild-install failed for $mod (target Node $ServerNodeVersion). Cannot guarantee server ABI compatibility."
+        }
+        # Verify the fetched binary advertises the expected ABI tag in the cached prebuild name.
+        $cachedDir = Join-Path $env:LOCALAPPDATA "npm-cache\_prebuilds"
+        $abiHit = $false
+        if (Test-Path $cachedDir) {
+            $abiHit = (Get-ChildItem $cachedDir -Filter "*node-v$ServerNodeAbi-win32-x64*" -ErrorAction SilentlyContinue | Measure-Object).Count -gt 0
+        }
+        if (-not $abiHit) {
+            Write-Host "  [warn] Could not confirm ABI v$ServerNodeAbi prebuild for $mod from cache name" -ForegroundColor Yellow
+        }
+        Write-Success "$mod normalized to Node $ServerNodeVersion (ABI $ServerNodeAbi)"
+    } finally { Pop-Location }
+}
+
+Write-Step "Smoke-checking module import paths in package..."
+# After the flat-layout copy + import rewrite, verify every relative import in
+# the staged JS resolves to a file that actually exists inside the package.
+# This catches deploy-only ERR_MODULE_NOT_FOUND breakage (e.g. an api/agents
+# file importing ../../src that points outside the flattened web root) BEFORE
+# it ships and crash-loops in prod.
+$smokeScript = Join-Path $ScriptDir "check-imports.mjs"
+$prevEAP = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+node $smokeScript $StagingDir 2>&1 | Write-Host
+$smokeExit = $LASTEXITCODE
+$ErrorActionPreference = $prevEAP
+if ($smokeExit -ne 0) {
+    throw "Import smoke check failed — one or more relative imports do not resolve inside the package. Aborting before a broken deploy."
+}
+Write-Success "All relative imports resolve inside the package"
 
 Write-Step "Creating zip package..."
 if (Test-Path $OutputPath) { Remove-Item $OutputPath -Force }
