@@ -1140,5 +1140,9 @@ app.listen(PORT, () => {
     console.log(`MCP endpoint: http://localhost:${PORT}/mcp`);
     console.log(`Data directory: ${DATA_DIR}`);
     initAria();
-    startScheduledRefresh();
+    if (process.env.DISABLE_SCHEDULED_REFRESH === '1') {
+        console.log('Scheduled commit refresh disabled (DISABLE_SCHEDULED_REFRESH=1)');
+    } else {
+        startScheduledRefresh();
+    }
 });
