@@ -67,7 +67,7 @@ $webConfig = @'
       <add name="httpPlatformHandler" path="*" verb="*" modules="httpPlatformHandler" resourceType="Unspecified"/>
     </handlers>
     <httpPlatform processPath="%ProgramFiles%\nodejs\20.20.2\node.exe"
-                  arguments="server.js"
+                  arguments="bootstrap.js"
                   startupTimeLimit="60"
                   stdoutLogEnabled="true"
                   stdoutLogFile="D:\home\LogFiles\node">
@@ -114,7 +114,7 @@ Write-Step "Updating package.json for App Service..."
 # The dependencies from api/package.json are preserved so npm install works correctly.
 $pkgPath = Join-Path $StagingDir "package.json"
 $pkg = Get-Content $pkgPath -Raw | ConvertFrom-Json
-$pkg.scripts.start = "node server.js"
+$pkg.scripts.start = "node bootstrap.js"
 if (-not $pkg.type) { $pkg | Add-Member -NotePropertyName "type" -NotePropertyValue "module" -Force }
 $pkgJson = $pkg | ConvertTo-Json -Depth 10
 [System.IO.File]::WriteAllText($pkgPath, $pkgJson)
