@@ -172,6 +172,7 @@ export function createMcpServer(deps) {
                     affectedAreas: r.metadata?.affectedAreas,
                     flags: r.metadata?.flags,
                     breakingChange: r.metadata?.breakingChange,
+                    changedFiles: r.metadata?.changedFiles,
                     url: r.metadata?.url,
                 }));
 
@@ -220,6 +221,7 @@ export function createMcpServer(deps) {
                     affectedAreas: r.metadata?.affectedAreas,
                     flags: r.metadata?.flags,
                     breakingChange: r.metadata?.breakingChange,
+                    changedFiles: r.metadata?.changedFiles,
                     url: r.metadata?.url,
                 }));
 

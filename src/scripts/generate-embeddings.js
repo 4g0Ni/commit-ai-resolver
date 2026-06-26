@@ -19,6 +19,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { generateEmbeddings } from '../services/embedding-client.js';
 import { loadVectorStore, upsertVectors, getVectorStats } from '../services/vector-store.js';
+import { compactPathTokens, cleanCommitSubject } from '../services/commit-paths.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, '..', '..', 'data', 'daily');
@@ -72,6 +73,10 @@ function buildCommitText(commit, repoName, date) {
         }).join('; ');
         parts.push(`Config: ${configs}`);
     }
+    const subject = cleanCommitSubject(commit.message);
+    if (subject && subject !== commit.summary.title) parts.push(`PR: ${subject}`);
+    const pathTokens = compactPathTokens(commit.changedFiles);
+    if (pathTokens.length) parts.push(`Files: ${pathTokens.join(', ')}`);
     return parts.join('\n');
 }
 
@@ -138,6 +143,7 @@ async function main() {
                         changeType: commit.summary.changeType,
                         affectedAreas: commit.summary.affectedAreas || [],
                         flags: commit.summary.flags || [],
+                        changedFiles: commit.changedFiles || [],
                         url: commit.url,
                     },
                 });

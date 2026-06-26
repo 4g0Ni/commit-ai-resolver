@@ -18,6 +18,7 @@ import { existsSync } from 'fs';
 import { REPOSITORIES } from '../config/repositories.js';
 import { fetchCommitsBetweenDates } from './ado-git-client.js';
 import { summarizeCommits } from './commit-summarizer.js';
+import { compactPathTokens, cleanCommitSubject } from './commit-paths.js';
 import { generateEmbeddings } from './embedding-client.js';
 import { upsertVectors, closeVectorStore } from './vector-store.js';
 
@@ -61,6 +62,7 @@ function formatCommitForOutput(c) {
         message: c.message,
         title: c.title,
         url: c.url,
+        changedFiles: c.changedFiles || [],
         summary: {
             ...c.llmSummary,
             changeType: c.llmSummary.changeType || 'code',
@@ -168,6 +170,10 @@ function buildCommitText(commit, repoName, date) {
         }).join('; ');
         parts.push(`Config: ${configs}`);
     }
+    const subject = cleanCommitSubject(commit.message);
+    if (subject && subject !== s.title) parts.push(`PR: ${subject}`);
+    const pathTokens = compactPathTokens(commit.changedFiles);
+    if (pathTokens.length) parts.push(`Files: ${pathTokens.join(', ')}`);
     return parts.join('\n');
 }
 
@@ -189,6 +195,7 @@ async function embedAndIndex(formattedCommits, repoName, dateStr) {
             changeType: c.summary.changeType,
             affectedAreas: c.summary.affectedAreas || [],
             flags: c.summary.flags || [],
+            changedFiles: c.changedFiles || [],
             url: c.url,
         },
     }));
@@ -418,6 +425,8 @@ export async function rebuildEmbeddings() {
                     shortId: c.shortId,
                     commitId: c.commitId,
                     author: c.author,
+                    message: c.message,
+                    changedFiles: c.changedFiles || [],
                     summary: c.summary,
                     url: c.url,
                 }));

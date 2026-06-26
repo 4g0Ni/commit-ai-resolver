@@ -7,10 +7,13 @@ import { fetchCommitChanges } from './ado-git-client.js';
 import { classifyChanges, buildSkippedFilesSummary, MAX_FILES_FOR_DIFF, MAX_DIFF_SIZE } from './diff-filter.js';
 import { isConfigFile, prettifyMinifiedXml, CONFIG_FILE_PATTERNS } from './config-files.js';
 import { buildSmartDiff } from './diff-builder.js';
+import { detectSharedInfra } from './commit-paths.js';
 import { writeFile, mkdir } from 'fs/promises';
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+
+const RISK_RANK = { LOW: 0, MEDIUM: 1, HIGH: 2 };
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DIFFS_DIR = join(process.env.DATA_DIR || join(__dirname, '..', '..', 'data'), 'diffs');
@@ -180,6 +183,7 @@ async function summarizeCommit(repoConfig, commit) {
         // Step 2: Classify
         const { needsDiff, autoSummary, ignored } = classifyChanges(changes, repoConfig.name);
         const skippedNote = buildSkippedFilesSummary(autoSummary, ignored);
+        const changedFiles = changes.map(f => f.path);
 
         // Step 3: If nothing needs LLM, auto-summarize
         if (needsDiff.length === 0) {
@@ -192,6 +196,7 @@ async function summarizeCommit(repoConfig, commit) {
             const filePaths = autoSummary.map(f => f.path).slice(0, 5).join(', ');
             return {
                 ...commit,
+                changedFiles,
                 llmSummary: {
                     title: autoTitle,
                     summary: `Auto-classified: ${reasons.join(', ')}. ${autoSummary.length} file(s) updated: ${filePaths}${autoSummary.length > 5 ? '...' : ''}.`,
@@ -282,7 +287,25 @@ async function summarizeCommit(repoConfig, commit) {
             };
         }
 
-        return { ...commit, llmSummary: summary };
+        // Fix 2: Shared-infrastructure escalation. The PR message states INTENT,
+        // but the changed-file list states BLAST RADIUS. When a commit edits
+        // shared infra (e.g. grid-shared filter bar) the LLM often scopes the
+        // summary to the page named in the PR; deterministically bump risk to
+        // HIGH and inject a blast-radius area so it is searchable/visible.
+        const sharedInfra = detectSharedInfra(changedFiles);
+        if (sharedInfra.isShared) {
+            const currentRank = RISK_RANK[summary.riskLevel] ?? 1;
+            if (currentRank < RISK_RANK.HIGH) {
+                summary.riskLevel = 'HIGH';
+                summary._riskEscalated = 'shared-infra';
+            }
+            const areas = Array.isArray(summary.affectedAreas) ? summary.affectedAreas : [];
+            if (!areas.includes(sharedInfra.area)) {
+                summary.affectedAreas = [sharedInfra.area, ...areas].slice(0, 4);
+            }
+        }
+
+        return { ...commit, changedFiles, llmSummary: summary };
     } catch (err) {
         return {
             ...commit,

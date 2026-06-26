@@ -5,6 +5,8 @@
  * with ranked suspects, commit links, and confidence assessment.
  */
 
+import { compactPathTokens } from '../../src/services/commit-paths.js';
+
 /**
  * @param {AzureOpenAI} llm - OpenAI client
  * @param {Array} results - RAG search results (commits with metadata)
@@ -23,6 +25,7 @@ export async function synthesizeAnswer(llm, results, intent, context, iteration 
         `  Summary: ${r.metadata.summary}\n` +
         (r.metadata.flags?.length ? `  Flags: ${r.metadata.flags.join(', ')}\n` : '') +
         (r.metadata.affectedAreas?.length ? `  Areas: ${r.metadata.affectedAreas.join(', ')}\n` : '') +
+        (r.metadata.changedFiles?.length ? `  Files: ${compactPathTokens(r.metadata.changedFiles, { max: 10 }).join(', ')}\n` : '') +
         `  Similarity: ${r.score.toFixed(3)}`
     ).join('\n\n');
 
@@ -243,6 +246,7 @@ export async function synthesizeAnswerStream(llm, results, intent, context, iter
         `  Summary: ${r.metadata.summary}\n` +
         (r.metadata.flags?.length ? `  Flags: ${r.metadata.flags.join(', ')}\n` : '') +
         (r.metadata.affectedAreas?.length ? `  Areas: ${r.metadata.affectedAreas.join(', ')}\n` : '') +
+        (r.metadata.changedFiles?.length ? `  Files: ${compactPathTokens(r.metadata.changedFiles, { max: 10 }).join(', ')}\n` : '') +
         `  Similarity: ${r.score.toFixed(3)}`
     ).join('\n\n');
 
