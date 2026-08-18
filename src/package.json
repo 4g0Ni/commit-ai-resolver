@@ -12,7 +12,6 @@
     "refresh:loop": "node scripts/scheduled-refresh.js --loop 60"
   },
   "dependencies": {
-    "@azure/identity": "^4.0.0",
     "apache-arrow": "^18.1.0",
     "better-sqlite3": "^12.9.0",
     "diff": "^7.0.0",

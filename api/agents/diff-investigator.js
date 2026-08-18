@@ -9,7 +9,7 @@
  */
 
 /**
- * @param {AzureOpenAI} llm - OpenAI client
+ * @param {object} llm - OpenAI-compatible client
  * @param {object} params
  * @param {string} params.query - Original incident description
  * @param {Array} params.suspects - Suspect commits with diffs:

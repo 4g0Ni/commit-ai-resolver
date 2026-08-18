@@ -1,41 +1,19 @@
 /**
  * Azure DevOps Git client for fetching commits from tracked repositories.
- * Uses DefaultAzureCredential + direct REST API calls (fetch).
- *
- * Reference: https://msasg.visualstudio.com/Bing_Ads/_git/B2BCrawler/pullrequest/5444356?path=/projects/DRIAgent/src/app/ado-handlers.js&_a=files
+ * Authentication is explicit and optional; no interactive enterprise login is attempted.
  */
 
-import { DefaultAzureCredential } from '@azure/identity';
 import { createPatch } from 'diff';
 import { ADO_ORG, ADO_PROJECT, RELEASE_PIPELINE_DEFINITION_ID, RELEASE_LOG_TASKS } from '../config/repositories.js';
 
-const ADO_SCOPE = '499b84ac-1321-427f-aa17-267ca6975798/.default';
-
-// Cached credential instance — reuse across calls to avoid contention
-const credential = new DefaultAzureCredential();
-let _cachedToken = null;
-let _tokenExpiry = 0;
-let _tokenPromise = null;
-
-/**
- * Get a Bearer token for Azure DevOps REST APIs.
- * Caches the token and reuses until 5 min before expiry.
- */
-async function getCredentialToken() {
-    const now = Date.now();
-    if (_cachedToken && now < _tokenExpiry - 300000) {
-        return _cachedToken;
+function getAuthorizationHeader() {
+    if (process.env.ADO_PAT) {
+        return `Basic ${Buffer.from(`:${process.env.ADO_PAT}`).toString('base64')}`;
     }
-    // Dedup concurrent token requests
-    if (!_tokenPromise) {
-        _tokenPromise = credential.getToken(ADO_SCOPE).then(resp => {
-            _cachedToken = resp.token;
-            _tokenExpiry = resp.expiresOnTimestamp;
-            _tokenPromise = null;
-            return _cachedToken;
-        });
+    if (process.env.ADO_BEARER_TOKEN) {
+        return `Bearer ${process.env.ADO_BEARER_TOKEN}`;
     }
-    return _tokenPromise;
+    throw new Error('ADO access is not configured. Set ADO_PAT or ADO_BEARER_TOKEN to enable live ADO requests.');
 }
 
 /**
@@ -43,13 +21,13 @@ async function getCredentialToken() {
  */
 async function adoGet(url) {
     const start = Date.now();
-    const token = await getCredentialToken();
+    const authorization = getAuthorizationHeader();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 60000); // 60s timeout
     const response = await fetch(url, {
         method: 'GET',
         headers: {
-            Authorization: `Bearer ${token}`,
+            Authorization: authorization,
             'Content-Type': 'application/json',
         },
         signal: controller.signal,
@@ -73,10 +51,10 @@ async function adoGet(url) {
  * Used for build log endpoints which return text/plain.
  */
 async function adoGetText(url) {
-    const token = await getCredentialToken();
+    const authorization = getAuthorizationHeader();
     const response = await fetch(url, {
         method: 'GET',
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: authorization },
     });
     if (!response.ok) {
         const errorText = await response.text();
@@ -337,7 +315,7 @@ async function fetchCommitChanges(repoConfig, commitId) {
  * @returns {Promise<string|null>} File content or null if not found
  */
 async function fetchFileContent(repoConfig, filePath, commitId, opts = {}) {
-    const token = await getCredentialToken();
+    const authorization = getAuthorizationHeader();
     const params = new URLSearchParams({
         path: filePath,
         'versionDescriptor.version': commitId,
@@ -351,7 +329,7 @@ async function fetchFileContent(repoConfig, filePath, commitId, opts = {}) {
     const timer = setTimeout(() => controller.abort(), 60000);
     const response = await fetch(url, {
         method: 'GET',
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: authorization },
         signal: controller.signal,
     });
     clearTimeout(timer);
@@ -378,7 +356,7 @@ async function fetchFileContentBatch(repoConfig, filePaths, commitId, opts = {})
     if (filePaths.length === 0) return new Map();
     const raw = opts.raw === true;
 
-    const token = await getCredentialToken();
+    const authorization = getAuthorizationHeader();
     const url = `https://dev.azure.com/${ADO_ORG}/${repoConfig.project}/_apis/git/repositories/${repoConfig.name}/itemsbatch?api-version=7.1`;
 
     const body = {
@@ -400,7 +378,7 @@ async function fetchFileContentBatch(repoConfig, filePaths, commitId, opts = {})
         const response = await fetch(url, {
             method: 'POST',
             headers: {
-                Authorization: `Bearer ${token}`,
+                Authorization: authorization,
                 'Content-Type': 'application/json',
             },
             signal: controller.signal,
@@ -453,7 +431,7 @@ async function fetchFileContentBatch(repoConfig, filePaths, commitId, opts = {})
             const blobUrl = `https://dev.azure.com/${ADO_ORG}/${repoConfig.project}/_apis/git/repositories/${repoConfig.name}/blobs/${objectId}?api-version=7.1&$format=text`;
             try {
                 const blobResp = await fetch(blobUrl, {
-                    headers: { Authorization: `Bearer ${token}` },
+                    headers: { Authorization: authorization },
                 });
                 if (blobResp.ok) {
                     const content = await blobResp.text();
@@ -805,12 +783,12 @@ function extractImageUrls(html) {
  */
 async function fetchAdoImage(imageUrl, maxBytes = 2 * 1024 * 1024) {
     try {
-        const token = await getCredentialToken();
+        const authorization = getAuthorizationHeader();
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 15000);
         const response = await fetch(imageUrl, {
             method: 'GET',
-            headers: { Authorization: `Bearer ${token}` },
+            headers: { Authorization: authorization },
             signal: controller.signal,
         });
         clearTimeout(timer);

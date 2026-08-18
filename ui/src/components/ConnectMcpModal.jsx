@@ -68,11 +68,10 @@ function ConnectMcpModal({ onClose }) {
                         </li>
 
                         <li>
-                            <div className="connect-mcp-step-title">Sign in on first use</div>
+                            <div className="connect-mcp-step-title">Try the connection</div>
                             <div className="connect-mcp-step-body">
                                 Invoke the skill (e.g. ask <em>"what changed in CMUI yesterday?"</em>).
-                                A browser tab pops up for Microsoft sign-in the first time. Tokens are
-                                cached after that.
+                                The local MCP endpoint does not require a sign-in.
                             </div>
                         </li>
                     </ol>

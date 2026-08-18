@@ -35,16 +35,14 @@ This skill uses the **CommitResolver MCP server** configured in your agentic CLI
 
 The `deploy/setup-commit-resolver.ps1` installer writes all of these for you.
 
-The default endpoint after running `setup-commit-resolver.ps1` is the deployed Azure App Service:
-`https://commit-ai-resolver-win.azurewebsites.net/mcp`.
+The default endpoint after running `setup-commit-resolver.ps1` is the local API server:
+`http://127.0.0.1:4399/mcp`.
 
-For local development, point the MCP entry at `http://localhost:4399/mcp` (start with `node api/server.js` for auth, or `node api/server.js --no-auth` to skip sign-in).
+Start it with `node api/server.js` before invoking the skill.
 
-## Authentication
+## Access Model
 
-The `/mcp` endpoint is gated by Microsoft Entra ID OAuth 2.1 (per MCP auth spec 2025-06-18). On first connection, your MCP client (GitHub Copilot CLI, Claude Code, Claude Desktop, VS Code) will discover the authorization server via `/.well-known/oauth-protected-resource` and pop a browser tab for Microsoft corporate sign-in. Tokens are cached by the client; subsequent calls are silent.
-
-For local iteration without OAuth, run the server with `--no-auth` — the gate is bypassed and a stub user is injected.
+The `/mcp` endpoint does not require a sign-in and is intended for localhost use. Do not expose an auth-free MCP endpoint directly to a public network.
 
 The server exposes 6 tools and 1 resource over Streamable HTTP.
 
@@ -396,4 +394,4 @@ Run the installer (no admin needed):
 
 This configures the MCP server and installs the skill into GitHub Copilot CLI, Claude Desktop, Claude Code CLI, and VS Code.
 
-The deployed endpoint requires Microsoft Entra ID sign-in on first use; tokens are cached by your MCP client.
+The default local endpoint connects without a sign-in flow.

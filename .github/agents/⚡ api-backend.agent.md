@@ -14,7 +14,7 @@ Before doing ANY work, read these files:
 1. **`api/server.js`** — The Express server (all endpoints, LLM chat, data loading)
 2. **`api/package.json`** — Dependencies (express, cors, openai)
 3. **`ui/src/api.js`** — Frontend API client (to understand how the UI calls the backend)
-4. **`src/services/llm-helper.js`** — LLM configuration reference (endpoint, model, auth)
+4. **`src/services/llm-helper.js`** — LLM configuration reference (endpoint and models)
 5. **`USERGUIDE.md`** — API endpoint documentation
 
 Do NOT assume you know the current API shape. Always read `server.js` fresh.
@@ -22,8 +22,8 @@ Do NOT assume you know the current API shape. Always read `server.js` fresh.
 ## API Architecture
 
 ```
-Frontend (React)              Express API                  Azure OpenAI
- localhost:5173                localhost:3001
+Frontend (React)              Express API              OpenAI-compatible API
+ localhost:5173                localhost:4399
       │                            │                           │
       │  GET /api/days             │                           │
       │───────────────────────────▶│  Load data/daily/*.json   │
@@ -54,7 +54,7 @@ Frontend (React)              Express API                  Azure OpenAI
 |---|---|
 | Framework | Express 5.1 |
 | LLM Client | `openai` npm package |
-| Auth | `@azure/identity` (DefaultAzureCredential) |
+| Access | Anonymous localhost by default; optional server-side provider credentials |
 | CORS | `cors` middleware (allow all origins) |
 | Data source | JSON files in `data/daily/` |
 
@@ -63,14 +63,13 @@ Frontend (React)              Express API                  Azure OpenAI
 The chat endpoint:
 1. Loads all available daily JSON data
 2. Builds a system prompt with the full data context
-3. Forwards the user's message + conversation history to Azure OpenAI
+3. Forwards the user's message + conversation history to the configured OpenAI-compatible provider
 4. Returns the LLM's response
 
 **LLM settings** (reference `src/services/llm-helper.js`):
-- Endpoint: `yizha-maz2xf24-swedencentral.openai.azure.com`
-- Model: `gpt-5.4`
-- API version: `2025-04-01-preview`
-- Auth: `DefaultAzureCredential`
+- Endpoint: `OPENAI_BASE_URL` (optional)
+- Models: `OPENAI_MODEL` and `OPENAI_FAST_MODEL`
+- Credential: optional server-side `OPENAI_API_KEY`
 
 ## Data Shape Reference
 
@@ -170,5 +169,5 @@ curl -X POST http://localhost:3001/api/chat \
 - **Read before writing** — Always read `server.js` before modifying.
 - **Test after changes** — Restart the server and test with `curl`.
 - **Keep frontend in sync** — If you change an endpoint, update `ui/src/api.js`.
-- **No hardcoded secrets** — Use `DefaultAzureCredential` for all auth.
+- **No hardcoded secrets** — Read optional provider credentials from environment variables; never add automatic enterprise identity discovery.
 - **Update docs** — If you add/change endpoints, update `USERGUIDE.md`.

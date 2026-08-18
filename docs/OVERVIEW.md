@@ -237,7 +237,7 @@ Azure DevOps (5 repos)
   • Injected into LLM system prompt for domain-aware summarization
         │
         ▼
-  LLM Summarization (Azure OpenAI GPT-5.4)
+  LLM Summarization (configured OpenAI-compatible provider)
   • Title, summary, risk level (HIGH/MEDIUM/LOW)
   • Affected areas, feature flags, config changes
   • 25 concurrent LLM calls with retry logic and 3-min timeout
@@ -278,10 +278,9 @@ Azure DevOps (5 repos)
 
 ### Prerequisites
 
-- Node.js 18+
-- Azure CLI logged in (`az login`) — required for ADO API access and Azure OpenAI
-- Access to the target Azure DevOps repositories
-- Microsoft corporate account (Entra ID) — required for app authentication
+- Node.js 20+
+- Optional `OPENAI_API_KEY` or `OPENAI_BASE_URL` for chat, summaries, and embeddings
+- Optional `ADO_PAT` or `ADO_BEARER_TOKEN` for live Azure DevOps access
 
 ### Setup
 
@@ -291,11 +290,11 @@ cd src && npm install
 cd ../api && npm install
 cd ../ui && npm install
 
-# 2. Generate daily summaries (fetches commits from ADO, runs LLM summarization)
+# 2. Optional: generate daily summaries (requires ADO + AI configuration)
 cd ../src
 node scripts/generate-sample-data.js --days 7
 
-# 3. Build vector index (generates embeddings, indexes in LanceDB)
+# 3. Optional: build the SQLite vector index (requires AI configuration)
 node scripts/generate-embeddings.js
 
 # 4. Start the API server (port 4399)
@@ -306,7 +305,7 @@ node server.js
 cd ../ui
 npx vite --host
 
-# 6. Open http://localhost:5173
+# 6. Open https://localhost:5173
 ```
 
 ### Example Chat Queries
@@ -368,11 +367,11 @@ The LLM prompt enforces 8 quality rules validated through automated metrics:
 
 | Layer | Technology |
 |-------|-----------|
-| **LLM** | Azure OpenAI GPT-5.4 (summarization + agents) |
+| **LLM** | OpenAI-compatible API (summarization + agents) |
 | **Embeddings** | text-embedding-3-large (3,072 dimensions) |
-| **Vector DB** | LanceDB (embedded, no server required) |
+| **Vector DB** | SQLite + sqlite-vec (embedded, no server required) |
 | **Source Control** | Azure DevOps REST API v7.1 |
-| **Auth** | Microsoft Entra ID (MSAL) for users, DefaultAzureCredential for Azure services |
+| **Access** | Anonymous localhost; optional explicit provider credentials |
 | **Backend** | Node.js + Express 5 |
 | **Frontend** | React 19 + Vite |
 | **Chat Rendering** | React Markdown |
@@ -383,8 +382,8 @@ The LLM prompt enforces 8 quality rules validated through automated metrics:
 
 ```
 ┌──────────────────┐     ┌──────────────────┐     ┌──────────────────┐
-│  Azure DevOps    │     │  Azure OpenAI    │     │  LanceDB         │
-│  (5 repos)       │     │  GPT-5.4 +       │     │  Vector Store    │
+│  Azure DevOps    │     │  OpenAI API      │     │  SQLite          │
+│  (5 repos)       │     │  Chat +          │     │  Vector Store    │
 │                  │     │  Embeddings      │     │  (local)         │
 └────────┬─────────┘     └────────┬─────────┘     └────────┬─────────┘
          │                        │                        │

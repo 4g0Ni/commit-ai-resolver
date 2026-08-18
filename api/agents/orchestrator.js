@@ -10,7 +10,6 @@
 import { extractIntent } from './intent-extractor.js';
 import { synthesizeAnswer, synthesizeAnswerStream } from './answer-synthesizer.js';
 import { evaluateAnswer } from './answer-evaluator.js';
-import { logInfo, logError } from '../telemetry/column-whitelist.js';
 
 function daysAgo(n) {
     const d = new Date();
@@ -22,8 +21,8 @@ function daysAgo(n) {
  * Run the agentic search pipeline.
  *
  * @param {object} params
- * @param {AzureOpenAI} params.llm - OpenAI client for chat completions (gpt-5.4, used for synthesis)
- * @param {AzureOpenAI} params.llmFast - OpenAI client for fast tasks (gpt-5.4-mini, used for intent/eval)
+ * @param {object} params.llm - OpenAI-compatible client used for synthesis
+ * @param {object} params.llmFast - OpenAI-compatible client used for intent extraction and evaluation
  * @param {Function} params.embedQuery - Async function: (text) => embedding vector
  * @param {Function} params.searchVectors - Async function: (embedding, opts) => results[]
  * @param {Function} params.lookupByCommitIds - Async function: (shortIds) => results[] (exact match)
@@ -90,17 +89,6 @@ export async function agenticSearch({
         log(i, 'intent-extractor', { status: 'running' });
         const intent = await extractIntent(llmFast || llm, context);
         log(i, 'intent-extractor', { status: 'done', confidence: intent.confidence, verdict: intent.verdict, elapsed: intent._elapsed });
-        logInfo('IntentExtraction', {
-            CorrelationId: correlationId,
-            Component: 'intent-extractor',
-            Intent: intent.searchQuery?.slice(0, 200),
-            Repo: intent.repo || null,
-            Confidence: intent.confidence,
-            Verdict: intent.verdict,
-            ElapsedMs: intent._elapsed,
-            TokensUsed: intent._tokens || 0,
-            IterationIndex: i,
-        });
         console.log(`  [Intent] searchQuery: "${intent.searchQuery}"`);
         if (intent.secondarySearchQuery) console.log(`  [Intent] secondarySearchQuery: "${intent.secondarySearchQuery}"`);
 
@@ -264,16 +252,6 @@ export async function agenticSearch({
             elapsed: synthesis._elapsed,
         });
         console.log(`  [Synthesizer] confidence=${synthesis.confidence}, coverage=${synthesis.searchCoverage}, suspects=${synthesis.suspectCount}, tokens=${synthesis._tokens || '?'}, ${(synthesis._elapsed / 1000).toFixed(1)}s`);
-        logInfo('AnswerSynthesis', {
-            CorrelationId: correlationId,
-            Component: 'answer-synthesizer',
-            Confidence: synthesis.confidence,
-            ResultCount: results.length,
-            ElapsedMs: synthesis._elapsed,
-            TokensUsed: synthesis._tokens || 0,
-            SuspectsCount: synthesis.suspectCount || 0,
-            IterationIndex: i,
-        });
 
         // Guard: if answer is empty, fall back to full context on first occurrence
         if ((!synthesis.answer || synthesis.answer.trim().length === 0) && i === 1) {
@@ -298,14 +276,6 @@ export async function agenticSearch({
             elapsed: evaluation._elapsed,
         });
         console.log(`  [Evaluator] verdict=${evaluation.verdict}, qualityScore=${evaluation.qualityScore}, fastPath=${evaluation._fastPath || false}`);
-        logInfo('AnswerEvaluation', {
-            CorrelationId: correlationId,
-            Component: 'answer-evaluator',
-            Confidence: evaluation.qualityScore,
-            Verdict: evaluation.verdict,
-            ElapsedMs: evaluation._elapsed,
-            IterationIndex: i,
-        });
         if (evaluation.issues?.length > 0) {
             console.log(`  [Evaluator] issues: ${evaluation.issues.join('; ')}`);
         }

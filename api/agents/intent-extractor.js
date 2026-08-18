@@ -20,7 +20,7 @@ function daysAgo(n, today) {
 }
 
 /**
- * @param {AzureOpenAI} llm - OpenAI client
+ * @param {object} llm - OpenAI-compatible client
  * @param {object} context
  * @param {string} context.query - Original user query
  * @param {Array} context.history - Conversation history

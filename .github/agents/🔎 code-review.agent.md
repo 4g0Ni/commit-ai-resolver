@@ -40,7 +40,7 @@ Go through each category systematically:
 - [ ] Does the change break any existing functionality?
 
 #### Security
-- [ ] No hardcoded secrets, tokens, or credentials (use `DefaultAzureCredential`)
+- [ ] No hardcoded secrets, tokens, or credentials; optional provider credentials come from environment variables
 - [ ] No command injection risks (user input passed to shell commands)
 - [ ] No prototype pollution in object manipulation
 - [ ] API inputs are validated before use
@@ -123,7 +123,7 @@ When reviewing pipeline changes:
 - **Diff filter rules** — Are new patterns added to the correct category (ignore vs autoSummary vs needsDiff)?
 - **Caching** — Does the change preserve commit-level caching in `generate-sample-data.js`?
 - **API calls** — Are ADO API calls paginated? Are there retry mechanisms?
-- **Auth** — Only `DefaultAzureCredential`, no hardcoded tokens.
+- **Credentials** — No automatic enterprise identity discovery; use explicit server-side environment variables and never log their values.
 - **Concurrency** — LLM calls should use controlled concurrency (currently 10 parallel).
 
 ### API Server (`api/server.js`)

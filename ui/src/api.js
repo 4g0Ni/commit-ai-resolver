@@ -1,42 +1,20 @@
-import { msalInstance, loginRequest } from './authConfig.js';
-
 const API_BASE = '/api';
 
-async function getAuthHeaders() {
-    const accounts = msalInstance.getAllAccounts();
-    if (accounts.length === 0) return {};
-    try {
-        const response = await msalInstance.acquireTokenSilent({
-            ...loginRequest,
-            account: accounts[0],
-        });
-        return { Authorization: `Bearer ${response.idToken}` };
-    } catch {
-        await msalInstance.acquireTokenRedirect(loginRequest);
-        return {};
-    }
-}
-
-async function authFetch(url, options = {}) {
-    const authHeaders = await getAuthHeaders();
-    const res = await fetch(url, {
+async function apiFetch(url, options = {}) {
+    return fetch(url, {
         ...options,
-        headers: { 'X-Client': 'ui', ...options.headers, ...authHeaders },
+        headers: { 'X-Client': 'ui', ...options.headers },
     });
-    if (res.status === 401) {
-        await msalInstance.acquireTokenRedirect(loginRequest);
-    }
-    return res;
 }
 
 export async function fetchDays() {
-    const res = await authFetch(`${API_BASE}/days`);
+    const res = await apiFetch(`${API_BASE}/days`);
     if (!res.ok) throw new Error(`Failed to fetch days: ${res.statusText}`);
     return res.json();
 }
 
 export async function fetchDay(date) {
-    const res = await authFetch(`${API_BASE}/days/${date}`);
+    const res = await apiFetch(`${API_BASE}/days/${date}`);
     if (!res.ok) throw new Error(`Failed to fetch day ${date}: ${res.statusText}`);
     return res.json();
 }
@@ -45,19 +23,19 @@ export async function fetchDayRange(from, to) {
     const params = new URLSearchParams();
     if (from) params.set('from', from);
     if (to) params.set('to', to);
-    const res = await authFetch(`${API_BASE}/days?${params}`);
+    const res = await apiFetch(`${API_BASE}/days?${params}`);
     if (!res.ok) throw new Error(`Failed to fetch range: ${res.statusText}`);
     return res.json();
 }
 
 export async function fetchReleases() {
-    const res = await authFetch(`${API_BASE}/releases`);
+    const res = await apiFetch(`${API_BASE}/releases`);
     if (!res.ok) throw new Error(`Failed to fetch releases: ${res.statusText}`);
     return res.json();
 }
 
 export async function sendChatMessage(message, history = []) {
-    const res = await authFetch(`${API_BASE}/chat`, {
+    const res = await apiFetch(`${API_BASE}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message, history }),
@@ -74,23 +52,24 @@ export async function sendChatMessage(message, history = []) {
  * @returns {Promise<void>}
  */
 export async function sendChatMessageStream(message, history = [], { onStatus, onToken, onComplete, onError }) {
-    const authHeaders = await getAuthHeaders();
     const res = await fetch(`${API_BASE}/chat`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
             'Accept': 'text/event-stream',
             'X-Client': 'ui',
-            ...authHeaders,
         },
         body: JSON.stringify({ message, history }),
     });
     if (!res.ok) {
-        if (res.status === 401) {
-            await msalInstance.acquireTokenRedirect(loginRequest);
-            return;
-        }
         throw new Error(`Chat error: ${res.statusText}`);
+    }
+
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('text/event-stream')) {
+        const data = await res.json();
+        if (onComplete) onComplete(data);
+        return;
     }
 
     const reader = res.body.getReader();
@@ -126,7 +105,7 @@ export async function sendChatMessageStream(message, history = [], { onStatus, o
 }
 
 export async function investigateCommits(message, suspects, history = []) {
-    const res = await authFetch(`${API_BASE}/investigate`, {
+    const res = await apiFetch(`${API_BASE}/investigate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message, suspects, history }),
@@ -136,7 +115,7 @@ export async function investigateCommits(message, suspects, history = []) {
 }
 
 export async function submitFeedback(queryId, vote, comment, metadata) {
-    const res = await authFetch(`${API_BASE}/feedback`, {
+    const res = await apiFetch(`${API_BASE}/feedback`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ queryId, vote, comment, metadata }),
@@ -146,19 +125,19 @@ export async function submitFeedback(queryId, vote, comment, metadata) {
 }
 
 export async function fetchFeedbackStats() {
-    const res = await authFetch(`${API_BASE}/feedback/stats`);
+    const res = await apiFetch(`${API_BASE}/feedback/stats`);
     if (!res.ok) throw new Error(`Stats error: ${res.statusText}`);
     return res.json();
 }
 
 export async function fetchRecentFeedback(limit = 50) {
-    const res = await authFetch(`${API_BASE}/feedback/recent?limit=${limit}`);
+    const res = await apiFetch(`${API_BASE}/feedback/recent?limit=${limit}`);
     if (!res.ok) throw new Error(`Feedback error: ${res.statusText}`);
     return res.json();
 }
 
 export async function fetchUsageMetrics() {
-    const res = await authFetch(`${API_BASE}/metrics/usage`);
+    const res = await apiFetch(`${API_BASE}/metrics/usage`);
     if (!res.ok) throw new Error(`Metrics error: ${res.statusText}`);
     return res.json();
 }

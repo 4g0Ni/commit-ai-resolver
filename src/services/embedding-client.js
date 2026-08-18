@@ -1,29 +1,20 @@
-/**
- * Text embedding client — Azure OpenAI text-embedding-3-large.
- * Uses DefaultAzureCredential for auth, same endpoint as the LLM.
- */
+/** Text embedding client for an OpenAI-compatible API. */
 
-import { DefaultAzureCredential } from '@azure/identity';
-import { AzureOpenAI } from 'openai';
+import OpenAI from 'openai';
 
-const AZURE_OPENAI_ENDPOINT = 'https://yizha-maz2xf24-swedencentral.openai.azure.com/';
-const EMBEDDING_DEPLOYMENT = 'text-embedding-3-large';
-const EMBEDDING_API_VERSION = '2023-05-15';
-const COGNITIVE_SERVICES_SCOPE = 'https://cognitiveservices.azure.com/.default';
+const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL;
+const EMBEDDING_MODEL = process.env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-large';
 
 let _instance = null;
 
 function getEmbeddingClient() {
     if (_instance) return _instance;
-
-    const credential = new DefaultAzureCredential();
-    _instance = new AzureOpenAI({
-        endpoint: AZURE_OPENAI_ENDPOINT,
-        apiKey: '',
-        azureADTokenProvider: () =>
-            credential.getToken(COGNITIVE_SERVICES_SCOPE).then(at => at.token),
-        apiVersion: EMBEDDING_API_VERSION,
-        deployment: EMBEDDING_DEPLOYMENT,
+    if (!process.env.OPENAI_API_KEY && !OPENAI_BASE_URL) {
+        throw new Error('Embeddings are not configured. Set OPENAI_API_KEY or OPENAI_BASE_URL.');
+    }
+    _instance = new OpenAI({
+        apiKey: process.env.OPENAI_API_KEY || 'local',
+        ...(OPENAI_BASE_URL ? { baseURL: OPENAI_BASE_URL } : {}),
     });
     return _instance;
 }
@@ -44,7 +35,7 @@ async function generateEmbeddings(texts) {
         const batch = texts.slice(i, i + BATCH_SIZE);
         const result = await client.embeddings.create({
             input: batch,
-            model: EMBEDDING_DEPLOYMENT,
+            model: EMBEDDING_MODEL,
         });
         for (const item of result.data) {
             allEmbeddings.push(item.embedding);

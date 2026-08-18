@@ -3,11 +3,11 @@
  *
  * Tests the full MCP flow: initialize → tools/list → tool calls → resources.
  * Requires:
- *   - API server running on port 4399 with --no-auth
- *   - LanceDB data at data/lancedb/
+ *   - API server running on port 4399
+ *   - vector data at data/vectors.db
  *
  * Usage:
- *   node api/server.js --no-auth &
+ *   node api/server.js &
  *   node src/tests/test-mcp-e2e.js
  */
 
@@ -74,7 +74,7 @@ async function mcpAvailable() {
 const available = await mcpAvailable();
 if (!available) {
     console.error('\n✗ MCP endpoint not available. Start the server first:');
-    console.error('  node api/server.js --no-auth');
+    console.error('  node api/server.js');
     process.exit(1);
 }
 
@@ -366,81 +366,26 @@ console.log('\n══ Suite 8: Session management ══');
 }
 
 // ===========================================================================
-// Suite 9: OAuth Protected Resource Metadata (PRM)
+// Suite 9: Anonymous local access
 // ===========================================================================
-console.log('\n══ Suite 9: OAuth PRM discovery ══');
+console.log('\n══ Suite 9: Anonymous local access ══');
 {
-    const prmRes = await fetch(`${API_BASE}/.well-known/oauth-protected-resource`);
-    assert(prmRes.status === 200, `PRM endpoint returns 200 (got ${prmRes.status})`);
-    const prm = await prmRes.json();
-    assert(prm.resource?.endsWith('/mcp'), `PRM resource points at /mcp (got ${prm.resource})`);
-    assert(Array.isArray(prm.authorization_servers) && prm.authorization_servers[0]?.includes('login.microsoftonline.com'),
-        `PRM authorization_servers points at Entra ID`);
-    assert(Array.isArray(prm.scopes_supported) && prm.scopes_supported.length > 0,
-        `PRM advertises at least one scope`);
-    assert(prm.bearer_methods_supported?.includes('header'),
-        `PRM advertises bearer header method`);
-
-    // /mcp variant
-    const prmMcpRes = await fetch(`${API_BASE}/.well-known/oauth-protected-resource/mcp`);
-    assert(prmMcpRes.status === 200, `PRM /mcp variant returns 200`);
-
-    // Authorization Server Metadata (RFC 8414) — must advertise our DCR shim so
-    // MCP SDKs that require dynamic client registration can connect to Entra.
-    const asRes = await fetch(`${API_BASE}/.well-known/oauth-authorization-server`);
-    assert(asRes.status === 200, `auth-server metadata returns 200`);
-    const asMeta = await asRes.json();
-    assert(asMeta.issuer === API_BASE, `issuer matches base URL`);
-    assert(asMeta.authorization_endpoint?.endsWith('/oauth/authorize'), `has authorization_endpoint`);
-    assert(asMeta.token_endpoint?.endsWith('/oauth/token'), `has token_endpoint`);
-    assert(asMeta.registration_endpoint?.endsWith('/oauth/register'), `has registration_endpoint (DCR shim)`);
-    assert(asMeta.code_challenge_methods_supported?.includes('S256'), `advertises PKCE S256`);
-    assert(asMeta.grant_types_supported?.includes('authorization_code'), `supports authorization_code grant`);
-
-    // DCR shim — POST any registration body, expect Entra client_id back.
-    const regRes = await fetch(`${API_BASE}/oauth/register`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            redirect_uris: ['http://localhost:33418/callback'],
-            client_name: 'test-runner',
-        }),
-    });
-    assert(regRes.status === 201, `register returns 201 (got ${regRes.status})`);
-    const reg = await regRes.json();
-    assert(reg.client_id === 'bc4d2d3c-b205-42f4-90f6-8bac756fd7f5', `register returns Entra client_id`);
-    assert(reg.redirect_uris?.[0] === 'http://localhost:33418/callback', `register echoes redirect_uris`);
-    assert(reg.token_endpoint_auth_method === 'none', `register marks public client (PKCE)`);
-
-    // /oauth/authorize redirect — verify it 302s to Entra with our scope appended.
-    const authRes = await fetch(
-        `${API_BASE}/oauth/authorize?response_type=code&client_id=bc4d2d3c-b205-42f4-90f6-8bac756fd7f5` +
-        `&redirect_uri=${encodeURIComponent('http://localhost:33418/callback')}` +
-        `&code_challenge=abc&code_challenge_method=S256&state=xyz&scope=openid`,
-        { redirect: 'manual' }
-    );
-    assert(authRes.status === 302, `/oauth/authorize returns 302 (got ${authRes.status})`);
-    const location = authRes.headers.get('location') || '';
-    assert(location.startsWith('https://login.microsoftonline.com/'), `redirects to Entra`);
-    assert(location.includes('mcp.access'), `Entra URL includes mcp.access scope`);
-    assert(location.includes('offline_access'), `Entra URL includes offline_access scope`);
-
-    // Probe /mcp without auth header. In --no-auth mode this passes through; in auth mode it must
-    // return 401 with a WWW-Authenticate header pointing at the PRM.
     const probeRes = await fetch(`${API_BASE}/mcp`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream' },
         body: '{}',
     });
-    if (probeRes.status === 401) {
-        const wwwAuth = probeRes.headers.get('www-authenticate') || '';
-        assert(wwwAuth.toLowerCase().startsWith('bearer'),
-            `401 response carries Bearer WWW-Authenticate`);
-        assert(/resource_metadata="[^"]+\/\.well-known\/oauth-protected-resource"/.test(wwwAuth),
-            `WWW-Authenticate includes resource_metadata pointer`);
-    } else {
-        skip('401 + WWW-Authenticate check (server is in --no-auth mode)');
-    }
+    assert(probeRes.status !== 401 && probeRes.status !== 403,
+        `MCP does not require credentials (got ${probeRes.status})`);
+
+    const daysRes = await fetch(`${API_BASE}/api/days`);
+    assert(daysRes.status === 200, `API accepts anonymous requests (got ${daysRes.status})`);
+
+    const prmRes = await fetch(`${API_BASE}/.well-known/oauth-protected-resource`);
+    assert(prmRes.status === 404, `OAuth discovery endpoint was removed (got ${prmRes.status})`);
+
+    const registerRes = await fetch(`${API_BASE}/oauth/register`, { method: 'POST' });
+    assert(registerRes.status === 404, `OAuth registration endpoint was removed (got ${registerRes.status})`);
 }
 
 

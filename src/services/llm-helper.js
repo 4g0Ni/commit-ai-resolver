@@ -1,37 +1,37 @@
-/**
- * LLM helper — Azure OpenAI clients with DefaultAzureCredential.
- *
- * Two deployments share one endpoint, one credential, one retry loop:
- *   - llmHelper      → gpt-5.4       (quality summarization)
- *   - llmHelperMini  → gpt-5.4-mini  (fast classification / tie-break)
- *
- * Reference: DRIAgent llm-helper.js
- */
+/** OpenAI-compatible LLM clients with lazy, explicit configuration. */
 
-import { DefaultAzureCredential } from '@azure/identity';
-import { AzureOpenAI } from 'openai';
+import OpenAI from 'openai';
 
-const AZURE_OPENAI_ENDPOINT = 'https://yizha-maz2xf24-swedencentral.openai.azure.com/';
-const AZURE_OPENAI_DEPLOYMENT = 'gpt-5.4';
-const AZURE_OPENAI_MINI_DEPLOYMENT = 'gpt-5.4-mini';
-const AZURE_OPENAI_API_VERSION = '2025-04-01-preview';
-const COGNITIVE_SERVICES_SCOPE = 'https://cognitiveservices.azure.com/.default';
+const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL;
+const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4.1';
+const OPENAI_FAST_MODEL = process.env.OPENAI_FAST_MODEL || 'gpt-4.1-mini';
 
-const credential = new DefaultAzureCredential();
+let openaiClient = null;
 
-function makeClient(deployment) {
-    return new AzureOpenAI({
-        endpoint: AZURE_OPENAI_ENDPOINT,
-        apiKey: '',
-        azureADTokenProvider: () =>
-            credential.getToken(COGNITIVE_SERVICES_SCOPE).then(at => at.token),
-        apiVersion: AZURE_OPENAI_API_VERSION,
-        deployment,
+function getOpenAIClient() {
+    if (openaiClient) return openaiClient;
+    if (!process.env.OPENAI_API_KEY && !OPENAI_BASE_URL) {
+        throw new Error('AI is not configured. Set OPENAI_API_KEY or OPENAI_BASE_URL.');
+    }
+    openaiClient = new OpenAI({
+        apiKey: process.env.OPENAI_API_KEY || 'local',
+        ...(OPENAI_BASE_URL ? { baseURL: OPENAI_BASE_URL } : {}),
     });
+    return openaiClient;
 }
 
-const client = makeClient(AZURE_OPENAI_DEPLOYMENT);
-const clientMini = makeClient(AZURE_OPENAI_MINI_DEPLOYMENT);
+function makeClient(model) {
+    return {
+        chat: {
+            completions: {
+                create: (params, options) => getOpenAIClient().chat.completions.create({ model, ...params }, options),
+            },
+        },
+    };
+}
+
+const client = makeClient(OPENAI_MODEL);
+const clientMini = makeClient(OPENAI_FAST_MODEL);
 
 /**
  * Internal: retry/backoff loop wrapping a single deployment client.
@@ -98,7 +98,7 @@ async function callWithRetry(targetClient, deploymentLabel, systemPrompt, messag
  * @returns {Promise<string>}
  */
 async function llmHelper(systemPrompt, messages, opts = {}) {
-    return callWithRetry(client, AZURE_OPENAI_DEPLOYMENT, systemPrompt, messages, opts);
+    return callWithRetry(client, OPENAI_MODEL, systemPrompt, messages, opts);
 }
 
 /**
@@ -110,7 +110,7 @@ async function llmHelper(systemPrompt, messages, opts = {}) {
  * @returns {Promise<string>}
  */
 async function llmHelperMini(systemPrompt, messages, opts = {}) {
-    return callWithRetry(clientMini, AZURE_OPENAI_MINI_DEPLOYMENT, systemPrompt, messages, opts);
+    return callWithRetry(clientMini, OPENAI_FAST_MODEL, systemPrompt, messages, opts);
 }
 
 export { llmHelper, llmHelperMini, client, clientMini };

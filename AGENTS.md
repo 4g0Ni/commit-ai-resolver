@@ -16,14 +16,13 @@ src/           — CLI: commit fetching, summarization, embedding pipeline
   services/    — Business logic (ADO client, commit summarizer, diff filter, vector store, LLM helper)
 api/           — Express backend (REST API + SSE streaming chat)
   agents/      — LLM agent implementations (orchestrator, intent extractor, synthesizer, evaluator)
-  db.js        — SQLite telemetry DB (queries, feedback, usage metrics)
-  telemetry/   — Aria / 1DS telemetry client and column whitelist
+  db.js        — Local SQLite DB (queries, feedback, usage metrics)
 ui/            — React (Vite) frontend
   src/components/  — React components
   src/api.js       — API client functions
-deploy/        — Azure deployment scripts (prepare-api.ps1, deploy.ps1, reset-remote.ps1)
+deploy/        — Legacy packaging assets and MCP installer
 scripts/       — CLI utilities (reset-and-refresh.js)
-data/          — Runtime data (daily JSON, diffs, LanceDB vector store) — gitignored
+data/          — Runtime data (daily JSON, diffs, SQLite vector store) — gitignored
 .github/
   agents/      — Repository-level Copilot CLI custom agents (api-backend, ui-dev, qa, etc.)
   copilot-instructions.md — Pointer to this file (loaded by Copilot CLI)
@@ -44,7 +43,7 @@ data/          — Runtime data (daily JSON, diffs, LanceDB vector store) — gi
 ## Coding Standards
 
 - **Read before you write:** Before importing or using any module, read its source to verify the export names, data shapes (object vs array vs function), and parameter signatures. Never assume — a wrong assumption (e.g., iterating an object as an array) causes runtime crashes that are trivially avoidable.
-- **Verify after you write:** After implementing any backend/service change, start the server (`node api/server.js --no-auth`) and confirm the new code path runs without errors. Do not consider the work done until it has been executed at least once.
+- **Verify after you write:** After implementing any backend/service change, start the server (`node api/server.js`) and confirm the new code path runs without errors. Do not consider the work done until it has been executed at least once.
 - Functional components only (no class components).
 - Use React hooks (`useState`, `useEffect`, `useCallback`, `useMemo`, `useRef`) for state and side effects.
 - Default exports for React components: `export default ComponentName;`
@@ -71,29 +70,29 @@ data/          — Runtime data (daily JSON, diffs, LanceDB vector store) — gi
 ## API & Backend
 
 - Express server in `api/server.js`. All routes under `/api/`.
-- Two Azure OpenAI clients: `openaiClient` (gpt-5.4, quality tasks) and `openaiMiniClient` (gpt-5.4-mini, fast tasks like intent extraction and evaluation).
+- Two OpenAI-compatible client views: `openaiClient` (quality model) and `openaiMiniClient` (fast model). Models and endpoint are configured through `OPENAI_*` environment variables.
 - Embedding model: `text-embedding-3-large` (3072 dimensions).
 - Chat endpoint supports both JSON response and SSE streaming (via `Accept: text/event-stream` header).
 - LLM agents receive the client as a parameter (`llm` or `llmFast`) — never import the client directly.
-- Usage metrics endpoint: `GET /api/metrics/usage` — returns query volume, confidence distribution, method breakdown, error rate, feedback stats, DAU/WAU/MAU, latency percentiles (p50/p95), user engagement (retention rate, avg queries/user), and adoption metrics from SQLite. User tracking is based on authenticated user email from Microsoft Entra ID token.
+- Usage metrics endpoint: `GET /api/metrics/usage` — returns query volume, confidence distribution, method breakdown, error rate, feedback stats, DAU/WAU/MAU, latency percentiles (p50/p95), user engagement, and adoption metrics from local SQLite.
 
-## Authentication
+## Access And Credentials
 
-- **Microsoft Entra ID (MSAL)** — all API endpoints require a valid JWT (ID token).
-- Frontend: `@azure/msal-browser` + `@azure/msal-react` with redirect flow. MSAL config in `ui/src/authConfig.js`.
-- Backend: `jsonwebtoken` + `jwks-rsa` middleware in `api/server.js` validates ID tokens against Microsoft's JWKS endpoint.
-- App registration: Client ID `bc4d2d3c-b205-42f4-90f6-8bac756fd7f5`, Tenant ID `72f988bf-86f1-41af-91ab-2d7cd011db47` (Microsoft corporate tenant).
-- Session persistence: MSAL `localStorage` cache + `storeAuthStateInCookie: true` — survives browser refresh.
-- User identity: `req.user.email` (from `preferred_username` claim) used as `userId` in SQLite for DAU/MAU tracking.
-- Azure portal: Redirect URI `http://localhost:5173` must be registered under **Single-page application** platform (not Web).
+- The UI, REST API, and MCP endpoint have no application-level user login.
+- The server binds to `127.0.0.1` by default. Do not expose it publicly without an external authentication layer.
+- Do not add MSAL, JWT/JWKS middleware, OAuth proxy routes, or automatic enterprise credential discovery.
+- AI is optional and configured with `OPENAI_API_KEY` and/or `OPENAI_BASE_URL`; model names use `OPENAI_MODEL`, `OPENAI_FAST_MODEL`, and `OPENAI_EMBEDDING_MODEL`.
+- Live ADO access is optional and configured explicitly with `ADO_PAT` or `ADO_BEARER_TOKEN`.
+- Background ADO refresh is opt-in with `ENABLE_SCHEDULED_REFRESH=1`.
+- Provider credentials remain server-side and must never be sent to the browser, logged, or committed.
 
 ## LLM Agent Pipeline
 
 The agentic search pipeline in `api/agents/orchestrator.js`:
-1. **Intent Extractor** (gpt-5.4-mini) — parses user query into structured filters
-2. **RAG Search** — vector similarity + metadata filtering via LanceDB
-3. **Answer Synthesizer** (gpt-5.4) — generates answer from search results (supports streaming)
-4. **Answer Evaluator** (gpt-5.4-mini) — quality gate: PASS / RETRY / PARTIAL
+1. **Intent Extractor** (fast model) — parses user query into structured filters
+2. **RAG Search** — vector similarity + metadata filtering via SQLite/sqlite-vec
+3. **Answer Synthesizer** (quality model) — generates answer from search results (supports streaming)
+4. **Answer Evaluator** (fast model) — quality gate: PASS / RETRY / PARTIAL
 
 When adding or modifying agents, follow the existing pattern: accept `llm` as first param, return a structured object, log timing with `_elapsed`.
 
@@ -125,11 +124,10 @@ When adding a new repo, update:
 
 - Test files in `src/tests/` using Node.js scripts (no framework).
 - No UI tests currently exist.
-- **No-auth mode:** The API server supports `--no-auth` (or `NO_AUTH=1` env var) to disable JWT authentication. This injects a stub `req.user` so all routes work without a real token. Use this for running the E2E test suite.
 - **Running E2E tests:**
   ```bash
-  # 1. Start server without auth
-  node api/server.js --no-auth &
+  # 1. Start the local server
+  node api/server.js &
   # 2. Run test suite
   cd src && node tests/test-search-e2e.js
   # 3. Kill the server when done
@@ -158,36 +156,25 @@ When adding a new repo, update:
 
 ## Telemetry
 
-- **Aria / 1DS SDK:** Telemetry is sent to Aria Kusto via `@microsoft/1ds-core-js` + `@microsoft/1ds-post-js`.
-- Client wrapper: `api/telemetry/aria-client.js` — initializes 1DS with Node.js fetch override.
-- Column whitelist: `api/telemetry/column-whitelist.js` — `logInfo(eventName, data)` and `logError(eventName, data)` filter to whitelisted columns before sending.
-- Two Kusto tables: `commitairesolver_tracing` (info/tracing) and `commitairesolver_errors` (errors). Table names are lowercase (Aria auto-creates tables on first event).
-- Ingestion token stored in `.env` (gitignored). See `.env.example` for required vars.
-- Telemetry is non-blocking — failures log a warning, never crash the server.
-- **Usage metrics:** `api/db.js` tracks query volume, confidence, elapsed time, user identity (`user_id` via authenticated email from ID token), and feedback in SQLite. The `getUsageMetrics()` function computes: summary counts, DAU/WAU/MAU, daily active users trend, confidence distribution, search method breakdown, feedback rates (feedback/positive/negative), latency percentiles (p50/p95), error rate, and engagement metrics (retention rate, avg queries/user, returning users). Exposed via `GET /api/metrics/usage`.
+- No remote telemetry is sent. Aria / 1DS integration has been removed.
+- `api/db.js` stores query volume, confidence, elapsed time, source, feedback, and usage metrics locally in SQLite.
+- Never add a remote telemetry sink without explicit user consent and documented data fields.
 
 ## Dependencies
 
-- Install with `npm install --registry https://registry.npmjs.org/` (corporate registry may need explicit override).
-- Backend: `express`, `cors`, `openai`, `@azure/identity`, `@lancedb/lancedb`, `better-sqlite3`, `jsonwebtoken`, `jwks-rsa`.
-- Frontend: `react`, `react-dom`, `react-markdown`, `vite`, `@azure/msal-browser`, `@azure/msal-react`.
+- Install with `npm install --registry https://registry.npmjs.org/`.
+- Backend: `express`, `cors`, `openai`, `better-sqlite3`, `sqlite-vec`, and MCP packages.
+- Frontend: `react`, `react-dom`, `react-markdown`, and `vite`.
 
 ## Deployment
 
-- **Target:** Single Azure App Service (Linux B1, Node 20 LTS) at `commit-ai-resolver-win.azurewebsites.net`
-- **Architecture:** Express API + React UI served from the same origin (no separate SWA)
-- **Scripts:** `deploy/deploy.ps1` (full provision + deploy), `deploy/prepare-api.ps1` (package API + UI into zip), `deploy/reset-remote.ps1` (remote data management via Kudu)
-- **Build system:** Oryx (triggered by `az webapp deployment source config-zip`) — runs `npm install` on server, compresses `node_modules` to `tar.gz`
-- **Data persistence:** `/home/data/` (survives redeployments). Uploaded separately via Kudu ZIP API, not included in deployment package
-- **Startup:** `startup.sh` creates symlinks (`/home/site/data → /home/data`, `/home/site/src → wwwroot/src`) then runs `node server.js`
-- **Identity:** System-assigned MI for Azure OpenAI, user-assigned MI (set via `AZURE_CLIENT_ID`) for ADO access
-- **Zip creation:** Uses .NET `ZipFile` (not `Compress-Archive`) to ensure forward-slash paths for Linux compatibility
-- **Deploy commands:** `.\deploy\deploy.ps1 -SkipProvision` (redeploy code), `.\deploy\deploy.ps1 -SkipProvision -SkipBuild` (redeploy existing package)
-- **Data management:** `.\deploy\reset-remote.ps1` (interactive menu) or `scripts/reset-and-refresh.js` (CLI). Modes: `--refresh-only` (backfill missing commits, skip existing), `--reset-only` (clear all data), `--rebuild-embeddings` (regenerate vector DB from daily JSON without re-fetching from ADO). Remote management uses Kudu VFS API to upload and execute launcher scripts on the server.
+- The supported auth-free workflow is local-only.
+- Scripts under `deploy/` are legacy Azure deployment history and may require unavailable Azure credentials.
+- Do not deploy the anonymous API/MCP endpoint to a public interface without adding an authentication layer.
 
 ## Common Patterns
 
 - Filter pipeline in Timeline: repo filter → risk/type/author filter (split into preAuthorData for available authors computation, then filteredDayData with author applied).
 - SSE streaming: server sends `event: status`, `event: token`, `event: complete` events. Frontend parses via `ReadableStream`.
-- Azure auth for OpenAI: `DefaultAzureCredential` with `cognitiveservices.azure.com` scope.
-- Azure auth for users: MSAL redirect flow → ID token → JWT validation middleware on all `/api` routes.
+- Provider credentials are read only from explicit server-side environment variables.
+- UI requests contain no bearer token or user identity.

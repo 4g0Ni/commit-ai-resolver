@@ -20,13 +20,3 @@ updates:
     schedule:
       interval: "daily"
     open-pull-requests-limit: 0
-  - package-ecosystem: "npm"
-    directory: "/tools/mcp-tools"
-    schedule:
-      interval: "daily"
-    open-pull-requests-limit: 0
-  - package-ecosystem: "uv"
-    directory: "/tools/mcp-tools"
-    schedule:
-      interval: "daily"
-    open-pull-requests-limit: 0

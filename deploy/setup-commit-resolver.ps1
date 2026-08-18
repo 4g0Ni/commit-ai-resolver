@@ -15,15 +15,14 @@
   When run from the repo's deploy/ directory, the skill is copied from disk;
   when run as a standalone download, the skill is fetched from the MCP server.
 
-  The deployed /mcp endpoint requires Microsoft Entra ID sign-in (OAuth 2.1, per MCP auth spec).
-  On first connect, your MCP client opens a browser for corporate sign-in and caches the token.
-  For local dev without OAuth, run `node api/server.js --no-auth` and pass -McpUrl http://localhost:4399/mcp.
+    The local /mcp endpoint is anonymous and binds to localhost by default.
+    Start it with `node api/server.js` before running this installer.
 
   All file modifications are backed up under %USERPROFILE%\.commit-resolver-setup-state\.
   Run with -Uninstall to restore everything.
 
 .PARAMETER McpUrl
-  MCP server URL. Default: deployed Azure App Service.
+    MCP server URL. Default: local API server.
 
 .PARAMETER McpName
   MCP entry name used in client configs. Default: CommitResolver.
@@ -42,7 +41,7 @@
 
 .EXAMPLE
   .\setup-commit-resolver.ps1
-  # Default install: deployed endpoint + skill into all three clients
+    # Default install: local endpoint + skill into all supported clients
 
 .EXAMPLE
   .\setup-commit-resolver.ps1 -McpUrl "http://localhost:4399/mcp"
@@ -55,7 +54,7 @@
 
 [CmdletBinding()]
 param(
-    [string]$McpUrl = "https://commit-ai-resolver-win.azurewebsites.net/mcp",
+    [string]$McpUrl = "http://127.0.0.1:4399/mcp",
     [string]$McpName = "CommitResolver",
     [int]$Timeout = 600,
     [switch]$SkipSkill = $false,
@@ -522,26 +521,13 @@ function Test-McpReachable {
             $resp = Invoke-WebRequest -Uri $McpUrl -Method POST -Headers $headers -Body $body -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
 
             if ($resp.StatusCode -eq 200 -and $resp.Content -match '"serverInfo"') {
-                Write-Success "MCP endpoint reachable (no-auth mode); initialize returned serverInfo"
+                Write-Success "MCP endpoint reachable; initialize returned serverInfo"
                 return $true
             } else {
                 Write-Warn "MCP endpoint returned HTTP $($resp.StatusCode); response did not include serverInfo"
                 return $false
             }
-        } catch [System.Net.WebException] {
-            $resp = $_.Exception.Response
-            if ($null -ne $resp -and [int]$resp.StatusCode -eq 401) {
-                $wwwAuth = $resp.Headers["WWW-Authenticate"]
-                if ($wwwAuth -and $wwwAuth -match 'resource_metadata="([^"]+)"') {
-                    Write-Success "MCP endpoint reachable (auth mode); discovery URL: $($matches[1])"
-                    Write-Info "Sign-in will happen on first use from your MCP client."
-                    return $true
-                }
-                Write-Warn "MCP endpoint returned 401 without a discovery (resource_metadata) header"
-                return $false
-            }
-            throw
-        }
+        } catch [System.Net.WebException] { throw }
     } catch {
         Write-Warn "MCP endpoint unreachable from this machine: $($_.Exception.Message)"
         Write-Info "The skill will still install. Check VPN / network and try again later."

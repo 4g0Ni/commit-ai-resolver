@@ -15,7 +15,7 @@ Before doing ANY work, read these files:
 2. **`src/services/commit-summarizer.js`** — LLM summarization pipeline with diff filtering
 3. **`src/services/diff-filter.js`** — File classification rules (ignore, autoSummary, needsDiff)
 4. **`src/services/ado-git-client.js`** — Azure DevOps REST API client
-5. **`src/services/llm-helper.js`** — Azure OpenAI client (model, retry, auth)
+5. **`src/services/llm-helper.js`** — OpenAI-compatible client (models and retry)
 6. **`src/scripts/generate-sample-data.js`** — Daily data generation script
 
 Read the specific files relevant to your task. Do NOT assume you know the current state.
@@ -23,7 +23,7 @@ Read the specific files relevant to your task. Do NOT assume you know the curren
 ## Pipeline Overview
 
 ```
-ADO Git API                    Diff Filter               Azure OpenAI
+ADO Git API                    Diff Filter           OpenAI-compatible API
     │                              │                          │
     ▼                              ▼                          ▼
 ┌──────────┐   commits    ┌──────────────┐   filtered   ┌──────────┐
@@ -68,13 +68,13 @@ ADO Git API                    Diff Filter               Azure OpenAI
 
 | Setting | Value |
 |---|---|
-| Endpoint | `yizha-maz2xf24-swedencentral.openai.azure.com` |
-| Model | `gpt-5.4` |
-| API version | `2025-04-01-preview` |
+| Endpoint | `OPENAI_BASE_URL` (optional) |
+| Model | `OPENAI_MODEL` (default `gpt-4.1`) |
+| Fast model | `OPENAI_FAST_MODEL` (default `gpt-4.1-mini`) |
 | Max tokens | `128000` |
 | Retry | 3 attempts, exponential backoff |
 | Concurrency | 10 parallel calls per batch |
-| Auth | `DefaultAzureCredential` (az login / Managed Identity) |
+| Credential | Optional server-side `OPENAI_API_KEY` |
 
 ## Data Generation
 

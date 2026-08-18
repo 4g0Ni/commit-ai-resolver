@@ -1,24 +1,5 @@
 import { searchVectors } from './src/services/vector-store.js';
-import { DefaultAzureCredential } from '@azure/identity';
-import { AzureOpenAI } from 'openai';
-
-const credential = new DefaultAzureCredential();
-const embeddingClient = new AzureOpenAI({
-    endpoint: 'https://yizha-maz2xf24-swedencentral.openai.azure.com/',
-    apiKey: '',
-    azureADTokenProvider: () =>
-        credential.getToken('https://cognitiveservices.azure.com/.default').then(at => at.token),
-    apiVersion: '2023-05-15',
-    deployment: 'text-embedding-3-large',
-});
-
-async function embed(text) {
-    const result = await embeddingClient.embeddings.create({
-        input: [text],
-        model: 'text-embedding-3-large',
-    });
-    return result.data[0].embedding;
-}
+import { generateEmbedding } from './src/services/embedding-client.js';
 
 const queries = [
     'grid template no-data view reset filters hide chrome',
@@ -27,7 +8,7 @@ const queries = [
 ];
 
 for (const q of queries) {
-    const emb = await embed(q);
+    const emb = await generateEmbedding(q);
     const results = await searchVectors(emb, {
         topK: 50,
         minScore: 0.01,

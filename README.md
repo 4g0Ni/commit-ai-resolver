@@ -9,16 +9,16 @@
 | Component | Status | Notes |
 |---|---|---|
 | ADO Git integration (commits, diffs, tags) | ✅ Done | 3 tag strategies supported |
-| LLM commit summarization | ✅ Done | GPT-5.4, 10x parallel, retry, diff filtering |
+| LLM commit summarization | ✅ Done | Configurable OpenAI-compatible model, 10x parallel, retry, diff filtering |
 | Config/pilot change detection | ✅ Done | changeType + configChanges fields |
 | React dashboard | ✅ Done | Dark/light theme, chart, filters, metrics, usage dashboard |
 | LLM chat interface | ✅ Done | Markdown rendering, context-aware |
-| Vector search (RAG) | ✅ Done | LanceDB embedded vector DB, text-embedding-3-large, LLM-based query intent extraction, multi-query RRF fusion |
+| Vector search (RAG) | ✅ Done | SQLite/sqlite-vec, configurable embeddings, LLM-based query intent extraction, multi-query RRF fusion |
 | Work item integration | ✅ Done | Paste ADO work item URL → fetch bug → extract screenshots → anchor search dates |
 | Daily data generation (cached) | ✅ Done | Incremental, skip cached commits, --from/--to date range |
-| Azure deployment | ✅ Done | Single App Service (API + UI), Managed Identity, Oryx build |
+| Local runtime | ✅ Done | Anonymous localhost API + UI; external provider integrations are optional |
 | C2C Cosmos DB pilot tracker | 🚫 Removed (low ROI) | DB-level pilot ramp tracking — descoped |
-| Queryable storage | ✅ Done | Daily JSON files + LanceDB vector store (filtered queries via vector store SQL pre-filters on author/repo/date) |
+| Queryable storage | ✅ Done | Daily JSON files + SQLite vector store (SQL filters on author/repo/date) |
 
 ### Repositories in Scope
 
@@ -426,19 +426,18 @@ When any filter is active, `minScore` is lowered to 0.05 so filtering dominates 
 
 | Component | File | Description |
 |---|---|---|
-| Embedding client | `src/services/embedding-client.js` | Azure OpenAI `text-embedding-3-large` client (3072 dimensions), uses `DefaultAzureCredential`, same endpoint as the LLM |
-| Vector store | `src/services/vector-store.js` | LanceDB embedded vector DB (`data/lancedb/`). Cosine similarity search with SQL pre-filtering on author, repo, and date columns. Post-filters on riskLevel and changeType metadata. Pre-filter limit scales up for filtered queries (`topK * 5` or 200) |
+| Embedding client | `src/services/embedding-client.js` | OpenAI-compatible embedding client; model selected by `OPENAI_EMBEDDING_MODEL` |
+| Vector store | `src/services/vector-store.js` | SQLite + `sqlite-vec` database (`data/vectors.db`). Cosine similarity search with SQL filtering on author, repo, and date and metadata filtering for risk/changeType |
 | Work item detector | `src/services/workitem-detector.js` | Detects ADO work item IDs from URL patterns in user messages |
 | ADO Git client | `src/services/ado-git-client.js` | Azure DevOps REST API client. Fetches commits, diffs, and work items. Extracts and fetches images from work item HTML fields (Description, ReproSteps) |
 | Embedding generator | `src/scripts/generate-embeddings.js` | Reads daily JSON files, builds searchable text per commit, generates embeddings in batches of 16, upserts into vector store. Incremental (skips already-embedded commits) |
-| Chat API (RAG) | `api/server.js` | LLM intent extraction → embeds optimized search query → multi-query LanceDB search with RRF fusion → sends relevant commits + bug screenshots as LLM context. Falls back to full-context if no vector store. Embedding LRU cache (100 entries) |
+| Chat API (RAG) | `api/server.js` | LLM intent extraction → embeds optimized search query → multi-query sqlite-vec search with RRF fusion → sends relevant commits + bug screenshots as LLM context. Falls back to full-context if no vector store. Embedding LRU cache (100 entries) |
 
 #### Embedding Model
 
 - **Model:** `text-embedding-3-large` (3072 dimensions)
-- **API version:** `2023-05-15`
-- **Endpoint:** Same Azure OpenAI resource as the LLM
-- **Auth:** `DefaultAzureCredential` (Azure AD token)
+- **Endpoint:** `OPENAI_BASE_URL`, or the OpenAI API when unset
+- **Auth:** Optional server-side `OPENAI_API_KEY`; no browser token is used
 
 #### Text Representation per Commit
 
@@ -509,7 +508,7 @@ The chat API gracefully degrades:
 | Visualization | Custom React app / Power BI / Grafana |
 | Release tag strategy | Git tags / ADO release definitions / build numbers per repo |
 | Noise filter config | Repo-level `.commitairc` file / central config |
-| Auth & access control | ~~Entra ID / existing internal auth~~ | ✅ Done — Microsoft Entra ID via MSAL |
+| Auth & access control | Local-only anonymous access / external gateway | ✅ Local-only anonymous access; external auth required before public exposure |
 
 ---
 
@@ -848,73 +847,17 @@ To stay within acceptable chat response times:
 
 ## 12. Deployment
 
-### Architecture
+### Local Runtime
 
-The application is deployed as a single Azure App Service (Linux, Node 20 LTS, B1 tier) that serves both the Express API and the React UI as static files from the same origin.
+The supported auth-free runtime is local. The API binds to `127.0.0.1:4399`, Vite serves the UI on `https://localhost:5173`, and the UI proxies `/api` and `/mcp` to the backend.
 
-```
-User → Azure App Service (commit-ai-resolver-win.azurewebsites.net)
-         ├── /api/*    → Express API routes
-         ├── /mcp      → MCP endpoint
-         └── /*        → React UI (static files from ui/dist/)
-```
+Do not expose the API or MCP endpoint directly to a public interface. They have no application-level access control and can reveal commit summaries, query history, feedback, and diff data.
 
-### Azure Resources
-
-| Resource | Type | Details |
-|---|---|---|
-| `commit-ai-resolver-rg` | Resource Group | West US 2 |
-| `commit-ai-resolver` | App Service | Linux B1, Node 20 LTS |
-| `commit-ai-resolver-plan` | App Service Plan | Linux B1 |
-| System-assigned MI | Managed Identity | Azure OpenAI access (Cognitive Services OpenAI User) |
-| User-assigned MI | Managed Identity | Azure DevOps access (added as ADO org user) |
-
-### Deployment Scripts
-
-All scripts are in the `deploy/` directory:
-
-| Script | Purpose |
-|---|---|
-| `deploy.ps1` | Full provisioning + deployment (creates resources, assigns RBAC, builds UI, packages, deploys) |
-| `prepare-api.ps1` | Packages API + UI + scripts into a zip for deployment (used by deploy.ps1) |
-| `reset-remote.ps1` | Interactive remote data management via Kudu API (refresh, reset, rebuild embeddings) |
-
-### Quick Deploy (Code Only)
-
-```powershell
-# Skip provisioning, just rebuild and redeploy
-.\deploy\deploy.ps1 -SkipProvision
-
-# Skip both provisioning and build (redeploy existing package)
-.\deploy\deploy.ps1 -SkipProvision -SkipBuild
-```
-
-### Full Deploy (First Time)
-
-```powershell
-.\deploy\deploy.ps1 `
-    -ResourceGroup "commit-ai-resolver-rg" `
-    -AppName "commit-ai-resolver" `
-    -Location "westus2" `
-    -AriaIngestionToken "<token>"
-```
-
-### How It Works
-
-1. **`prepare-api.ps1`** copies `api/`, `src/services/`, `src/config/`, `scripts/`, and `ui/dist/` into a staging directory, generates a `startup.sh` script, and creates a zip with forward-slash paths (Linux-compatible)
-2. **`deploy.ps1`** deploys the zip via `az webapp deployment source config-zip`, which triggers **Oryx build** on the server — Oryx runs `npm install`, compresses `node_modules` to `tar.gz`, and sets up extraction on startup
-3. On container startup, Oryx extracts `node_modules.tar.gz` to `/node_modules`, then runs `startup.sh`
-4. **`startup.sh`** creates symlinks for persistent data (`/home/data` → `/home/site/data`) and shared source (`/home/site/wwwroot/src` → `/home/site/src`), then starts `node server.js`
-
-### Data Persistence
-
-- **Daily JSON files and LanceDB** are stored at `/home/data/` (persistent across redeployments)
-- Data is uploaded separately via the Kudu ZIP API, not included in the deployment package
-- `startup.sh` symlinks `/home/site/data → /home/data` so relative paths (`../data/`) resolve correctly
+The former Azure provisioning and Kudu management scripts were removed because they depended on enterprise Azure identities, Managed Identity/RBAC, and Azure CLI bearer tokens. `deploy/prepare-api.ps1` remains only as a packaging utility; it does not deploy anything by itself.
 
 ### Data Management (Reset / Refresh / Rebuild)
 
-The system provides tools to manage data on both local and deployed environments.
+The system provides local tools to manage runtime data.
 
 #### CLI Script (`scripts/reset-and-refresh.js`)
 
@@ -937,62 +880,25 @@ node scripts/reset-and-refresh.js --rebuild-embeddings
 
 **What gets cleared (reset):**
 - Daily JSON files (`data/daily/*.json`)
-- LanceDB vector store (`data/lancedb/`)
+- SQLite vector store (`data/vectors.db`)
 - SQLite database (`data/feedback.db` — chat queries, feedback)
 - Refresh checkpoint (`data/refresh-checkpoint.json`)
 - Diffs cache (`data/diffs/`)
 
 **Refresh-only mode** fetches commits day-by-day and performs commit-level deduplication — existing summaries are preserved, only new commits are fetched and summarized.
 
-**Rebuild-embeddings mode** reads all existing daily JSON files and regenerates vector embeddings without re-fetching from ADO. Useful after lancedb corruption or deletion.
-
-#### Remote Data Management (`deploy/reset-remote.ps1`)
-
-Interactive PowerShell menu for managing data on the deployed Azure App Service:
-
-```powershell
-# Interactive menu
-.\deploy\reset-remote.ps1
-
-# Non-interactive
-.\deploy\reset-remote.ps1 -Mode refresh-only -Days 90
-.\deploy\reset-remote.ps1 -Mode rebuild-embeddings
-.\deploy\reset-remote.ps1 -Mode reset-and-refresh -Days 90
-```
-
-| Option | Description |
-|---|---|
-| 1) Refresh only | Backfill missing commits (preserves existing data) |
-| 2) Reset partial | Clear daily JSON + checkpoint only (preserves vector DB, feedback) |
-| 3) Reset ALL | Clear everything (daily JSON, vector DB, feedback, metrics, diffs, checkpoint) |
-| 4) Reset ALL + Refresh | Clear everything and backfill commits |
-| 5) Rebuild embeddings | Regenerate vector DB from existing daily JSON |
-
-The script uses Azure AD bearer tokens for Kudu API authentication. For reset operations that delete SQLite files, the App Service is stopped first to release file locks.
-
-Alternatively, SSH into the server and run the script directly:
-
-```bash
-az webapp ssh --name commit-ai-resolver --resource-group commit-ai-resolver-rg
-cd /home/site/wwwroot && node scripts/reset-and-refresh.js --refresh-only --days 90
-```
+**Rebuild-embeddings mode** reads all existing daily JSON files and regenerates vector embeddings without re-fetching from ADO. Useful after `data/vectors.db` corruption or deletion.
 
 ### App Settings
 
 | Setting | Value | Purpose |
 |---|---|---|
 | `PORT` | `4399` | Express server port |
-| `AZURE_CLIENT_ID` | `<MI client ID>` | User-assigned Managed Identity for ADO access |
-| `ARIA_INGESTION_TOKEN` | `<token>` | 1DS telemetry ingestion |
-| `ARIA_PROJECT_ID` | (optional) | 1DS project ID |
-| `SCM_DO_BUILD_DURING_DEPLOYMENT` | `true` | Enables Oryx build |
-| `WEBSITES_CONTAINER_START_TIME_LIMIT` | `300` | Container startup timeout (seconds) |
-
-### Authentication Setup
-
-After deployment, register the production redirect URI in the Azure AD app registration:
-- Platform: **Single-page application**
-- URI: `https://commit-ai-resolver-win.azurewebsites.net`
+| `HOST` | `127.0.0.1` | Bind address; keep local unless an external auth layer is added |
+| `OPENAI_API_KEY` | (optional) | Enables chat, summarization, and embeddings |
+| `OPENAI_BASE_URL` | (optional) | OpenAI-compatible/self-hosted endpoint |
+| `ADO_PAT` / `ADO_BEARER_TOKEN` | (optional) | Enables live ADO requests |
+| `ENABLE_SCHEDULED_REFRESH` | `0` | Set to `1` to opt in to live background refresh |
 
 #### MCP tools
 
@@ -1009,52 +915,18 @@ The `/mcp` endpoint exposes the following tools to connected agents:
 
 Resource: `commit://stats` — vector store stats (total indexed commits, tracked repos, date range).
 
-#### MCP OAuth (one-time app reg config)
+#### MCP Access
 
-> **For end users:** the easiest way to connect a client is the **Connect MCP** button in the dashboard header, which serves a one-shot installer (`/install/setup-commit-resolver.ps1`). See [USERGUIDE.md → Connecting from MCP clients](USERGUIDE.md#connecting-from-mcp-clients). The rest of this section covers the one-time tenant setup behind it.
+The **Connect MCP** button serves a one-shot installer (`/install/setup-commit-resolver.ps1`). See [USERGUIDE.md → Connecting from MCP clients](USERGUIDE.md#connecting-from-mcp-clients).
 
-The `/mcp` endpoint is an OAuth 2.1 protected resource (per MCP auth spec 2025-06-18). Because Entra ID does not implement RFC 7591 dynamic client registration — which the GitHub Copilot CLI / Claude Code / VS Code MCP SDKs require — the server runs a thin **DCR shim** at `/oauth/register` and proxies `/oauth/authorize` and `/oauth/token` to Entra. Tokens are still issued and signed by Entra; the server only mediates the OAuth handshake and validates the resulting access tokens via JWKS.
+The `/mcp` endpoint is anonymous and intended for local use. OAuth discovery, registration, authorize, and token proxy routes have been removed. Start the server with `node api/server.js`; no `--no-auth` flag or Microsoft sign-in is needed.
 
-Discovery docs served by the API:
-- `/.well-known/oauth-protected-resource` (RFC 9728) — points clients at our auth server metadata.
-- `/.well-known/oauth-authorization-server` (RFC 8414) — advertises our pass-through endpoints + the DCR shim.
+The server binds to `127.0.0.1` by default. Do not expose it directly to a public network without adding authentication in a reverse proxy or restoring application-level access control.
 
-Manual app-registration setup on `bc4d2d3c-b205-42f4-90f6-8bac756fd7f5` (one-time):
-
-1. **Application ID URI** set to `api://bc4d2d3c-b205-42f4-90f6-8bac756fd7f5` (Expose an API → Set).
-2. **A scope** named `mcp.access` exposed under that URI (Expose an API → Add a scope). Admin + user consent both fine.
-3. **Loopback redirect** under the **Mobile and desktop applications** platform: add `http://localhost` (no port, no path). Entra treats it as a wildcard for any loopback port, which the MCP SDK uses for its PKCE callback. **Important:** do *not* also list the loopback URI under the Single-page application platform — Entra picks SPA on collision and blocks server-side token redemption (`AADSTS9002327`). Keep SPA for the UI's redirect URIs only (e.g. `http://localhost:5173`, the deployed Azure URLs).
-
-To verify the wiring without a client:
+To verify the endpoint without a client:
 ```bash
-curl https://commit-ai-resolver-win.azurewebsites.net/.well-known/oauth-authorization-server
-# → registration_endpoint, authorization_endpoint, token_endpoint all under our domain
-
-curl -i -X POST https://commit-ai-resolver-win.azurewebsites.net/mcp \
-  -H 'Content-Type: application/json' -d '{}'
-# → HTTP/1.1 401 with WWW-Authenticate: Bearer ... resource_metadata="..."
-```
-
-For local development, run `node api/server.js --no-auth` to bypass the gate entirely.
-
-### ADO Access via Managed Identity
-
-The user-assigned Managed Identity must be added as a user in the Azure DevOps organization:
-1. Go to ADO Organization Settings → Users
-2. Add the MI's service principal (Object ID) as a user
-3. Grant appropriate project access for commit fetching
-
-### Uploading Data
-
-Data files are uploaded separately to persistent storage via the Kudu ZIP API:
-
-```powershell
-$token = az account get-access-token --query accessToken -o tsv
-Compress-Archive -Path data\* -DestinationPath data.zip
-curl -X PUT "https://commit-ai-resolver.scm.azurewebsites.net/api/zip/data/" `
-    -H "Authorization: Bearer $token" `
-    -H "Content-Type: application/zip" `
-    --data-binary "@data.zip"
+curl http://127.0.0.1:4399/api/days
+# → HTTP 200, no Authorization header required
 ```
 
 ---
@@ -1064,7 +936,7 @@ curl -X PUT "https://commit-ai-resolver.scm.azurewebsites.net/api/zip/data/" `
 Still open:
 
 1. **Runtime config / experimentation service** — Which platform drives runtime pilot ramps that happen outside code deployments? Needed to scope the C2C Cosmos DB pilot tracker (§3.1, §6.1).
-2. **LLM QPS / 429 handling** — We use our own Azure OpenAI deployments (no $ ceiling), but daily summarization occasionally hits 429s under the 25-concurrent-call setting. Open: tune concurrency, add backoff, or request higher TPM quota.
+2. **LLM QPS / 429 handling** — Provider limits vary; daily summarization may hit 429s under high concurrency. Open: tune concurrency and backoff for the selected provider.
 
 ### Resolved
 
@@ -1072,7 +944,7 @@ Still open:
 |---|---|---|
 | 1 | Release tag structure | Per-repo, 3 strategies codified in `src/config/repositories.js`: `dateSorted` (CampaignUI), `rolling` (MT: STAGING ↔ LKG), `versioned` (AppUI/AnB/DB) |
 | 2 | Pilot flag locations | Code-side enumerated in §3.1 (`Dynamic.config`, `DynamicConfigValues.cs`, `sharedfeatures.config`, `appsettings*.json`, `.cscfg`/`.csdef`/`Web.config`). Runtime ramps deferred to C2C tracker |
-| 4 | Chat surface | Standalone React app + MCP endpoint (DCR shim for GitHub Copilot CLI / Claude Code / VS Code clients). No Teams bot |
-| 5 | Access control | Entra ID JWT on `/api/*`, MCP via OAuth 2.1 `mcp.access` scope. All tenant users see all repos (no team scoping) |
-| 6 | Telemetry integration | Aria / 1DS → Kusto tables `commitairesolver_tracing` and `commitairesolver_errors`. Usage metrics in local SQLite, exposed via `/api/metrics/usage` |
+| 4 | Chat surface | Standalone React app + local MCP endpoint for GitHub Copilot CLI / Claude Code / VS Code clients. No Teams bot |
+| 5 | Access control | No application-level login; binds to localhost by default and must not be exposed publicly without an external auth layer |
+| 6 | Telemetry integration | Query and feedback metrics remain in local SQLite and are exposed via `/api/metrics/usage`; remote Aria telemetry was removed |
 

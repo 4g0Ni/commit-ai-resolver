@@ -1,13 +1,8 @@
 {
   "servers": {
-    "AzureDevOpsBasic": {
-      "command": "uv",
-      "args": [
-        "--directory",
-        "${workspaceFolder}\\tools\\mcp-tools",
-        "run",
-        "azure-devops-basic.py"
-      ]
+    "CommitResolver": {
+      "type": "http",
+      "url": "http://127.0.0.1:4399/mcp"
     }
   }
 }

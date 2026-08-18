@@ -137,13 +137,6 @@ pnpm.exe
 
 /private/change/**
 
-#mcp ignore
-tools/mcp-tools/CampaignUIMCPToolsPython.egg-info/dependency_links.txt
-tools/mcp-tools/CampaignUIMCPToolsPython.egg-info/top_level.txt
-tools/mcp-tools/CampaignUIMCPToolsPython.egg-info/requires.txt
-tools/mcp-tools/CampaignUIMCPToolsPython.egg-info/SOURCES.txt
-tools/mcp-tools/CampaignUIMCPToolsPython.egg-info/PKG-INFO
-
 demo.cloudpack
 cloudpack.config.json
 cloudpack.config.demo.json
@@ -192,4 +185,3 @@ tools/fetch-pipeline-status.ps1
 # Deployment artifacts
 deploy/*.zip
 deploy/.staging/
-deploy/.staging-lock/

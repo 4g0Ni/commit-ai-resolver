@@ -9,10 +9,7 @@
     "dev": "node --watch server.js"
   },
   "dependencies": {
-    "@azure/identity": "^4.0.0",
     "@cfworker/json-schema": "^4.1.1",
-    "@microsoft/1ds-core-js": "^4.3.11",
-    "@microsoft/1ds-post-js": "^4.3.11",
     "@modelcontextprotocol/node": "^2.0.0-alpha.2",
     "@modelcontextprotocol/server": "^2.0.0-alpha.2",
     "apache-arrow": "^18.1.0",
@@ -21,8 +18,6 @@
     "diff": "^7.0.0",
     "dotenv": "^16.4.0",
     "express": "^5.1.0",
-    "jsonwebtoken": "^9.0.3",
-    "jwks-rsa": "^3.2.2",
     "openai": "^6.33.0",
     "sqlite-vec": "^0.1.9",
     "zod": "^4.3.6"

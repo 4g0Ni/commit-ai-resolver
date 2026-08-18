@@ -2,7 +2,7 @@
  * Backend API server for Commit AI Resolver dashboard.
  *
  * Serves daily summary JSON files and provides a chat endpoint
- * that uses Azure OpenAI to answer questions about commit summaries.
+ * that uses an OpenAI-compatible API to answer questions about commit summaries.
  *
  * Endpoints:
  *   GET  /api/days           — list available dates
@@ -14,18 +14,13 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
-import jwt from 'jsonwebtoken';
-import jwksClient from 'jwks-rsa';
 import { randomUUID } from 'crypto';
 import { readdir, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { DefaultAzureCredential } from '@azure/identity';
-import { AzureOpenAI } from 'openai';
+import OpenAI from 'openai';
 import { logQuery, logQueryStub, recordFeedback, getFeedbackStats, getRecentFeedback, getUsageMetrics } from './db.js';
-import { initAria } from './telemetry/aria-client.js';
-import { logInfo, logError } from './telemetry/column-whitelist.js';
 import { startScheduledRefresh } from '../src/services/scheduled-refresh.js';
 import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node';
 import { isInitializeRequest } from '@modelcontextprotocol/server';
@@ -33,45 +28,39 @@ import { createMcpServer } from './mcp.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(process.env.DATA_DIR || join(__dirname, '..', 'data'), 'daily');
-const NO_AUTH = process.argv.includes('--no-auth') || process.env.NO_AUTH === '1';
 const PORT = process.env.PORT || 4399;
+const HOST = process.env.HOST || '127.0.0.1';
+const LOCAL_USER_ID = 'local-user';
 
-// --- Azure OpenAI setup ---
-const AZURE_OPENAI_ENDPOINT = 'https://yizha-maz2xf24-swedencentral.openai.azure.com/';
-const AZURE_OPENAI_DEPLOYMENT = 'gpt-5.4';
-const AZURE_OPENAI_MINI_DEPLOYMENT = 'gpt-5.4-mini';
-const AZURE_OPENAI_API_VERSION = '2025-04-01-preview';
-const EMBEDDING_DEPLOYMENT = 'text-embedding-3-large';
-const EMBEDDING_API_VERSION = '2023-05-15';
-const COGNITIVE_SERVICES_SCOPE = 'https://cognitiveservices.azure.com/.default';
+// --- OpenAI-compatible setup ---
+const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL;
+const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4.1';
+const OPENAI_FAST_MODEL = process.env.OPENAI_FAST_MODEL || 'gpt-4.1-mini';
+const EMBEDDING_MODEL = process.env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-large';
+const AI_CONFIGURED = Boolean(process.env.OPENAI_API_KEY || OPENAI_BASE_URL);
+const ADO_CONFIGURED = Boolean(process.env.ADO_PAT || process.env.ADO_BEARER_TOKEN);
 
-const credential = new DefaultAzureCredential();
-const openaiClient = new AzureOpenAI({
-    endpoint: AZURE_OPENAI_ENDPOINT,
-    apiKey: '',
-    azureADTokenProvider: () =>
-        credential.getToken(COGNITIVE_SERVICES_SCOPE).then(at => at.token),
-    apiVersion: AZURE_OPENAI_API_VERSION,
-    deployment: AZURE_OPENAI_DEPLOYMENT,
-});
+const openaiApiClient = AI_CONFIGURED
+    ? new OpenAI({
+        apiKey: process.env.OPENAI_API_KEY || 'local',
+        ...(OPENAI_BASE_URL ? { baseURL: OPENAI_BASE_URL } : {}),
+    })
+    : null;
 
-const embeddingClient = new AzureOpenAI({
-    endpoint: AZURE_OPENAI_ENDPOINT,
-    apiKey: '',
-    azureADTokenProvider: () =>
-        credential.getToken(COGNITIVE_SERVICES_SCOPE).then(at => at.token),
-    apiVersion: EMBEDDING_API_VERSION,
-    deployment: EMBEDDING_DEPLOYMENT,
-});
+function withDefaultChatModel(client, model) {
+    if (!client) return null;
+    return {
+        chat: {
+            completions: {
+                create: (params, options) => client.chat.completions.create({ model, ...params }, options),
+            },
+        },
+    };
+}
 
-const openaiMiniClient = new AzureOpenAI({
-    endpoint: AZURE_OPENAI_ENDPOINT,
-    apiKey: '',
-    azureADTokenProvider: () =>
-        credential.getToken(COGNITIVE_SERVICES_SCOPE).then(at => at.token),
-    apiVersion: AZURE_OPENAI_API_VERSION,
-    deployment: AZURE_OPENAI_MINI_DEPLOYMENT,
-});
+const openaiClient = withDefaultChatModel(openaiApiClient, OPENAI_MODEL);
+const openaiMiniClient = withDefaultChatModel(openaiApiClient, OPENAI_FAST_MODEL);
+const embeddingClient = openaiApiClient;
 
 const app = express();
 const allowedOrigins = [
@@ -85,91 +74,6 @@ app.use(cors({
     exposedHeaders: ['Mcp-Session-Id'],
 }));
 app.use(express.json());
-
-// --- Azure AD JWT auth middleware ---
-const AZURE_CLIENT_ID = 'bc4d2d3c-b205-42f4-90f6-8bac756fd7f5';
-const AZURE_TENANT_ID = '72f988bf-86f1-41af-91ab-2d7cd011db47';
-const MCP_RESOURCE_URI = `api://${AZURE_CLIENT_ID}`;
-// /api accepts ID tokens (frontend MSAL flow); /mcp accepts access tokens (OAuth resource server flow).
-const ACCEPTED_AUDIENCES = [AZURE_CLIENT_ID, MCP_RESOURCE_URI];
-// v1.0 issuer is also accepted because Entra v2 access tokens for v1-style resources ship with v1 iss.
-const ACCEPTED_ISSUERS = [
-    `https://login.microsoftonline.com/${AZURE_TENANT_ID}/v2.0`,
-    `https://sts.windows.net/${AZURE_TENANT_ID}/`,
-];
-
-const jwksRsaClient = jwksClient({
-    jwksUri: `https://login.microsoftonline.com/${AZURE_TENANT_ID}/discovery/v2.0/keys`,
-    cache: true,
-    rateLimit: true,
-});
-
-function getSigningKey(header, callback) {
-    jwksRsaClient.getSigningKey(header.kid, (err, key) => {
-        if (err) return callback(err);
-        callback(null, key.getPublicKey());
-    });
-}
-
-/** Build the absolute base URL of this server from the request, honoring proxy headers. */
-function getBaseUrl(req) {
-    const proto = req.headers['x-forwarded-proto']?.split(',')[0].trim() || req.protocol;
-    const host = req.headers['x-forwarded-host']?.split(',')[0].trim() || req.headers.host;
-    return `${proto}://${host}`;
-}
-
-/**
- * Reject the request with a 401 carrying the MCP-spec WWW-Authenticate header so
- * compliant clients can discover the authorization server via PRM.
- */
-function send401Unauthorized(req, res, message) {
-    const prmUrl = `${getBaseUrl(req)}/.well-known/oauth-protected-resource`;
-    res.set(
-        'WWW-Authenticate',
-        `Bearer realm="commit-ai-resolver", resource_metadata="${prmUrl}"`
-    );
-    res.status(401).json({ error: message });
-}
-
-function authMiddleware(req, res, next) {
-    const authHeader = req.headers.authorization;
-    if (!authHeader?.startsWith('Bearer ')) {
-        return send401Unauthorized(req, res, 'Authentication required');
-    }
-    const token = authHeader.slice(7);
-    jwt.verify(token, getSigningKey, {
-        audience: ACCEPTED_AUDIENCES,
-        issuer: ACCEPTED_ISSUERS,
-        algorithms: ['RS256'],
-    }, (err, decoded) => {
-        if (err) return send401Unauthorized(req, res, 'Invalid token');
-        req.user = {
-            id: decoded.oid,
-            email: decoded.preferred_username || decoded.upn || decoded.email,
-            name: decoded.name,
-        };
-        next();
-    });
-}
-
-const noAuthStub = (req, res, next) => {
-    req.user = { id: 'test-user', email: 'test@test.local', name: 'Test User' };
-    next();
-};
-const requireAuth = NO_AUTH ? noAuthStub : authMiddleware;
-
-const ADMIN_EMAILS = new Set(['yizhang6@microsoft.com']);
-function requireAdmin(req, res, next) {
-    const email = req.user?.email?.toLowerCase();
-    if (!email || !ADMIN_EMAILS.has(email)) {
-        return res.status(403).json({ error: 'Forbidden' });
-    }
-    next();
-}
-
-app.use('/api', requireAuth);
-
-if (NO_AUTH) console.log('⚠ Auth disabled (--no-auth)');
 
 // --- Request logging middleware ---
 app.use((req, res, next) => {
@@ -205,12 +109,15 @@ const _embeddingCache = new Map();
 const EMBEDDING_CACHE_MAX = 100;
 
 async function embedQuery(text) {
+    if (!embeddingClient) {
+        throw new Error('AI is not configured. Set OPENAI_API_KEY or OPENAI_BASE_URL.');
+    }
     if (_embeddingCache.has(text)) {
         return _embeddingCache.get(text);
     }
     const result = await embeddingClient.embeddings.create({
         input: [text],
-        model: EMBEDDING_DEPLOYMENT,
+        model: EMBEDDING_MODEL,
     });
     const embedding = result.data[0].embedding;
     _embeddingCache.set(text, embedding);
@@ -302,6 +209,9 @@ app.get('/api/days/:date', async (req, res) => {
 let _releaseCache = { data: null, expiresAt: 0 };
 
 app.get('/api/releases', async (req, res) => {
+    if (!ADO_CONFIGURED) {
+        return res.json([]);
+    }
     try {
         const now = Date.now();
         if (_releaseCache.data && now < _releaseCache.expiresAt) {
@@ -386,6 +296,11 @@ function daysAgo(n, today) {
 
 // POST /api/chat — Agentic search pipeline with iterative refinement
 app.post('/api/chat', async (req, res) => {
+    if (!AI_CONFIGURED) {
+        return res.status(503).json({
+            error: 'AI features are disabled. Set OPENAI_API_KEY or OPENAI_BASE_URL to enable chat.',
+        });
+    }
     try {
         const { message, history = [] } = req.body;
         if (!message) {
@@ -398,7 +313,7 @@ app.post('/api/chat', async (req, res) => {
         // --- Work item detection & fetching ---
         let workItemContext = null;
         const detected = detectWorkItemUrls(message);
-        if (detected.workItemIds.length > 0) {
+        if (detected.workItemIds.length > 0 && ADO_CONFIGURED) {
             try {
                 const wi = await fetchWorkItem(detected.workItemIds[0]);
                 if (wi) {
@@ -465,19 +380,6 @@ app.post('/api/chat', async (req, res) => {
             const totalMs = Date.now() - t0;
             console.log(`  Agentic search (SSE): ${result.searchMethod}, ${result.iterations} iteration(s), ${totalMs}ms`);
 
-            logInfo('ChatQuery', {
-                CorrelationId: queryId,
-                Component: 'chat-sse',
-                Query: message.slice(0, 500),
-                ResultCount: result.resultCount,
-                Confidence: result.confidence,
-                Verdict: result.searchMethod,
-                ElapsedMs: totalMs,
-                SuspectsCount: result.suspects?.length || 0,
-                SessionId: req.headers['x-session-id'] || null,
-                Source: clientSource,
-            });
-
             try {
                 logQuery({
                     id: queryId,
@@ -491,11 +393,11 @@ app.post('/api/chat', async (req, res) => {
                     workItemId: workItemContext?.id?.toString(),
                     workItemTitle: workItemContext?.title,
                     elapsedMs: totalMs,
-                    userId: req.user?.email || req.user?.id,
+                    userId: LOCAL_USER_ID,
                     source: clientSource,
                 });
             } catch (dbErr) {
-                console.error('  [Telemetry] Failed to log query:', dbErr.message);
+                console.error('  [Local DB] Failed to log query:', dbErr.message);
             }
 
             sendEvent('complete', {
@@ -535,20 +437,7 @@ app.post('/api/chat', async (req, res) => {
             const totalMs = Date.now() - t0;
             console.log(`  Agentic search: ${result.searchMethod}, ${result.iterations} iteration(s), ${totalMs}ms`);
 
-            logInfo('ChatQuery', {
-                CorrelationId: queryId,
-                Component: 'chat-json',
-                Query: message.slice(0, 500),
-                ResultCount: result.resultCount,
-                Confidence: result.confidence,
-                Verdict: result.searchMethod,
-                ElapsedMs: totalMs,
-                SuspectsCount: result.suspects?.length || 0,
-                SessionId: req.headers['x-session-id'] || null,
-                Source: clientSource,
-            });
-
-            // Log to telemetry DB
+            // Log to the local usage database.
             try {
                 logQuery({
                     id: queryId,
@@ -562,11 +451,11 @@ app.post('/api/chat', async (req, res) => {
                     workItemId: workItemContext?.id?.toString(),
                     workItemTitle: workItemContext?.title,
                     elapsedMs: totalMs,
-                    userId: req.user?.email || req.user?.id,
+                    userId: LOCAL_USER_ID,
                     source: clientSource,
                 });
             } catch (dbErr) {
-                console.error('  [Telemetry] Failed to log query:', dbErr.message);
+                console.error('  [Local DB] Failed to log query:', dbErr.message);
             }
 
             res.json({
@@ -634,25 +523,17 @@ ${contextText}
                     workItemId: workItemContext?.id?.toString(),
                     workItemTitle: workItemContext?.title,
                     elapsedMs: Date.now() - t2,
-                    userId: req.user?.email || req.user?.id,
+                    userId: LOCAL_USER_ID,
                     source: clientSource,
                 });
             } catch (dbErr) {
-                console.error('  [Telemetry] Failed to log query:', dbErr.message);
+                console.error('  [Local DB] Failed to log query:', dbErr.message);
             }
 
             res.json({ queryId, reply, searchMethod: 'full', type: 'answer' });
         }
     } catch (err) {
         console.error('Chat error:', err);
-        logError('ChatError', {
-            CorrelationId: req.body?.message ? randomUUID() : undefined,
-            Component: 'chat',
-            ErrorMessage: err.message,
-            ErrorStack: err.stack?.slice(0, 1000),
-            Query: req.body?.message?.slice(0, 500),
-            HttpStatus: 500,
-        });
         res.status(500).json({ error: err.message });
     }
 });
@@ -687,6 +568,16 @@ app.get('/api/vectors/stats', async (req, res) => {
 
 // POST /api/investigate — Deep investigation: fetch commit diffs and analyze root cause
 app.post('/api/investigate', async (req, res) => {
+    if (!AI_CONFIGURED) {
+        return res.status(503).json({
+            error: 'AI features are disabled. Set OPENAI_API_KEY or OPENAI_BASE_URL to enable investigation.',
+        });
+    }
+    if (!ADO_CONFIGURED) {
+        return res.status(503).json({
+            error: 'Live ADO access is disabled. Set ADO_PAT or ADO_BEARER_TOKEN to fetch commit diffs.',
+        });
+    }
     try {
         const { message, suspects = [], history = [] } = req.body;
         if (!message || suspects.length === 0) {
@@ -739,15 +630,6 @@ app.post('/api/investigate', async (req, res) => {
 
         const totalMs = Date.now() - t0;
         console.log(`  Investigation complete: ${totalMs}ms, confidence: ${result.confidence}, root cause: ${result.rootCauseCandidate || 'none'}`);
-
-        logInfo('Investigation', {
-            CorrelationId: investigateId,
-            Component: 'investigate',
-            Query: message.slice(0, 500),
-            Confidence: result.confidence,
-            ElapsedMs: totalMs,
-            SuspectsCount: result.suspectsAnalyzed,
-        });
         res.json({
             queryId: investigateId,
             reply: result.analysis,
@@ -761,13 +643,6 @@ app.post('/api/investigate', async (req, res) => {
         });
     } catch (err) {
         console.error('Investigate error:', err);
-        logError('InvestigateError', {
-            Component: 'investigate',
-            ErrorMessage: err.message,
-            ErrorStack: err.stack?.slice(0, 1000),
-            Query: req.body?.message?.slice(0, 500),
-            HttpStatus: 500,
-        });
         res.status(500).json({ error: err.message });
     }
 });
@@ -801,12 +676,6 @@ app.post('/api/feedback', async (req, res) => {
         }
 
         console.log(`  [Feedback] ${vote} for ${queryId}${comment ? ' — ' + comment.slice(0, 50) : ''}`);
-        logInfo('Feedback', {
-            CorrelationId: queryId,
-            Component: 'feedback',
-            Message: vote,
-            Query: comment?.slice(0, 500) || null,
-        });
         res.json({ ok: true });
     } catch (err) {
         console.error('Feedback error:', err);
@@ -814,8 +683,8 @@ app.post('/api/feedback', async (req, res) => {
     }
 });
 
-// GET /api/feedback/stats — aggregated feedback statistics (admin only)
-app.get('/api/feedback/stats', requireAdmin, async (req, res) => {
+// GET /api/feedback/stats — aggregated feedback statistics
+app.get('/api/feedback/stats', async (req, res) => {
     try {
         const stats = getFeedbackStats();
         res.json(stats);
@@ -824,8 +693,8 @@ app.get('/api/feedback/stats', requireAdmin, async (req, res) => {
     }
 });
 
-// GET /api/feedback/recent — recent queries with feedback (admin only)
-app.get('/api/feedback/recent', requireAdmin, async (req, res) => {
+// GET /api/feedback/recent — recent queries with feedback
+app.get('/api/feedback/recent', async (req, res) => {
     try {
         const limit = Math.min(parseInt(req.query.limit) || 50, 200);
         const rows = getRecentFeedback(limit);
@@ -863,59 +732,6 @@ const mcpDeps = {
     classifyChanges,
     REPOSITORIES,
 };
-
-// --- OAuth Protected Resource Metadata (RFC 9728 / MCP auth spec 2025-06-18) ---
-// Public discovery doc so MCP clients can find the authorization server.
-// We point at our own base URL (not Entra directly) so the SDK fetches our
-// /.well-known/oauth-authorization-server, which advertises our DCR shim.
-// Entra ID does not implement RFC 7591 dynamic client registration; the shim
-// satisfies that handshake by handing back the pre-provisioned Entra client_id.
-function protectedResourceMetadata(req) {
-    const base = getBaseUrl(req);
-    return {
-        resource: `${base}/mcp`,
-        authorization_servers: [base],
-        scopes_supported: [`${MCP_RESOURCE_URI}/mcp.access`],
-        bearer_methods_supported: ['header'],
-        resource_documentation: `${base}/`,
-    };
-}
-
-// --- OAuth Authorization Server Metadata (RFC 8414) ---
-// Advertises our pass-through endpoints to Entra plus a DCR shim.
-const ENTRA_AUTHORIZE_URL = `https://login.microsoftonline.com/${AZURE_TENANT_ID}/oauth2/v2.0/authorize`;
-const ENTRA_TOKEN_URL = `https://login.microsoftonline.com/${AZURE_TENANT_ID}/oauth2/v2.0/token`;
-const MCP_SCOPE = `${MCP_RESOURCE_URI}/mcp.access`;
-
-function authorizationServerMetadata(req) {
-    const base = getBaseUrl(req);
-    return {
-        issuer: base,
-        authorization_endpoint: `${base}/oauth/authorize`,
-        token_endpoint: `${base}/oauth/token`,
-        registration_endpoint: `${base}/oauth/register`,
-        scopes_supported: [MCP_SCOPE, 'openid', 'profile', 'email', 'offline_access'],
-        response_types_supported: ['code'],
-        grant_types_supported: ['authorization_code', 'refresh_token'],
-        code_challenge_methods_supported: ['S256'],
-        token_endpoint_auth_methods_supported: ['none'],
-    };
-}
-
-app.get('/.well-known/oauth-protected-resource', (req, res) => {
-    res.set('Access-Control-Allow-Origin', '*');
-    res.json(protectedResourceMetadata(req));
-});
-
-app.get('/.well-known/oauth-protected-resource/mcp', (req, res) => {
-    res.set('Access-Control-Allow-Origin', '*');
-    res.json(protectedResourceMetadata(req));
-});
-
-app.get('/.well-known/oauth-authorization-server', (req, res) => {
-    res.set('Access-Control-Allow-Origin', '*');
-    res.json(authorizationServerMetadata(req));
-});
 
 // Public download for the MCP setup script. Resolves the same way UI_DIST does:
 // in dev the script lives in ../deploy; in the deployed package it sits in ./install
@@ -968,95 +784,7 @@ app.get('/install/skills/commit-resolver/:file', (req, res) => {
     res.sendFile(filePath);
 });
 
-// RFC 7591 Dynamic Client Registration shim. Entra ID has no DCR endpoint;
-// MCP SDKs require one. Hand every "registration" the same pre-provisioned
-// Entra public client. PKCE protects the actual auth flow regardless of how
-// the SDK obtained the client_id.
-app.post('/oauth/register', express.json(), (req, res) => {
-    const body = req.body || {};
-    const redirectUris = Array.isArray(body.redirect_uris) ? body.redirect_uris : [];
-    res.set('Access-Control-Allow-Origin', '*');
-    res.status(201).json({
-        client_id: AZURE_CLIENT_ID,
-        client_id_issued_at: Math.floor(Date.now() / 1000),
-        redirect_uris: redirectUris,
-        grant_types: ['authorization_code', 'refresh_token'],
-        response_types: ['code'],
-        token_endpoint_auth_method: 'none',
-        application_type: 'native',
-    });
-});
-
-// /authorize pass-through. Preserve the SDK's PKCE params and redirect_uri,
-// but ensure the scope set always includes our MCP API scope so Entra issues
-// an access token with aud=api://<clientId> (not just an ID token).
-// Scopes use the GUID form (<clientId>/mcp.access) rather than api://<clientId>/mcp.access
-// because the api:// form triggers AADSTS90009 when client_id and resource app are the same
-// registration. Entra accepts both forms and issues an access token with the same audience.
-app.get('/oauth/authorize', (req, res) => {
-    const params = new URLSearchParams();
-    const apiPrefix = `api://${AZURE_CLIENT_ID}/`;
-    const guidPrefix = `${AZURE_CLIENT_ID}/`;
-    const normalizeScope = s => s.startsWith(apiPrefix) ? guidPrefix + s.slice(apiPrefix.length) : s;
-    for (const [k, v] of Object.entries(req.query)) {
-        if (k === 'scope' || k === 'resource') continue;
-        if (Array.isArray(v)) v.forEach(val => params.append(k, val));
-        else if (v != null) params.append(k, String(v));
-    }
-    const requestedScope = typeof req.query.scope === 'string' ? req.query.scope : '';
-    const scopes = new Set(requestedScope.split(/\s+/).filter(Boolean).map(normalizeScope));
-    scopes.add(normalizeScope(MCP_SCOPE));
-    scopes.add('openid');
-    scopes.add('profile');
-    scopes.add('offline_access');
-    params.set('scope', [...scopes].join(' '));
-    res.redirect(302, `${ENTRA_AUTHORIZE_URL}?${params.toString()}`);
-});
-
-// /token proxy. Forwards the form-encoded body to Entra with two adjustments:
-//   1. Strip the OAuth 2.1 'resource' parameter (Entra v2 token endpoint does not accept it
-//      and rejects requests that include it).
-//   2. Rewrite any scope of the form 'api://<AZURE_CLIENT_ID>/<x>' to '<AZURE_CLIENT_ID>/<x>'.
-//      When the client_id and the resource app are the same registration, the api:// form
-//      triggers AADSTS90009 ("application is requesting a token for itself"). The GUID form
-//      is functionally equivalent and Entra accepts it. This matters on refresh_token grants
-//      where the MCP SDK replays the original scope verbatim.
-app.post('/oauth/token', express.urlencoded({ extended: true }), async (req, res) => {
-    res.set('Access-Control-Allow-Origin', '*');
-    try {
-        const form = new URLSearchParams();
-        const apiPrefix = `api://${AZURE_CLIENT_ID}/`;
-        const guidPrefix = `${AZURE_CLIENT_ID}/`;
-        for (const [k, v] of Object.entries(req.body || {})) {
-            if (k === 'resource') continue;
-            const values = Array.isArray(v) ? v : [v];
-            for (const raw of values) {
-                if (raw == null) continue;
-                let val = String(raw);
-                if (k === 'scope') {
-                    val = val.split(/\s+/).filter(Boolean).map(s =>
-                        s.startsWith(apiPrefix) ? guidPrefix + s.slice(apiPrefix.length) : s
-                    ).join(' ');
-                }
-                form.append(k, val);
-            }
-        }
-        const upstream = await fetch(ENTRA_TOKEN_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
-            body: form.toString(),
-        });
-        const text = await upstream.text();
-        res.status(upstream.status)
-            .type(upstream.headers.get('content-type') || 'application/json')
-            .send(text);
-    } catch (err) {
-        console.error('[oauth/token] proxy error:', err);
-        res.status(502).json({ error: 'server_error', error_description: err.message });
-    }
-});
-
-app.post('/mcp', requireAuth, async (req, res) => {
+app.post('/mcp', async (req, res) => {
     const sessionId = req.headers['mcp-session-id'];
     try {
         if (sessionId && mcpSessions.has(sessionId)) {
@@ -1080,7 +808,7 @@ app.post('/mcp', requireAuth, async (req, res) => {
                     console.log(`[MCP] Session closed: ${sid}`);
                 }
             };
-            const sessionDeps = { ...mcpDeps, userEmail: req.user?.email || req.user?.id || null };
+            const sessionDeps = { ...mcpDeps, userEmail: LOCAL_USER_ID };
             const server = createMcpServer(sessionDeps);
             await server.connect(transport);
             await transport.handleRequest(req, res, req.body);
@@ -1099,7 +827,7 @@ app.post('/mcp', requireAuth, async (req, res) => {
     }
 });
 
-app.get('/mcp', requireAuth, async (req, res) => {
+app.get('/mcp', async (req, res) => {
     const sessionId = req.headers['mcp-session-id'];
     if (!sessionId || !mcpSessions.has(sessionId)) {
         return res.status(404).send('Session not found');
@@ -1107,7 +835,7 @@ app.get('/mcp', requireAuth, async (req, res) => {
     await mcpSessions.get(sessionId).transport.handleRequest(req, res);
 });
 
-app.delete('/mcp', requireAuth, async (req, res) => {
+app.delete('/mcp', async (req, res) => {
     const sessionId = req.headers['mcp-session-id'];
     if (!sessionId || !mcpSessions.has(sessionId)) {
         return res.status(404).send('Session not found');
@@ -1129,25 +857,21 @@ if (existsSync(UI_DIST)) {
             || req.path.startsWith('/api/')
             || req.path.startsWith('/mcp')
             || req.path.startsWith('/install/')
-            || req.path.startsWith('/oauth/')
+            || req.path.startsWith('/oauth')
             || req.path.startsWith('/.well-known/')) return next();
         res.sendFile(join(UI_DIST, 'index.html'));
     });
 }
 
-app.listen(PORT, () => {
-    console.log(`Commit AI Resolver API running on http://localhost:${PORT}`);
-    console.log(`MCP endpoint: http://localhost:${PORT}/mcp`);
+app.listen(PORT, HOST, () => {
+    console.log(`Commit AI Resolver API running on http://${HOST}:${PORT}`);
+    console.log(`MCP endpoint: http://${HOST}:${PORT}/mcp`);
     console.log(`Data directory: ${DATA_DIR}`);
-    initAria();
-    logInfo('ServerStarted', {
-        Component: 'startup',
-        Message: `API listening on port ${PORT}`,
-        Source: 'bootstrap',
-    });
-    if (process.env.DISABLE_SCHEDULED_REFRESH === '1') {
-        console.log('Scheduled commit refresh disabled (DISABLE_SCHEDULED_REFRESH=1)');
-    } else {
+    console.log(`AI features: ${AI_CONFIGURED ? 'enabled' : 'disabled (set OPENAI_API_KEY or OPENAI_BASE_URL)'}`);
+    console.log(`Live ADO access: ${ADO_CONFIGURED ? 'enabled' : 'disabled (set ADO_PAT or ADO_BEARER_TOKEN)'}`);
+    if (process.env.ENABLE_SCHEDULED_REFRESH === '1') {
         startScheduledRefresh();
+    } else {
+        console.log('Scheduled commit refresh disabled (set ENABLE_SCHEDULED_REFRESH=1 to enable)');
     }
 });

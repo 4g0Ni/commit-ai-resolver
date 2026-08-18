@@ -6,7 +6,7 @@
  */
 
 /**
- * @param {AzureOpenAI} llm - OpenAI client
+ * @param {object} llm - OpenAI-compatible client
  * @param {object} synthesis - Output from Answer Synthesizer
  * @param {object} context - { query, history, iteration }
  * @param {Array} results - RAG search results

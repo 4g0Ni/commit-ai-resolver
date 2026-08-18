@@ -67,12 +67,12 @@ src/
 │   └── repositories.js             # Repo definitions and tag strategies
 ├── services/
 │   ├── ado-git-client.js           # Azure DevOps REST API client
-│   ├── llm-helper.js               # Azure OpenAI client wrapper
+│   ├── llm-helper.js               # OpenAI-compatible client wrapper
 │   └── commit-summarizer.js        # LLM-based commit summarization
 ```
 
-- **Auth**: `DefaultAzureCredential` (az login locally, Managed Identity deployed)
-- **LLM**: Azure OpenAI GPT-4.1 via REST
+- **Access**: anonymous localhost by default; external credentials are explicit and server-side
+- **LLM**: OpenAI-compatible API configured through `OPENAI_*` environment variables
 - **ADO org**: `msasg`, project: `Bing_Ads`
 - **Tag strategies**: `dateSorted`, `rolling`, `versioned`
 

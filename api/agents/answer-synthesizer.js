@@ -41,7 +41,7 @@ function compactFileTokens(paths, max = 10) {
 }
 
 /**
- * @param {AzureOpenAI} llm - OpenAI client
+ * @param {object} llm - OpenAI-compatible client
  * @param {Array} results - RAG search results (commits with metadata)
  * @param {object} intent - Extracted intent from Agent 1
  * @param {object} context - { query, history }
@@ -260,7 +260,7 @@ Rules for searchCoverage:
  * Streaming version of synthesizeAnswer — yields answer tokens via onToken callback.
  * Returns the same structured result as synthesizeAnswer.
  *
- * @param {AzureOpenAI} llm - OpenAI client
+ * @param {object} llm - OpenAI-compatible client
  * @param {Array} results - RAG search results
  * @param {object} intent - Extracted intent
  * @param {object} context - { query, history }
