@@ -20,6 +20,7 @@ import { fileURLToPath } from 'url';
 import { generateEmbeddings } from '../services/embedding-client.js';
 import { loadVectorStore, upsertVectors, getVectorStats } from '../services/vector-store.js';
 import { compactPathTokens, cleanCommitSubject } from '../services/commit-paths.js';
+import { buildSearchableCommitText } from '../services/commit-embedding-text.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, '..', '..', 'data', 'daily');
@@ -134,7 +135,7 @@ async function main() {
                     repo: repoName,
                     date,
                     author: commit.author,
-                    text: buildCommitText(commit, repoName, date),
+                    text: buildSearchableCommitText(commit, repoName),
                     metadata: {
                         author: commit.author,
                         title: commit.summary.title,

@@ -1,9 +1,9 @@
 /**
  * E2E test suite for the vector search + chat pipeline.
  *
- * Tests the full flow: query → embedding → LanceDB search → filters → chat API.
+ * Tests the full flow: query → embedding → SQLite hybrid search → filters → chat API.
  * Requires:
- *   - LanceDB data at data/lancedb/ (run generate-embeddings.js --force first)
+ *   - SQLite vector/FTS data at data/vectors.db (run generate-embeddings.js --force first)
  *   - API server running on port 3001 (for chat endpoint tests)
  *
  * Usage: cd src && node tests/test-search-e2e.js
@@ -49,9 +49,9 @@ async function chatQuery(message) {
 }
 
 // ===========================================================================
-// Suite 1: LanceDB health
+// Suite 1: SQLite vector-store health
 // ===========================================================================
-console.log('\n══ Suite 1: LanceDB health ══');
+console.log('\n══ Suite 1: SQLite vector-store health ══');
 {
     const stats = await getVectorStats();
     assert(stats.totalCommits > 100, `has >100 commits (${stats.totalCommits})`);

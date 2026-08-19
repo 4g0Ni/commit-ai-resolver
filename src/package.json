@@ -8,6 +8,7 @@
     "start": "node index.js",
     "fetch-commits": "node index.js",
     "generate-data": "node scripts/generate-sample-data.js",
+    "import-public": "node scripts/import-public-commits.js",
     "refresh": "node scripts/scheduled-refresh.js",
     "refresh:loop": "node scripts/scheduled-refresh.js --loop 60"
   },
@@ -15,6 +16,8 @@
     "apache-arrow": "^18.1.0",
     "better-sqlite3": "^12.9.0",
     "diff": "^7.0.0",
+    "hyparquet": "^1.28.2",
+    "hyparquet-compressors": "^1.1.1",
     "openai": "^6.33.0",
     "sqlite-vec": "^0.1.9"
   }

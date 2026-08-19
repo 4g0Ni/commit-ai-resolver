@@ -10,9 +10,15 @@
 import { extractIntent } from './intent-extractor.js';
 import { synthesizeAnswer, synthesizeAnswerStream } from './answer-synthesizer.js';
 import { evaluateAnswer } from './answer-evaluator.js';
+import { fuseRankedResults } from '../../src/services/rank-fusion.js';
 
-function daysAgo(n) {
-    const d = new Date();
+const RRF_K = Number.parseInt(process.env.RRF_K || '20', 10);
+const SECONDARY_QUERY_WEIGHT = Number.parseFloat(process.env.RRF_SECONDARY_WEIGHT || '0.7');
+const BUG_TITLE_WEIGHT = Number.parseFloat(process.env.RRF_BUG_TITLE_WEIGHT || '1.5');
+const VECTOR_MIN_SCORE = Number.parseFloat(process.env.VECTOR_MIN_SCORE || '0');
+
+function daysBefore(n, referenceDate = new Date().toISOString().slice(0, 10)) {
+    const d = new Date(`${referenceDate}T00:00:00Z`);
     d.setDate(d.getDate() - n);
     return d.toISOString().slice(0, 10);
 }
@@ -39,7 +45,9 @@ export async function agenticSearch({
     llmFast,
     embedQuery,
     searchVectors,
+    searchLexical,
     lookupByCommitIds,
+    getVectorStats,
     buildFullContext,
     query,
     history = [],
@@ -70,7 +78,24 @@ export async function agenticSearch({
         .filter(h => h.role === 'assistant' && h.suspects?.length)
         .flatMap(h => h.suspects);
 
-    let context = { query, history, feedback: null, workItemContext, priorSuspects };
+    let indexStats = null;
+    if (getVectorStats) {
+        try {
+            indexStats = await getVectorStats();
+        } catch (err) {
+            console.warn(`  [Search] Unable to read vector stats: ${err.message}`);
+        }
+    }
+    const referenceDate = indexStats?.dateRange?.to || new Date().toISOString().slice(0, 10);
+    let context = {
+        query,
+        history,
+        feedback: null,
+        workItemContext,
+        priorSuspects,
+        referenceDate,
+        availableRepos: indexStats?.repos || [],
+    };
 
     // If a work item is provided, anchor dates to its creation date
     if (workItemContext?.createdDate) {
@@ -107,7 +132,6 @@ export async function agenticSearch({
         // --- RAG Search ---
         log(i, 'rag-search', { status: 'running', query: intent.searchQuery.slice(0, 80) });
 
-        const hasFilters = intent.author || intent.repo || intent.dateFrom || intent.dateTo;
         const hasMetadataFilters = intent.riskLevel || intent.changeType;
         const t0 = Date.now();
         const queryEmbedding = await embedQuery(intent.searchQuery);
@@ -127,20 +151,21 @@ export async function agenticSearch({
             const q = (intent.searchQuery || '').toLowerCase();
             const isIncident = /\b(spike|broke|break|error|crash|regression|outage|down|incident|live.?site|production.?issue)\b/.test(q)
                 || /\b(spike|broke|break|error|crash|regression|outage|down|incident|live.?site|production.?issue)\b/.test(query.toLowerCase());
-            finalDateFrom = daysAgo(isIncident ? 7 : 30);
+            finalDateFrom = daysBefore(isIncident ? 7 : 30, referenceDate);
         }
         if (!finalDateTo) {
-            finalDateTo = new Date().toISOString().slice(0, 10);
+            finalDateTo = referenceDate;
         }
         // Clamp to max 6 months
-        const sixMonthsAgo = daysAgo(180);
+        const sixMonthsAgo = daysBefore(180, referenceDate);
         if (finalDateFrom < sixMonthsAgo) {
             finalDateFrom = sixMonthsAgo;
         }
 
         const searchOpts = {
             topK: workItemContext ? 50 : (hasMetadataFilters ? 50 : 30),
-            minScore: intent.author ? 0.01 : (hasFilters ? 0.05 : 0.15),
+            // Candidate recall is rank-based; model-specific cutoffs are opt-in and eval-calibrated.
+            minScore: VECTOR_MIN_SCORE,
             author: intent.author || undefined,
             repo: intent.repo || undefined,
             dateFrom: finalDateFrom,
@@ -161,13 +186,21 @@ export async function agenticSearch({
         };
 
         const t1 = Date.now();
-        const primaryResults = await searchVectors(queryEmbedding, searchOpts);
+        const lexicalQuery = `${query}\n${intent.searchQuery}`;
+        const [primaryResults, lexicalResults] = await Promise.all([
+            searchVectors(queryEmbedding, searchOpts),
+            searchLexical ? searchLexical(lexicalQuery, { ...searchOpts, minScore: 0 }) : Promise.resolve([]),
+        ]);
         const searchMs = Date.now() - t1;
 
         // Collect all result lists for multi-query fusion
         // Each entry: { results, weight } — title search gets higher weight
         // because it's deterministic and directly matches bug symptoms
-        const allResultLists = [{ results: primaryResults, weight: 1 }];
+        const allResultLists = [{ results: primaryResults, weight: 1, channel: 'dense-primary' }];
+        if (lexicalResults.length > 0) {
+            allResultLists.push({ results: lexicalResults, weight: 1, channel: 'lexical-fts5' });
+            log(i, 'rag-search-lexical', { status: 'done', resultCount: lexicalResults.length });
+        }
 
         // Second search using LLM secondary query — may bridge semantic gap
         if (intent.secondarySearchQuery) {
@@ -177,7 +210,7 @@ export async function agenticSearch({
             const secondaryResults = await searchVectors(secondaryEmbedding, broadSearchOpts);
             const secondaryMs = Date.now() - t2;
             log(i, 'rag-search-secondary', { status: 'done', resultCount: secondaryResults.length, elapsed: secondaryMs });
-            allResultLists.push({ results: secondaryResults, weight: 1 });
+            allResultLists.push({ results: secondaryResults, weight: SECONDARY_QUERY_WEIGHT, channel: 'dense-secondary' });
         }
 
         // Third search using the bug title directly — the title's natural language
@@ -187,16 +220,16 @@ export async function agenticSearch({
             log(i, 'rag-search-title', { status: 'running', query: cleanTitle.slice(0, 80) });
             const t3 = Date.now();
             const titleEmbedding = await embedQuery(cleanTitle);
-            const titleResults = await searchVectors(titleEmbedding, { ...broadSearchOpts, minScore: 0.05 });
+            const titleResults = await searchVectors(titleEmbedding, broadSearchOpts);
             const titleMs = Date.now() - t3;
             log(i, 'rag-search-title', { status: 'done', resultCount: titleResults.length, elapsed: titleMs });
-            allResultLists.push({ results: titleResults, weight: 5 });
+            allResultLists.push({ results: titleResults, weight: BUG_TITLE_WEIGHT, channel: 'dense-bug-title' });
         }
 
         // Merge results using Reciprocal Rank Fusion when multiple queries were used
         let results;
         if (allResultLists.length > 1) {
-            results = fuseResults(allResultLists);
+            results = fuseRankedResults(allResultLists, { k: RRF_K, limit: searchOpts.topK });
         } else {
             results = primaryResults;
         }
@@ -367,40 +400,6 @@ export async function agenticSearch({
         iterations: maxIterations,
         iterationLog,
     };
-}
-
-/**
- * Merge multiple ranked result lists using Reciprocal Rank Fusion (RRF).
- * Commits appearing in multiple lists get boosted. Preserves the original
- * result object (from the list where it scored highest).
- *
- * RRF score = sum over lists of weight * 1/(k + rank), where k=60 (standard constant).
- * @param {Array<{results: Array, weight: number}>} weightedLists
- */
-function fuseResults(weightedLists, k = 60) {
-    const scoreMap = new Map(); // id → { rrfScore, bestResult }
-
-    for (const { results: list, weight = 1 } of weightedLists) {
-        for (let rank = 0; rank < list.length; rank++) {
-            const r = list[rank];
-            const rrfContribution = weight * (1 / (k + rank + 1));
-            const existing = scoreMap.get(r.id);
-            if (existing) {
-                existing.rrfScore += rrfContribution;
-                // Keep the result object with the higher original score
-                if (r.score > existing.bestResult.score) {
-                    existing.bestResult = r;
-                }
-            } else {
-                scoreMap.set(r.id, { rrfScore: rrfContribution, bestResult: r });
-            }
-        }
-    }
-
-    // Sort by RRF score descending, attach RRF score to result for transparency
-    return [...scoreMap.values()]
-        .sort((a, b) => b.rrfScore - a.rrfScore)
-        .map(entry => ({ ...entry.bestResult, score: entry.bestResult.score, _rrfScore: entry.rrfScore }));
 }
 
 async function formatAnswer(synthesis, searchMethod, iterations, iterationLog, disclaimer, results, workItemContext, lookupByCommitIds) {

@@ -1,9 +1,9 @@
 /** Text embedding client for an OpenAI-compatible API. */
 
 import OpenAI from 'openai';
+import { buildEmbeddingRequest, getEmbeddingConfig } from './embedding-config.js';
 
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL;
-const EMBEDDING_MODEL = process.env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-large';
 
 let _instance = null;
 
@@ -26,18 +26,21 @@ function getEmbeddingClient() {
  * @param {string[]} texts - Array of text strings to embed
  * @returns {Promise<number[][]>} Array of embedding vectors
  */
-async function generateEmbeddings(texts) {
+async function generateEmbeddings(texts, { inputType = 'document' } = {}) {
     const client = getEmbeddingClient();
-    const BATCH_SIZE = 16;
+    const { batchSize, dimensions, model } = getEmbeddingConfig();
     const allEmbeddings = [];
 
-    for (let i = 0; i < texts.length; i += BATCH_SIZE) {
-        const batch = texts.slice(i, i + BATCH_SIZE);
-        const result = await client.embeddings.create({
-            input: batch,
-            model: EMBEDDING_MODEL,
-        });
+    for (let i = 0; i < texts.length; i += batchSize) {
+        const batch = texts.slice(i, i + batchSize);
+        const result = await client.embeddings.create(buildEmbeddingRequest(batch, inputType));
         for (const item of result.data) {
+            if (item.embedding.length !== dimensions) {
+                throw new Error(
+                    `Embedding dimension mismatch for ${model}: expected ${dimensions}, received ${item.embedding.length}. ` +
+                    'Set OPENAI_EMBEDDING_DIMENSIONS to the provider output and rebuild the vector store.'
+                );
+            }
             allEmbeddings.push(item.embedding);
         }
     }
@@ -52,7 +55,7 @@ async function generateEmbeddings(texts) {
  * @returns {Promise<number[]>} Embedding vector
  */
 async function generateEmbedding(text) {
-    const [embedding] = await generateEmbeddings([text]);
+    const [embedding] = await generateEmbeddings([text], { inputType: 'query' });
     return embedding;
 }
 

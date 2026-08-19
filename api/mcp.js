@@ -9,6 +9,7 @@ import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { logQuery } from './db.js';
+import { fuseRankedResults } from '../src/services/rank-fusion.js';
 
 /** Display name → internal repo name mapping (case-insensitive lookup built at runtime). */
 const REPO_ALIASES = {
@@ -44,6 +45,7 @@ function resolveRepo(input) {
  * @param {object} deps - Service dependencies from the API server
  * @param {function} deps.embedQuery - (text) => Promise<number[]>
  * @param {function} deps.searchVectors - (embedding, opts) => Promise<results[]>
+ * @param {function} deps.searchLexical - (query, opts) => Promise<results[]>
  * @param {function} deps.lookupByCommitIds - (shortIds) => Promise<results[]>
  * @param {function} deps.getVectorStats - () => Promise<stats>
  * @param {function} deps.listAvailableDates - () => Promise<string[]>
@@ -127,29 +129,44 @@ export function createMcpServer(deps) {
         },
         logged('search_commits', async ({ query, repo, author, dateFrom, dateTo, riskLevel, changeType, topK }) => {
             try {
-                const resolvedRepo = resolveRepo(repo);
+                let resolvedRepo = resolveRepo(repo);
                 if (repo && !resolvedRepo) {
-                    return {
-                        content: [{
-                            type: 'text',
-                            text: `Unknown repository "${repo}". Valid repos: ${VALID_REPOS.join(', ')}. ` +
-                                `Aliases: CMUI, MT, UIServer, AnB, CMDB.`,
-                        }],
-                        isError: true,
-                    };
+                    const stats = await deps.getVectorStats();
+                    resolvedRepo = stats.repos.find(name => name.toLowerCase() === repo.toLowerCase());
+                    if (!resolvedRepo) {
+                        return {
+                            content: [{
+                                type: 'text',
+                                text: `Unknown repository "${repo}". Indexed repos: ${stats.repos.join(', ')}.`,
+                            }],
+                            isError: true,
+                        };
+                    }
                 }
 
                 const k = Math.min(topK || 10, 50);
-                const embedding = await deps.embedQuery(query);
-                const results = await deps.searchVectors(embedding, {
-                    topK: k,
+                const candidateK = Math.max(k * 3, 30);
+                const searchOptions = {
+                    topK: candidateK,
+                    minScore: 0,
                     repo: resolvedRepo,
                     author,
                     dateFrom,
                     dateTo,
                     riskLevel,
                     changeType,
-                });
+                };
+                const embedding = await deps.embedQuery(query);
+                const [denseResults, lexicalResults] = await Promise.all([
+                    deps.searchVectors(embedding, searchOptions),
+                    deps.searchLexical ? deps.searchLexical(query, searchOptions) : Promise.resolve([]),
+                ]);
+                const results = lexicalResults.length
+                    ? fuseRankedResults([
+                        { results: denseResults, weight: 1, channel: 'dense-primary' },
+                        { results: lexicalResults, weight: 1, channel: 'lexical-fts5' },
+                    ], { k: 20, limit: k })
+                    : denseResults.slice(0, k);
 
                 if (results.length === 0) {
                     return {
@@ -160,6 +177,7 @@ export function createMcpServer(deps) {
                 const formatted = results.map((r, i) => ({
                     rank: i + 1,
                     score: Math.round(r.score * 1000) / 1000,
+                    retrievalChannels: r._retrievalChannels,
                     commitId: r.commitId,
                     shortId: r.id,
                     repo: r.repo,

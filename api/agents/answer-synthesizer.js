@@ -59,7 +59,7 @@ export async function synthesizeAnswer(llm, results, intent, context, iteration 
         (r.metadata.flags?.length ? `  Flags: ${r.metadata.flags.join(', ')}\n` : '') +
         (r.metadata.affectedAreas?.length ? `  Areas: ${r.metadata.affectedAreas.join(', ')}\n` : '') +
         (r.metadata.changedFiles?.length ? `  Files: ${compactFileTokens(r.metadata.changedFiles, 10).join(', ')}\n` : '') +
-        `  Similarity: ${r.score.toFixed(3)}`
+        `  Dense similarity: ${r.score.toFixed(3)} | Channels: ${(r._retrievalChannels || [r._retrievalMode || 'dense']).join(', ')}`
     ).join('\n\n');
 
     const scoreStats = results.length > 0 ? {
@@ -280,7 +280,7 @@ export async function synthesizeAnswerStream(llm, results, intent, context, iter
         (r.metadata.flags?.length ? `  Flags: ${r.metadata.flags.join(', ')}\n` : '') +
         (r.metadata.affectedAreas?.length ? `  Areas: ${r.metadata.affectedAreas.join(', ')}\n` : '') +
         (r.metadata.changedFiles?.length ? `  Files: ${compactFileTokens(r.metadata.changedFiles, 10).join(', ')}\n` : '') +
-        `  Similarity: ${r.score.toFixed(3)}`
+        `  Dense similarity: ${r.score.toFixed(3)} | Channels: ${(r._retrievalChannels || [r._retrievalMode || 'dense']).join(', ')}`
     ).join('\n\n');
 
     const scoreStats = results.length > 0 ? {

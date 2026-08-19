@@ -5,7 +5,7 @@
  *   1. Fetch commits via ADO date-range query
  *   2. Summarize with LLM
  *   3. Write/merge daily JSON to data/daily/YYYY-MM-DD.json
- *   4. Generate embeddings and upsert into LanceDB vector store
+ *   4. Generate embeddings and upsert into SQLite FTS5/sqlite-vec indexes
  *   5. Update data/daily/index.json
  *
  * Persists per-repo checkpoints to disk for retry and backfill on restart.
@@ -20,6 +20,7 @@ import { fetchCommitsBetweenDates } from './ado-git-client.js';
 import { summarizeCommits } from './commit-summarizer.js';
 import { compactPathTokens, cleanCommitSubject } from './commit-paths.js';
 import { generateEmbeddings } from './embedding-client.js';
+import { buildSearchableCommitText } from './commit-embedding-text.js';
 import { upsertVectors, closeVectorStore } from './vector-store.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -186,7 +187,7 @@ async function embedAndIndex(formattedCommits, repoName, dateStr) {
         repo: repoName,
         date: dateStr,
         author: c.author,
-        text: buildCommitText(c, repoName, dateStr),
+        text: buildSearchableCommitText(c, repoName),
         metadata: {
             author: c.author,
             title: c.summary.title,
@@ -237,7 +238,7 @@ async function embedAndIndex(formattedCommits, repoName, dateStr) {
 // ── Reset & Backfill ──
 
 /**
- * Delete all data: daily JSON, LanceDB, SQLite tables, checkpoint, diffs.
+ * Delete all data: daily JSON, SQLite vector/FTS indexes, checkpoint, and diffs.
  * Requires clearDatabase from api/db.js to be passed in (avoids circular import).
  */
 export async function resetAllData(clearDatabaseFn) {
@@ -398,7 +399,7 @@ export async function backfillCommits(days = 90, skipExisting = false) {
 
 /**
  * Rebuild all vector embeddings from existing daily JSON files.
- * Useful after deleting lancedb/ without re-fetching from ADO.
+ * Replaces the derived vector/FTS index without re-fetching from ADO.
  */
 export async function rebuildEmbeddings() {
     console.log('Rebuilding embeddings from existing daily JSON...\n');
@@ -410,6 +411,15 @@ export async function rebuildEmbeddings() {
 
     const files = (await readdir(DATA_DIR)).filter(f => f.endsWith('.json') && f !== 'index.json').sort();
     console.log(`  Found ${files.length} daily JSON files.\n`);
+
+    // A model, dimension, or document-template change creates a different vector space.
+    // Rebuild mode therefore replaces the derived index while preserving daily JSON source data.
+    closeVectorStore();
+    for (const suffix of ['', '-wal', '-shm']) {
+        const path = VECTORS_DB_PATH + suffix;
+        if (existsSync(path)) await unlink(path);
+    }
+    console.log('  Recreated vector/FTS indexes from source data.\n');
 
     let totalIndexed = 0;
     for (const file of files) {

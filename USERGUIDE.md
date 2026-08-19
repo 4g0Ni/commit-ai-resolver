@@ -132,6 +132,26 @@ node scripts/generate-sample-data.js --from 2026-04-01 --to 2026-04-01 --force
 
 **Parallelism:** LLM calls run 10 at a time per batch. Each day's JSON is written to disk after each repo completes, so partial results survive failures.
 
+### 1b. Import a Public Offline Corpus
+
+For a credential-free demo, download one repository file from `AdhyanshVerma/open-github-major-repos` and normalize a bounded subset into the same daily JSON format. Run these commands from the project root:
+
+```powershell
+# 先把 Hugging Face 上某个仓库的 Parquet 文件下载到真实存在的本地路径
+New-Item -ItemType Directory -Force .\data\public | Out-Null
+Invoke-WebRequest `
+  -Uri "https://huggingface.co/datasets/AdhyanshVerma/open-github-major-repos/resolve/main/facebook_react_max100000_min20_batch500.parquet?download=true" `
+  -OutFile ".\data\public\facebook_react.parquet"
+
+# 在项目根目录执行；导入器支持 .parquet、.jsonl 和 .ndjson
+node src/scripts/import-public-commits.js --input ".\data\public\facebook_react.parquet" --limit 10000 --force
+
+# Optional repository selection; repeat --repo as needed
+node src/scripts/import-public-commits.js --input "<本机真实存在的 JSONL 文件路径>" --repo facebook/react --limit 5000 --force
+```
+
+The importer keeps repo/author/date as metadata and creates deterministic risk/change-type fields for the demo. It never needs ADO credentials. After import, generate embeddings with the same local model used for query embeddings.
+
 ### 2. Generate Embeddings
 
 Embeds all commit summaries into the local SQLite vector store. Required for the chat RAG pipeline.
@@ -161,7 +181,21 @@ node scripts/generate-embeddings.js --from 2026-04-01 --to 2026-04-03 --force
 node scripts/generate-embeddings.js --force
 ```
 
-Embeddings are stored in `data/vectors.db` using `sqlite-vec`. If you change the vector schema, remove that database and re-run with `--force`.
+Embeddings are stored in `data/vectors.db` using `sqlite-vec`; searchable text is also indexed in SQLite FTS5. Model, dimension, and document-template version are recorded as an index contract. If any of them changes, rebuild the derived index from the preserved daily JSON:
+
+```bash
+node ../scripts/reset-and-refresh.js --rebuild-embeddings
+```
+
+Example local Qwen3-compatible configuration:
+
+```powershell
+$env:OPENAI_BASE_URL = 'http://127.0.0.1:8000/v1'
+$env:OPENAI_API_KEY = 'local'
+$env:OPENAI_EMBEDDING_MODEL = 'Qwen/Qwen3-Embedding-0.6B'
+$env:OPENAI_EMBEDDING_DIMENSIONS = '1024'
+node scripts/generate-embeddings.js --force
+```
 
 ### 3. Start the Backend API
 
@@ -299,9 +333,9 @@ The Intent Extractor agent extracts:
 - **verdict** — self-validation: `GOOD` (proceed) or `ASK_USER` (request clarification)
 - **ambiguities** — parts of the query that are unclear
 
-The rewritten `searchQuery` is embedded for vector similarity, while extracted filters become SQL WHERE clauses in the SQLite metadata table. When any filter is active, the similarity threshold drops to 0.05 (or 0.01 for author queries) to return all matching commits.
+The rewritten `searchQuery` is embedded for dense similarity, while extracted filters become SQL WHERE clauses in SQLite metadata. Selective filters are applied before exact cosine ranking; the default candidate cutoff is rank-based (`VECTOR_MIN_SCORE=0`) because cosine distributions change with the embedding model. Any non-zero threshold must be calibrated for the configured model.
 
-**Multi-query search:** For work item queries, up to 3 separate searches are run (primary, secondary, bug title) and merged via Reciprocal Rank Fusion (RRF). The bug title gets a 5x weight because its natural language often has better semantic overlap with fix commits.
+**Hybrid multi-query search:** Dense primary retrieval and SQLite FTS5 lexical retrieval are always eligible for fusion. Work-item queries can add a secondary dense query and bug-title query. Weighted Reciprocal Rank Fusion defaults to `k=20`, with weights 1.0 (primary dense), 1.0 (FTS5), 0.7 (secondary), and 1.5 (bug title); all values are configurable and should be tuned against a retrieval golden set.
 
 ### Fallback Behavior
 

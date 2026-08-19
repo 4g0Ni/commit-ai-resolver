@@ -29,8 +29,11 @@ function daysAgo(n, today) {
  */
 export async function extractIntent(llm, context) {
     const { query, history = [], feedback, workItemContext } = context;
-    const today = new Date().toISOString().slice(0, 10);
-    const repoList = 'AdsAppsCampaignUI, AdsAppsMT, AdsAppUI, AnB, AdsAppsDB';
+    // Historical/offline demo indexes interpret relative dates against their latest indexed day.
+    const today = context.referenceDate || new Date().toISOString().slice(0, 10);
+    const repoList = (context.availableRepos?.length
+        ? context.availableRepos
+        : ['AdsAppsCampaignUI', 'AdsAppsMT', 'AdsAppUI', 'AnB', 'AdsAppsDB']).join(', ');
 
     let feedbackBlock = '';
     if (feedback) {

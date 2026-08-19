@@ -71,7 +71,7 @@ data/          — Runtime data (daily JSON, diffs, SQLite vector store) — git
 
 - Express server in `api/server.js`. All routes under `/api/`.
 - Two OpenAI-compatible client views: `openaiClient` (quality model) and `openaiMiniClient` (fast model). Models and endpoint are configured through `OPENAI_*` environment variables.
-- Embedding model: `text-embedding-3-large` (3072 dimensions).
+- Embedding model and dimensions are configured with `OPENAI_EMBEDDING_MODEL` and `OPENAI_EMBEDDING_DIMENSIONS`; the default remains `text-embedding-3-large` (3072 dimensions), while local Qwen3/BGE-compatible endpoints are supported.
 - Chat endpoint supports both JSON response and SSE streaming (via `Accept: text/event-stream` header).
 - LLM agents receive the client as a parameter (`llm` or `llmFast`) — never import the client directly.
 - Usage metrics endpoint: `GET /api/metrics/usage` — returns query volume, confidence distribution, method breakdown, error rate, feedback stats, DAU/WAU/MAU, latency percentiles (p50/p95), user engagement, and adoption metrics from local SQLite.

@@ -25,6 +25,7 @@ import { startScheduledRefresh } from '../src/services/scheduled-refresh.js';
 import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node';
 import { isInitializeRequest } from '@modelcontextprotocol/server';
 import { createMcpServer } from './mcp.js';
+import { buildEmbeddingRequest, getEmbeddingConfig } from '../src/services/embedding-config.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(process.env.DATA_DIR || join(__dirname, '..', 'data'), 'daily');
@@ -36,7 +37,7 @@ const LOCAL_USER_ID = 'local-user';
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4.1';
 const OPENAI_FAST_MODEL = process.env.OPENAI_FAST_MODEL || 'gpt-4.1-mini';
-const EMBEDDING_MODEL = process.env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-large';
+const EMBEDDING_CONFIG = getEmbeddingConfig();
 const AI_CONFIGURED = Boolean(process.env.OPENAI_API_KEY || OPENAI_BASE_URL);
 const ADO_CONFIGURED = Boolean(process.env.ADO_PAT || process.env.ADO_BEARER_TOKEN);
 
@@ -89,7 +90,7 @@ app.use((req, res, next) => {
 });
 
 // --- Vector store ---
-import { searchVectors, lookupByCommitIds, getVectorStats } from '../src/services/vector-store.js';
+import { searchVectors, searchLexical, lookupByCommitIds, getVectorStats } from '../src/services/vector-store.js';
 
 // --- Release list ---
 import { fetchReleaseList } from '../src/services/ado-git-client.js';
@@ -115,11 +116,13 @@ async function embedQuery(text) {
     if (_embeddingCache.has(text)) {
         return _embeddingCache.get(text);
     }
-    const result = await embeddingClient.embeddings.create({
-        input: [text],
-        model: EMBEDDING_MODEL,
-    });
+    const result = await embeddingClient.embeddings.create(buildEmbeddingRequest([text], 'query'));
     const embedding = result.data[0].embedding;
+    if (embedding.length !== EMBEDDING_CONFIG.dimensions) {
+        throw new Error(
+            `Embedding provider returned ${embedding.length} dimensions; configured index expects ${EMBEDDING_CONFIG.dimensions}.`
+        );
+    }
     _embeddingCache.set(text, embedding);
     // Evict oldest entries if cache exceeds max
     if (_embeddingCache.size > EMBEDDING_CACHE_MAX) {
@@ -349,7 +352,9 @@ app.post('/api/chat', async (req, res) => {
                 llmFast: openaiMiniClient,
                 embedQuery,
                 searchVectors,
+                searchLexical,
                 lookupByCommitIds,
+                getVectorStats,
                 buildFullContext,
                 query: message,
                 history,
@@ -364,6 +369,7 @@ app.post('/api/chat', async (req, res) => {
                             : 'Searching commits...',
                         'rag-search-secondary': 'Running secondary search...',
                         'rag-search-title': 'Searching by title...',
+                        'rag-search-lexical': 'Matching identifiers and file paths...',
                         'answer-synthesizer': details.status === 'running'
                             ? 'Generating answer...'
                             : undefined,
@@ -423,7 +429,9 @@ app.post('/api/chat', async (req, res) => {
                 llmFast: openaiMiniClient,
                 embedQuery,
                 searchVectors,
+                searchLexical,
                 lookupByCommitIds,
+                getVectorStats,
                 buildFullContext,
                 query: message,
                 history,
@@ -723,6 +731,7 @@ const mcpSessions = new Map(); // sessionId → { server, transport }
 const mcpDeps = {
     embedQuery,
     searchVectors,
+    searchLexical,
     lookupByCommitIds,
     getVectorStats,
     listAvailableDates,
