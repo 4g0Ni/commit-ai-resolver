@@ -149,7 +149,7 @@ async function updateIndex(dateStr) {
     await writeFile(indexPath, JSON.stringify(index, null, 2));
 }
 
-// ── Embedding helpers (same format as generate-embeddings.js) ──
+// ── Embedding helpers (same format as generate-embedding.py) ──
 
 function buildCommitText(commit, repoName, date) {
     const s = commit.summary || commit.llmSummary;

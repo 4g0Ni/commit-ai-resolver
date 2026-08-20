@@ -1,0 +1,5 @@
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch==2.8.0+cu128
+sentence-transformers>=5.1,<6
+modelscope==1.39.0
+numpy>=2.0,<3

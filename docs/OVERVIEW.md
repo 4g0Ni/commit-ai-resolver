@@ -295,7 +295,7 @@ cd ../src
 node scripts/generate-sample-data.js --days 7
 
 # 3. Optional: build the SQLite vector index (requires AI configuration)
-node scripts/generate-embeddings.js
+conda run -n hello-agents python src/scripts/generate-embedding.py
 
 # 4. Start the API server (port 4399)
 cd ../api

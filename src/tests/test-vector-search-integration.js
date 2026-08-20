@@ -1,6 +1,6 @@
 /**
  * Integration test for vector search — uses real embeddings on disk.
- * Requires: data/embeddings/vectors.json to exist (run generate-embeddings.js first).
+ * Requires: data/vectors.db to exist (run generate-embedding.py first).
  *
  * Tests:
  * 1. Vector store loads correctly

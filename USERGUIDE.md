@@ -156,9 +156,12 @@ The importer keeps repo/author/date as metadata and creates deterministic risk/c
 
 Embeds all commit summaries into the local SQLite vector store. Required for the chat RAG pipeline.
 
-```bash
-cd src
-node scripts/generate-embeddings.js
+```powershell
+# This machine already has a verified CUDA environment.
+conda run -n hello-agents python src/scripts/generate-embedding.py
+
+# For a new Python environment, install the pinned dependencies first:
+# python -m pip install -r requirements-embedding.txt
 ```
 
 **Options:**
@@ -170,15 +173,15 @@ node scripts/generate-embeddings.js
 | `--force` | Re-embed all commits (needed after schema changes) |
 
 **Examples:**
-```bash
+```powershell
 # Incremental (only new commits)
-node scripts/generate-embeddings.js
+conda run -n hello-agents python src/scripts/generate-embedding.py
 
 # Re-embed a specific date range
-node scripts/generate-embeddings.js --from 2026-04-01 --to 2026-04-03 --force
+conda run -n hello-agents python src/scripts/generate-embedding.py --from 2026-04-01 --to 2026-04-03 --force
 
 # Force re-embed everything
-node scripts/generate-embeddings.js --force
+conda run -n hello-agents python src/scripts/generate-embedding.py --force
 ```
 
 Embeddings are stored in `data/vectors.db` using `sqlite-vec`; searchable text is also indexed in SQLite FTS5. Model, dimension, and document-template version are recorded as an index contract. If any of them changes, rebuild the derived index from the preserved daily JSON:
@@ -194,7 +197,7 @@ $env:OPENAI_BASE_URL = 'http://127.0.0.1:8000/v1'
 $env:OPENAI_API_KEY = 'local'
 $env:OPENAI_EMBEDDING_MODEL = 'Qwen/Qwen3-Embedding-0.6B'
 $env:OPENAI_EMBEDDING_DIMENSIONS = '1024'
-node scripts/generate-embeddings.js --force
+conda run -n hello-agents python src/scripts/generate-embedding.py --force
 ```
 
 ### 3. Start the Backend API
@@ -355,7 +358,7 @@ cd src
 node tests/test-search-e2e.js
 ```
 
-Requires `data/vectors.db` (run `generate-embeddings.js` first) and the API server on port 4399 for the full test coverage:
+Requires `data/vectors.db` (run `generate-embedding.py` first) and the API server on port 4399 for the full test coverage:
 
 | Suite | Tests | What it covers |
 |---|---|---|
@@ -540,7 +543,7 @@ commit-ai-resolver/
 │   │   └── repositories.js           # Repo definitions and tag strategies
 │   ├── scripts/
 │   │   ├── generate-sample-data.js   # Generate daily summaries (cached, parallel)
-│   │   ├── generate-embeddings.js    # Embed commit summaries into sqlite-vec
+│   │   ├── generate-embedding.py     # CUDA-embed commit summaries into sqlite-vec
 │   │   └── extend-sample-data.js     # Generate synthetic historical data
 │   ├── services/
 │   │   ├── ado-git-client.js         # Azure DevOps REST API client (commits, diffs, work items, image extraction)

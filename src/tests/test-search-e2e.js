@@ -3,7 +3,7 @@
  *
  * Tests the full flow: query → embedding → SQLite hybrid search → filters → chat API.
  * Requires:
- *   - SQLite vector/FTS data at data/vectors.db (run generate-embeddings.js --force first)
+ *   - SQLite vector/FTS data at data/vectors.db (run generate-embedding.py --force first)
  *   - API server running on port 3001 (for chat endpoint tests)
  *
  * Usage: cd src && node tests/test-search-e2e.js

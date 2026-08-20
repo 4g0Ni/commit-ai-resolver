@@ -138,6 +138,11 @@ pnpm.exe
 
 .env
 
+# Python embedding runtime
+.venv/
+__pycache__/
+*.py[cod]
+
 /private/change/**
 
 demo.cloudpack

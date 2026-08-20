@@ -431,7 +431,7 @@ LLM 提取包含以下字段的 JSON 对象：
 | 向量存储 | `src/services/vector-store.js` | SQLite 元数据 + FTS5 + `sqlite-vec` (`data/vectors.db`)。选择性元数据筛选器在精确余弦排名前运行；较大的候选集使用分区 KNN |
 | 工作项检测器 | `src/services/workitem-detector.js` | 从用户消息的 URL 模式中检测 ADO 工作项 ID |
 | ADO Git 客户端 | `src/services/ado-git-client.js` | Azure DevOps REST API 客户端。获取提交、差异和工作项。从工作项 HTML 字段（Description、ReproSteps）中提取并获取图像 |
-| 嵌入生成器 | `src/scripts/generate-embeddings.js` | 读取每日 JSON 文件，构建带版本的可搜索文本，生成可配置的嵌入批次，并以增量方式 upsert 稠密索引和 FTS5 索引 |
+| 嵌入生成器 | `src/scripts/generate-embedding.py` | 使用本地 CUDA Qwen3 模型读取每日 JSON，批量生成 1024 维向量，并增量 upsert 稠密索引和 FTS5 索引 |
 | 聊天 API (RAG) | `api/server.js` | 意图提取 → 稠密检索 + FTS5 检索 → 加权 RRF 融合 → 有界的合成/评估循环。对于历史离线语料库，相对日期锚定到已索引的最近一天 |
 
 #### 嵌入模型
@@ -454,18 +454,18 @@ LLM 提取包含以下字段的 JSON 对象：
 
 #### 用法
 
-```bash
+```powershell
 # Generate embeddings for all daily data (incremental)
-cd src && node scripts/generate-embeddings.js
+conda run -n hello-agents python src/scripts/generate-embedding.py
 
 # Re-embed last 7 days
-node scripts/generate-embeddings.js --days 7
+conda run -n hello-agents python src/scripts/generate-embedding.py --days 7 --force
 
 # Re-embed a specific date range
-node scripts/generate-embeddings.js --from 2026-03-25 --to 2026-03-31 --force
+conda run -n hello-agents python src/scripts/generate-embedding.py --from 2026-03-25 --to 2026-03-31 --force
 
 # Force re-embed everything
-node scripts/generate-embeddings.js --force
+conda run -n hello-agents python src/scripts/generate-embedding.py --force
 ```
 
 #### 回退行为

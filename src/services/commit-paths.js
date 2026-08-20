@@ -5,7 +5,7 @@
  *
  * Used by:
  *  - commit-summarizer.js — shared-infra risk escalation (Fix 2)
- *  - scheduled-refresh.js / generate-embeddings.js — embed-text enrichment (Fix 1)
+ *  - scheduled-refresh.js / generate-embedding.py — embed-text enrichment (Fix 1)
  */
 
 /**

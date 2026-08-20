@@ -212,7 +212,7 @@ async function main() {
     }
 
     console.log(`Imported ${imported} commits into ${grouped.size} daily files; skipped ${skipped} records.`);
-    console.log('Next (from project root): node src/scripts/generate-embeddings.js --force');
+    console.log('Next (from project root): python src/scripts/generate-embedding.py --force');
 }
 
 main().catch(err => {
