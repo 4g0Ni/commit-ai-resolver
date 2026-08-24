@@ -10,6 +10,7 @@
 import { extractIntent } from './intent-extractor.js';
 import { synthesizeAnswer, synthesizeAnswerStream } from './answer-synthesizer.js';
 import { evaluateAnswer } from './answer-evaluator.js';
+import { FALLBACK_SYSTEM_PROMPT } from './synthesis-prompt.js';
 import { fuseRankedResults } from '../../src/services/rank-fusion.js';
 
 const RRF_K = Number.parseInt(process.env.RRF_K || '20', 10);
@@ -71,6 +72,22 @@ export async function agenticSearch({
         const detailStr = details.elapsed ? ` (${details.elapsed}ms)` : '';
         console.log(`  [Agent ${iteration}/${maxIterations}] ${stage}${detailStr}`);
     };
+    const logSynthesisCompletion = (iteration, synthesis, phase = 'search-answer') => log(iteration, 'answer-synthesizer', {
+        status: 'done',
+        phase,
+        confidence: synthesis.confidence,
+        coverage: synthesis.searchCoverage,
+        elapsed: synthesis._elapsed,
+        promptVersion: synthesis._promptVersion,
+        promptVariant: synthesis._promptVariant,
+        structuredOutput: synthesis._structuredOutput,
+        structuredFallback: synthesis._structuredFallback,
+        parseError: synthesis._parseError,
+        validationRejections: synthesis._validation?.rejectedCandidateIds || 0,
+        promptTokens: synthesis._promptTokens,
+        completionTokens: synthesis._completionTokens,
+        totalTokens: synthesis._tokens,
+    });
 
     // Extract prior search results from conversation history so follow-up
     // queries can reference specific commits from earlier answers
@@ -95,6 +112,7 @@ export async function agenticSearch({
         priorSuspects,
         referenceDate,
         availableRepos: indexStats?.repos || [],
+        correlationId,
     };
 
     // If a work item is provided, anchor dates to its creation date
@@ -113,7 +131,17 @@ export async function agenticSearch({
         // --- Agent 1: Intent Extraction (includes self-validation) ---
         log(i, 'intent-extractor', { status: 'running' });
         const intent = await extractIntent(llmFast || llm, context);
-        log(i, 'intent-extractor', { status: 'done', confidence: intent.confidence, verdict: intent.verdict, elapsed: intent._elapsed });
+        log(i, 'intent-extractor', {
+            status: 'done', confidence: intent.confidence, verdict: intent.verdict, elapsed: intent._elapsed,
+            promptVersion: intent._promptVersion,
+            promptVariant: intent._promptVariant,
+            structuredOutput: intent._structuredOutput,
+            structuredFallback: intent._structuredFallback,
+            parseError: intent._parseError,
+            promptTokens: intent._promptTokens,
+            completionTokens: intent._completionTokens,
+            totalTokens: intent._tokens,
+        });
         console.log(`  [Intent] searchQuery: "${intent.searchQuery}"`);
         if (intent.secondarySearchQuery) console.log(`  [Intent] secondarySearchQuery: "${intent.secondarySearchQuery}"`);
 
@@ -126,6 +154,7 @@ export async function agenticSearch({
                 searchMethod: 'agentic',
                 iterations: i,
                 iterationLog,
+                ...buildPromptTelemetry(iterationLog),
             };
         }
 
@@ -278,12 +307,7 @@ export async function agenticSearch({
         const synthesis = canStream
             ? await synthesizeAnswerStream(llm, results, intent, context, i, onToken)
             : await synthesizeAnswer(llm, results, intent, context, i);
-        log(i, 'answer-synthesizer', {
-            status: 'done',
-            confidence: synthesis.confidence,
-            coverage: synthesis.searchCoverage,
-            elapsed: synthesis._elapsed,
-        });
+        logSynthesisCompletion(i, synthesis);
         console.log(`  [Synthesizer] confidence=${synthesis.confidence}, coverage=${synthesis.searchCoverage}, suspects=${synthesis.suspectCount}, tokens=${synthesis._tokens || '?'}, ${(synthesis._elapsed / 1000).toFixed(1)}s`);
 
         // Guard: if answer is empty, fall back to full context on first occurrence
@@ -307,6 +331,14 @@ export async function agenticSearch({
             verdict: evaluation.verdict,
             qualityScore: evaluation.qualityScore,
             elapsed: evaluation._elapsed,
+            promptVersion: evaluation._promptVersion,
+            promptVariant: evaluation._promptVariant,
+            structuredOutput: evaluation._structuredOutput,
+            structuredFallback: evaluation._structuredFallback,
+            parseError: evaluation._parseError,
+            promptTokens: evaluation._promptTokens,
+            completionTokens: evaluation._completionTokens,
+            totalTokens: evaluation._tokens,
         });
         console.log(`  [Evaluator] verdict=${evaluation.verdict}, qualityScore=${evaluation.qualityScore}, fastPath=${evaluation._fastPath || false}`);
         if (evaluation.issues?.length > 0) {
@@ -327,6 +359,7 @@ export async function agenticSearch({
             if (onToken && !canStream) {
                 log(i, 'answer-synthesizer', { status: 'streaming', resultCount: results.length });
                 const streamedSynthesis = await synthesizeAnswerStream(llm, results, intent, context, i, onToken);
+                logSynthesisCompletion(i, streamedSynthesis, 'final-stream');
                 console.log(`  [Pipeline] PASS — streamed final answer (iteration ${i}, ${((Date.now() - pipelineStart) / 1000).toFixed(1)}s total)`);
                 return await formatAnswer(streamedSynthesis, 'agentic', i, iterationLog, null, results, workItemContext, lookupByCommitIds);
             }
@@ -338,6 +371,7 @@ export async function agenticSearch({
             if (onToken && !canStream) {
                 log(i, 'answer-synthesizer', { status: 'streaming', resultCount: results.length });
                 const streamedSynthesis = await synthesizeAnswerStream(llm, results, intent, context, i, onToken);
+                logSynthesisCompletion(i, streamedSynthesis, 'final-stream');
                 console.log(`  [Pipeline] PARTIAL — streamed final answer with disclaimer (iteration ${i}, ${((Date.now() - pipelineStart) / 1000).toFixed(1)}s total)`);
                 return await formatAnswer(streamedSynthesis, 'agentic', i, iterationLog, 'Results may be incomplete — I searched with the best available context.', results, workItemContext, lookupByCommitIds);
             }
@@ -351,6 +385,7 @@ export async function agenticSearch({
             if (onToken) {
                 log(i, 'answer-synthesizer', { status: 'streaming', resultCount: results.length });
                 const streamedSynthesis = await synthesizeAnswerStream(llm, results, intent, context, i, onToken);
+                logSynthesisCompletion(i, streamedSynthesis, 'final-stream');
                 return await formatAnswer(streamedSynthesis, 'agentic', i, iterationLog, 'Results may be incomplete — I searched with the best available context.', results, workItemContext, lookupByCommitIds);
             }
             return await formatAnswer(synthesis, 'agentic', i, iterationLog, 'Results may be incomplete — I searched with the best available context.', results, workItemContext, lookupByCommitIds);
@@ -399,6 +434,25 @@ export async function agenticSearch({
         searchMethod: 'agentic',
         iterations: maxIterations,
         iterationLog,
+        ...buildPromptTelemetry(iterationLog),
+    };
+}
+
+function buildPromptTelemetry(iterationLog) {
+    const completed = iterationLog.filter(entry => entry.status === 'done' && entry.promptVersion);
+    const promptVersions = {};
+    for (const entry of completed) promptVersions[entry.stage] = entry.promptVersion;
+    return {
+        promptVersions,
+        promptMetrics: {
+            structuredCalls: completed.filter(entry => entry.structuredOutput === true).length,
+            structuredFallbacks: completed.filter(entry => entry.structuredFallback === true).length,
+            parseErrors: completed.filter(entry => entry.parseError === true).length,
+            validationRejections: completed.reduce((sum, entry) => sum + (entry.validationRejections || 0), 0),
+            promptTokens: completed.reduce((sum, entry) => sum + (entry.promptTokens || 0), 0),
+            completionTokens: completed.reduce((sum, entry) => sum + (entry.completionTokens || 0), 0),
+            totalTokens: completed.reduce((sum, entry) => sum + (entry.totalTokens || 0), 0),
+        },
     };
 }
 
@@ -523,43 +577,29 @@ async function formatAnswer(synthesis, searchMethod, iterations, iterationLog, d
         } : undefined,
         iterations,
         iterationLog,
+        ...buildPromptTelemetry(iterationLog),
     };
 }
 
 async function fallbackFullContext({ llm, buildFullContext, query, history, iterationLog, i }) {
     const contextText = await buildFullContext();
-    const systemPrompt = `You are an expert change analysis assistant for the Microsoft Advertising engineering team.
-You have access to commit summaries across repositories.
-Use this data to answer questions about:
-- What changed on a specific day or date range
-- Which commits might be related to an incident or regression
-- Risk assessment of recent changes
-- Pilot flag and feature flag changes
-- Identifying suspect commits for latency, errors, or crashes
-
-When correlating incidents with changes, consider a 2-day buffer (releases take up to 2 days to reach production).
-Always cite specific commit SHAs and authors when referencing changes.
-For EVERY commit you mention, include a clickable markdown link using the URL from the data. Format: [shortId](url). If a URL is "N/A" or missing, just show the SHA.
-Be concise and actionable.
-
---- COMMIT SUMMARIES (full) ---
-${contextText}
---- END SUMMARIES ---`;
-
     const result = await llm.chat.completions.create({
         messages: [
-            { role: 'system', content: systemPrompt },
+            { role: 'system', content: FALLBACK_SYSTEM_PROMPT },
             ...history.map(h => ({ role: h.role, content: h.content })),
-            { role: 'user', content: query },
+            { role: 'user', content: JSON.stringify({ query, commitSummaries: contextText }) },
         ],
         temperature: 0.3,
     });
 
+    const telemetry = buildPromptTelemetry(iterationLog);
     return {
         type: 'answer',
         reply: result.choices?.[0]?.message?.content ?? 'No response from LLM.',
         searchMethod: 'fallback-full',
         iterations: i,
         iterationLog,
+        promptVersions: { ...telemetry.promptVersions, fallback: 'fallback-v1' },
+        promptMetrics: telemetry.promptMetrics,
     };
 }

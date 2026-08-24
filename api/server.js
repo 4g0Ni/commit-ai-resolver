@@ -25,6 +25,8 @@ import { startScheduledRefresh } from '../src/services/scheduled-refresh.js';
 import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node';
 import { isInitializeRequest } from '@modelcontextprotocol/server';
 import { createMcpServer } from './mcp.js';
+import { FALLBACK_SYSTEM_PROMPT } from './agents/synthesis-prompt.js';
+import { getPromptRegistrySnapshot } from '../src/prompts/prompt-registry.js';
 import { buildEmbeddingRequest, getEmbeddingConfig } from '../src/services/embedding-config.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -234,68 +236,7 @@ app.get('/api/releases', async (req, res) => {
     }
 });
 
-/**
- * Use a lightweight LLM call to extract structured search filters from a natural language query.
- * Returns: { author, repo, dateFrom, dateTo, searchQuery }
- * @deprecated Kept for backward compatibility. The agentic pipeline uses intent-extractor agent instead.
- */
-async function extractQueryIntent(query) {
-    const today = new Date().toISOString().slice(0, 10);
-    const repoList = 'AdsAppsCampaignUI, AdsAppsMT, AdsAppUI, AnB, AdsAppsDB';
-    const prompt = `Extract search filters from the user's question about code commits. Today is ${today}.
-
-Return ONLY a JSON object with these fields (use null for missing):
-- "author": full person name if the user is asking about a specific person's commits (null if not person-specific)
-- "repo": exact repo name from [${repoList}] if mentioned (null if not repo-specific)
-- "dateFrom": start date YYYY-MM-DD if a time range is mentioned (null if open-ended)
-- "dateTo": end date YYYY-MM-DD if a time range is mentioned (null if open-ended)
-- "searchQuery": a rewritten version of the query optimized for semantic search against commit summaries. Remove person names and date references, keep the technical intent. This should be what we embed for vector similarity search.
-
-Examples:
-User: "what did Beina Zhang change last week"
-{"author":"Beina Zhang","repo":null,"dateFrom":"${daysAgo(7, today)}","dateTo":"${today}","searchQuery":"code changes and modifications"}
-
-User: "any store page crashes in CampaignUI recently"
-{"author":null,"repo":"AdsAppsCampaignUI","dateFrom":null,"dateTo":null,"searchQuery":"store page crash error bug"}
-
-User: "what high risk changes were deployed yesterday"
-{"author":null,"repo":null,"dateFrom":"${daysAgo(1, today)}","dateTo":"${daysAgo(1, today)}","searchQuery":"high risk changes deployment"}
-
-User: "show pilot flag changes"
-{"author":null,"repo":null,"dateFrom":null,"dateTo":null,"searchQuery":"pilot flag feature gate config changes"}
-
-Now extract from:
-User: "${query.replace(/"/g, '\\"')}"`;
-
-    try {
-        const result = await openaiClient.chat.completions.create({
-            messages: [{ role: 'user', content: prompt }],
-            temperature: 0,
-            max_completion_tokens: 256,
-        });
-        const text = result.choices?.[0]?.message?.content?.trim() || '{}';
-        // Extract JSON from response (handle markdown code blocks)
-        const jsonMatch = text.match(/\{[\s\S]*\}/);
-        if (!jsonMatch) return { searchQuery: query };
-        const parsed = JSON.parse(jsonMatch[0]);
-        return {
-            author: parsed.author || null,
-            repo: parsed.repo || null,
-            dateFrom: parsed.dateFrom || null,
-            dateTo: parsed.dateTo || null,
-            searchQuery: parsed.searchQuery || query,
-        };
-    } catch (err) {
-        console.error('  Intent extraction failed:', err.message);
-        return { searchQuery: query };
-    }
-}
-
-function daysAgo(n, today) {
-    const d = new Date(today);
-    d.setDate(d.getDate() - n);
-    return d.toISOString().slice(0, 10);
-}
+// Intent extraction is handled exclusively by api/agents/intent-extractor.js.
 
 // POST /api/chat — Agentic search pipeline with iterative refinement
 app.post('/api/chat', async (req, res) => {
@@ -401,6 +342,8 @@ app.post('/api/chat', async (req, res) => {
                     elapsedMs: totalMs,
                     userId: LOCAL_USER_ID,
                     source: clientSource,
+                    promptVersions: result.promptVersions,
+                    promptMetrics: result.promptMetrics,
                 });
             } catch (dbErr) {
                 console.error('  [Local DB] Failed to log query:', dbErr.message);
@@ -461,6 +404,8 @@ app.post('/api/chat', async (req, res) => {
                     elapsedMs: totalMs,
                     userId: LOCAL_USER_ID,
                     source: clientSource,
+                    promptVersions: result.promptVersions,
+                    promptMetrics: result.promptMetrics,
                 });
             } catch (dbErr) {
                 console.error('  [Local DB] Failed to log query:', dbErr.message);
@@ -483,28 +428,10 @@ app.post('/api/chat', async (req, res) => {
             // --- Fallback: stuff all data into context (no vector store) ---
             const contextText = await buildFullContext();
 
-            const systemPrompt = `You are an expert change analysis assistant for the Microsoft Advertising engineering team.
-You have access to commit summaries across repositories.
-Use this data to answer questions about:
-- What changed on a specific day or date range
-- Which commits might be related to an incident or regression
-- Risk assessment of recent changes
-- Pilot flag and feature flag changes
-- Identifying suspect commits for latency, errors, or crashes
-
-When correlating incidents with changes, consider a 2-day buffer (releases take up to 2 days to reach production).
-Always cite specific commit SHAs and authors when referencing changes.
-For EVERY commit you mention, include a clickable markdown link using the URL from the data. Format: [shortId](url). If a URL is "N/A" or missing, just show the SHA.
-Be concise and actionable.
-
---- COMMIT SUMMARIES (full) ---
-${contextText}
---- END SUMMARIES ---`;
-
             const messages = [
-                { role: 'system', content: systemPrompt },
+                { role: 'system', content: FALLBACK_SYSTEM_PROMPT },
                 ...history.map(h => ({ role: h.role, content: h.content })),
-                { role: 'user', content: message },
+                { role: 'user', content: JSON.stringify({ query: message, commitSummaries: contextText }) },
             ];
 
             const t2 = Date.now();
@@ -533,6 +460,8 @@ ${contextText}
                     elapsedMs: Date.now() - t2,
                     userId: LOCAL_USER_ID,
                     source: clientSource,
+                    promptVersions: { fallback: 'fallback-v1' },
+                    promptMetrics: { structuredCalls: 0, structuredFallbacks: 0, parseErrors: 0, validationRejections: 0 },
                 });
             } catch (dbErr) {
                 console.error('  [Local DB] Failed to log query:', dbErr.message);
@@ -638,6 +567,47 @@ app.post('/api/investigate', async (req, res) => {
 
         const totalMs = Date.now() - t0;
         console.log(`  Investigation complete: ${totalMs}ms, confidence: ${result.confidence}, root cause: ${result.rootCauseCandidate || 'none'}`);
+        try {
+            const iterationLog = [{
+                iteration: 1,
+                stage: 'diff-investigator',
+                status: 'done',
+                promptVersion: result._promptVersion,
+                promptVariant: result._promptVariant,
+                structuredOutput: result._structuredOutput,
+                structuredFallback: result._structuredFallback,
+                parseError: result._parseError,
+                elapsed: result._elapsed,
+                promptTokens: result._promptTokens,
+                completionTokens: result._completionTokens,
+                totalTokens: result._tokens,
+            }];
+            logQuery({
+                id: investigateId,
+                query: message,
+                response: result.analysis,
+                confidence: result.confidence,
+                iterations: 1,
+                searchMethod: 'diff-investigation',
+                resultCount: result.suspectsAnalyzed,
+                iterationLog,
+                elapsedMs: totalMs,
+                userId: LOCAL_USER_ID,
+                source: req.headers['x-client'] === 'ui' ? 'ui' : 'api',
+                promptVersions: { 'diff-investigator': result._promptVersion },
+                promptMetrics: {
+                    structuredCalls: result._structuredOutput ? 1 : 0,
+                    structuredFallbacks: result._structuredFallback ? 1 : 0,
+                    parseErrors: result._parseError ? 1 : 0,
+                    validationRejections: 0,
+                    promptTokens: result._promptTokens || 0,
+                    completionTokens: result._completionTokens || 0,
+                    totalTokens: result._tokens || 0,
+                },
+            });
+        } catch (dbErr) {
+            console.error('  [Local DB] Failed to log investigation:', dbErr.message);
+        }
         res.json({
             queryId: investigateId,
             reply: result.analysis,
@@ -716,7 +686,7 @@ app.get('/api/feedback/recent', async (req, res) => {
 app.get('/api/metrics/usage', (req, res) => {
     try {
         const metrics = getUsageMetrics();
-        res.json(metrics);
+        res.json({ ...metrics, promptRegistry: getPromptRegistrySnapshot() });
     } catch (err) {
         console.error('Metrics error:', err);
         res.status(500).json({ error: 'Failed to get usage metrics' });

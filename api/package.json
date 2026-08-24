@@ -6,7 +6,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "eval:prompts": "node scripts/run-prompt-golden.js"
   },
   "dependencies": {
     "@cfworker/json-schema": "^4.1.1",

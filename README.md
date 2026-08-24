@@ -910,8 +910,18 @@ node scripts/reset-and-refresh.js --rebuild-embeddings
 | `RRF_K` | `20` | 用于短候选列表的排名融合平滑常量 |
 | `RRF_SECONDARY_WEIGHT` | `0.7` | 次要语义查询权重 |
 | `RRF_BUG_TITLE_WEIGHT` | `1.5` | 工作项标题权重 |
+| `PROMPT_EXPERIMENTS` | `{}` | Prompt candidate 流量 JSON，例如 `{"answer-synthesizer":10}` 表示 10% 稳定分桶 |
+| `PROMPT_EXPERIMENT_KILL_SWITCH` | `0` | 设为 `1` 时立即强制所有 Agent 使用 stable Prompt |
+| `PROMPT_AUTO_ROLLBACK_FAILURES` | `3` | Candidate 连续模型/解析失败或负反馈达到该次数后自动回滚 |
+| `PROMPT_EXPERIMENT_RESET_ROLLBACKS` | `0` | 设为 `1` 启动一次以清除持久化自动回滚状态 |
 | `ADO_PAT` / `ADO_BEARER_TOKEN` | （可选） | 启用实时 ADO 请求 |
 | `ENABLE_SCHEDULED_REFRESH` | `0` | 设为 `1` 以选择启用实时后台刷新 |
+
+Prompt 版本、实验 variant、结构化输出降级、解析错误、耗时和 token 会记录到 SQLite `prompt_events` 表，并显示在 Metrics 面板。离线 Prompt 门禁随 GitHub Actions 自动运行；配置 API key 后，可从 Actions 手动运行 Live Golden Eval。也可以本地执行：
+
+```bash
+npm run eval:prompts --prefix api -- --output prompt-eval-result.json
+```
 
 #### MCP 工具
 

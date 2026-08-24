@@ -1,0 +1,10 @@
+{
+  "datasetVersion": "v1",
+  "minimumPassRate": 0.8,
+  "maximumRegression": 0.05,
+  "reference": {
+    "model": null,
+    "passRate": null,
+    "recordedAt": null
+  }
+}

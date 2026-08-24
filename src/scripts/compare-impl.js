@@ -11,7 +11,7 @@
  * against the real (smart) diff for faithfulness / hallucination.
  */
 
-import { readFile, writeFile, mkdir } from 'fs/promises';
+import { writeFile, mkdir } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -23,14 +23,14 @@ import {
 } from '../services/ado-git-client.js';
 import {
     summarizeCommit,                 // OLD path (real)
-    COMMIT_SUMMARY_PROMPT,
 } from '../services/commit-summarizer.js';
+import { selectDomainKnowledge } from '../services/domain-knowledge.js';
+import { buildCommitSummarySystemPrompt } from '../prompts/commit-summary-prompt.js';
 import { classifyChanges, buildSkippedFilesSummary, MAX_FILES_FOR_DIFF, MAX_DIFF_SIZE } from '../services/diff-filter.js';
 import { buildSmartDiff } from '../services/diff-builder.js';
 import { llmHelper, llmHelperMini } from '../services/llm-helper.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DOMAIN_DIR = join(__dirname, '..', '..', 'docs', 'domain');
 
 function parseArgs(argv) {
     const o = { commit: null, repo: null, top: 0, out: null, concurrency: 1, delayMs: 0 };
@@ -52,11 +52,6 @@ async function withRetry(fn, tries = 6) {
         try { return await fn(); } catch (e) { last = e; await new Promise(r => setTimeout(r, 1500 * (i + 1))); }
     }
     throw last;
-}
-
-async function loadDomainKnowledge(repoName) {
-    try { return await readFile(join(DOMAIN_DIR, `${repoName}.md`), 'utf-8'); }
-    catch { return ''; }
 }
 
 /** NEW path: mirrors summarizeCommit but builds the diff via buildSmartDiff. */
@@ -111,8 +106,11 @@ async function summarizeCommitNew(repoConfig, commit) {
         '', '--- DIFF START ---', diffText, '--- DIFF END ---',
     ].join('\n');
 
-    const domain = await loadDomainKnowledge(repoConfig.name);
-    const systemPrompt = domain ? `${COMMIT_SUMMARY_PROMPT}\n\nDOMAIN KNOWLEDGE FOR ${repoConfig.name}:\n${domain}` : COMMIT_SUMMARY_PROMPT;
+    const domain = selectDomainKnowledge(repoConfig.name, {
+        changedFiles: changes.map(change => change.path),
+        commitMessage: commit.message,
+    });
+    const systemPrompt = buildCommitSummarySystemPrompt({ repoName: repoConfig.name, domainContext: domain });
     const response = await withRetry(() => llmHelper(systemPrompt, [{ role: 'user', content: userMessage }]));
 
     let summary;

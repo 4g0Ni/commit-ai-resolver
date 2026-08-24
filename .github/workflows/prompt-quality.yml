@@ -1,0 +1,58 @@
+name: Prompt Quality
+
+on:
+  pull_request:
+    paths:
+      - 'api/agents/**'
+      - 'api/scripts/run-prompt-golden.js'
+      - 'src/evals/**'
+      - 'src/prompts/**'
+      - 'src/tests/test-agent-prompts.js'
+      - 'src/tests/test-prompt-*.js'
+      - '.github/workflows/prompt-quality.yml'
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  offline-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install API dependencies
+        run: npm install --prefix api --no-audit --no-fund
+      - name: Validate prompt registry and golden dataset
+        run: |
+          node src/tests/test-prompt-registry.js
+          node src/tests/test-prompt-golden.js
+          node src/tests/test-agent-prompts.js
+          node src/tests/test-prompt-metrics-db.js
+
+  live-golden-gate:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    needs: offline-gate
+    runs-on: ubuntu-latest
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_FAST_MODEL: ${{ vars.OPENAI_FAST_MODEL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install API dependencies
+        run: npm install --prefix api --no-audit --no-fund
+      - name: Compare live model against golden baseline
+        if: ${{ env.OPENAI_API_KEY != '' }}
+        run: npm run eval:prompts --prefix api -- --output prompt-eval-result.json
+      - name: Explain skipped live gate
+        if: ${{ env.OPENAI_API_KEY == '' }}
+        run: echo "OPENAI_API_KEY is not configured; offline prompt gates still passed."
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: prompt-eval-result
+          path: prompt-eval-result.json

@@ -7,6 +7,11 @@ import Database from 'better-sqlite3';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { mkdirSync } from 'fs';
+import {
+    registerPromptRollbackListener,
+    reportPromptOutcome,
+    restorePromptRollback,
+} from '../src/prompts/prompt-registry.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_BASE = process.env.DATA_DIR || join(__dirname, '..', 'data');
@@ -30,6 +35,8 @@ CREATE TABLE IF NOT EXISTS chat_queries (
     work_item_id TEXT,
     work_item_title TEXT,
     elapsed_ms INTEGER,
+    prompt_versions TEXT,
+    prompt_metrics TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -41,9 +48,51 @@ CREATE TABLE IF NOT EXISTS chat_feedback (
     voted_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS prompt_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    query_id TEXT NOT NULL REFERENCES chat_queries(id) ON DELETE CASCADE,
+    iteration INTEGER,
+    agent TEXT NOT NULL,
+    prompt_version TEXT NOT NULL,
+    prompt_variant TEXT NOT NULL DEFAULT 'stable',
+    structured_output INTEGER NOT NULL DEFAULT 0,
+    fallback_used INTEGER NOT NULL DEFAULT 0,
+    parse_error INTEGER NOT NULL DEFAULT 0,
+    validation_rejections INTEGER NOT NULL DEFAULT 0,
+    elapsed_ms INTEGER,
+    prompt_tokens INTEGER,
+    completion_tokens INTEGER,
+    total_tokens INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS prompt_experiment_state (
+    agent TEXT PRIMARY KEY,
+    disabled INTEGER NOT NULL DEFAULT 0,
+    rollback_reason TEXT,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_chat_queries_created_at ON chat_queries(created_at);
 CREATE INDEX IF NOT EXISTS idx_chat_feedback_query_id ON chat_feedback(query_id);
+CREATE INDEX IF NOT EXISTS idx_prompt_events_query_id ON prompt_events(query_id);
+CREATE INDEX IF NOT EXISTS idx_prompt_events_agent_version ON prompt_events(agent, prompt_version);
 `);
+
+const savePromptRollback = db.prepare(`
+    INSERT INTO prompt_experiment_state (agent, disabled, rollback_reason, updated_at)
+    VALUES (?, 1, ?, datetime('now'))
+    ON CONFLICT(agent) DO UPDATE SET disabled = 1, rollback_reason = excluded.rollback_reason, updated_at = datetime('now')
+`);
+
+if (process.env.PROMPT_EXPERIMENT_RESET_ROLLBACKS === '1') {
+    db.exec('DELETE FROM prompt_experiment_state');
+} else {
+    for (const row of db.prepare('SELECT agent, rollback_reason FROM prompt_experiment_state WHERE disabled = 1').all()) {
+        restorePromptRollback(row.agent, row.rollback_reason);
+    }
+}
+registerPromptRollbackListener(({ agent, reason }) => savePromptRollback.run(agent, reason));
 
 // Add elapsed_ms column if missing (existing DBs)
 try { db.exec('ALTER TABLE chat_queries ADD COLUMN elapsed_ms INTEGER'); } catch {}
@@ -52,18 +101,42 @@ try { db.exec('ALTER TABLE chat_queries ADD COLUMN user_id TEXT'); } catch {}
 // Add source + tool_name for unified UI/API/MCP usage tracking
 try { db.exec("ALTER TABLE chat_queries ADD COLUMN source TEXT"); } catch {}
 try { db.exec("ALTER TABLE chat_queries ADD COLUMN tool_name TEXT"); } catch {}
+try { db.exec("ALTER TABLE chat_queries ADD COLUMN prompt_versions TEXT"); } catch {}
+try { db.exec("ALTER TABLE chat_queries ADD COLUMN prompt_metrics TEXT"); } catch {}
 db.exec("UPDATE chat_queries SET source = 'ui' WHERE source IS NULL");
 db.exec("CREATE INDEX IF NOT EXISTS idx_chat_queries_source ON chat_queries(source)");
 
 const insertQuery = db.prepare(`
-    INSERT INTO chat_queries (id, query, response, confidence, iterations, search_method, result_count, iteration_log, work_item_id, work_item_title, elapsed_ms, user_id, source, tool_name)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO chat_queries (id, query, response, confidence, iterations, search_method, result_count, iteration_log, work_item_id, work_item_title, elapsed_ms, user_id, source, tool_name, prompt_versions, prompt_metrics)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 
 const insertFeedback = db.prepare(`
     INSERT INTO chat_feedback (query_id, vote, comment)
     VALUES (?, ?, ?)
 `);
+
+const insertPromptEvent = db.prepare(`
+    INSERT INTO prompt_events (
+        query_id, iteration, agent, prompt_version, prompt_variant,
+        structured_output, fallback_used, parse_error, validation_rejections,
+        elapsed_ms, prompt_tokens, completion_tokens, total_tokens
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`);
+
+const insertQueryWithEvents = db.transaction((queryValues, iterationLog) => {
+    insertQuery.run(...queryValues);
+    for (const entry of iterationLog || []) {
+        if (entry.status !== 'done' || !entry.promptVersion) continue;
+        insertPromptEvent.run(
+            queryValues[0], entry.iteration || null, entry.stage, entry.promptVersion,
+            entry.promptVariant || 'stable', entry.structuredOutput ? 1 : 0,
+            entry.structuredFallback ? 1 : 0, entry.parseError ? 1 : 0,
+            entry.validationRejections || 0, entry.elapsed || null,
+            entry.promptTokens || null, entry.completionTokens || null, entry.totalTokens || null,
+        );
+    }
+});
 
 const getStats = db.prepare(`
     SELECT
@@ -78,7 +151,7 @@ const getRecent = db.prepare(`
     SELECT
         q.id, q.query, q.response, q.confidence, q.iterations,
         q.search_method, q.result_count, q.work_item_id, q.work_item_title,
-        q.created_at,
+        q.prompt_versions, q.prompt_metrics, q.created_at,
         f.vote, f.comment, f.voted_at
     FROM chat_queries q
     LEFT JOIN chat_feedback f ON f.query_id = q.id
@@ -86,16 +159,30 @@ const getRecent = db.prepare(`
     LIMIT ?
 `);
 
-export function logQuery({ id, query, response, confidence, iterations, searchMethod, resultCount, iterationLog, workItemId, workItemTitle, elapsedMs, userId, source, toolName }) {
-    insertQuery.run(id, query, response, confidence, iterations, searchMethod, resultCount, JSON.stringify(iterationLog || []), workItemId || null, workItemTitle || null, elapsedMs || null, userId || null, source || 'ui', toolName || null);
+export function logQuery({ id, query, response, confidence, iterations, searchMethod, resultCount, iterationLog, workItemId, workItemTitle, elapsedMs, userId, source, toolName, promptVersions, promptMetrics }) {
+    insertQueryWithEvents([
+        id, query, response, confidence, iterations, searchMethod, resultCount,
+        JSON.stringify(iterationLog || []), workItemId || null, workItemTitle || null,
+        elapsedMs || null, userId || null, source || 'ui', toolName || null,
+        promptVersions ? JSON.stringify(promptVersions) : null,
+        promptMetrics ? JSON.stringify(promptMetrics) : null,
+    ], iterationLog || []);
 }
 
 export function recordFeedback({ queryId, vote, comment }) {
     insertFeedback.run(queryId, vote, comment || null);
+    const candidateEvents = db.prepare(`
+        SELECT DISTINCT agent, prompt_variant
+        FROM prompt_events
+        WHERE query_id = ? AND prompt_variant = 'candidate'
+    `).all(queryId);
+    for (const event of candidateEvents) {
+        reportPromptOutcome(event.agent, event.prompt_variant, { failed: vote === 'down' });
+    }
 }
 
 export function logQueryStub({ id, query, response, confidence, searchMethod, source }) {
-    insertQuery.run(id, query || '', response || '', confidence || null, null, searchMethod || null, null, '[]', null, null, null, null, source || 'ui', null);
+    insertQuery.run(id, query || '', response || '', confidence || null, null, searchMethod || null, null, '[]', null, null, null, null, source || 'ui', null, null, null);
 }
 
 export function getFeedbackStats() {
@@ -218,6 +305,45 @@ function computeBlock(sourceFilter) {
     ).get().c;
     const retentionRate = totalUsers > 0 ? Math.round((returningUsers / totalUsers) * 10000) / 100 : 0;
 
+    const promptMetricRows = db.prepare(
+        `SELECT prompt_metrics FROM chat_queries WHERE prompt_metrics IS NOT NULL${andSource}`
+    ).all();
+    const promptQuality = promptMetricRows.reduce((totals, row) => {
+        try {
+            const value = JSON.parse(row.prompt_metrics);
+            totals.structuredCalls += Number(value.structuredCalls) || 0;
+            totals.structuredFallbacks += Number(value.structuredFallbacks) || 0;
+            totals.parseErrors += Number(value.parseErrors) || 0;
+            totals.validationRejections += Number(value.validationRejections) || 0;
+            totals.promptTokens += Number(value.promptTokens) || 0;
+            totals.completionTokens += Number(value.completionTokens) || 0;
+            totals.totalTokens += Number(value.totalTokens) || 0;
+        } catch { /* retain query telemetry even if an old row contains malformed JSON */ }
+        return totals;
+    }, {
+        structuredCalls: 0, structuredFallbacks: 0, parseErrors: 0, validationRejections: 0,
+        promptTokens: 0, completionTokens: 0, totalTokens: 0,
+    });
+
+    const promptBreakdown = db.prepare(`
+        SELECT e.agent, e.prompt_version AS version, e.prompt_variant AS variant,
+            COUNT(*) AS calls,
+            SUM(e.fallback_used) AS fallbacks,
+            SUM(e.parse_error) AS parse_errors,
+            SUM(e.validation_rejections) AS validation_rejections,
+            ROUND(AVG(e.elapsed_ms)) AS avg_elapsed_ms,
+            SUM(COALESCE(e.prompt_tokens, 0)) AS prompt_tokens,
+            SUM(COALESCE(e.completion_tokens, 0)) AS completion_tokens,
+            SUM(COALESCE(e.total_tokens, 0)) AS total_tokens,
+            SUM(CASE WHEN EXISTS (SELECT 1 FROM chat_feedback f WHERE f.query_id = e.query_id AND f.vote = 'up') THEN 1 ELSE 0 END) AS thumbs_up,
+            SUM(CASE WHEN EXISTS (SELECT 1 FROM chat_feedback f WHERE f.query_id = e.query_id AND f.vote = 'down') THEN 1 ELSE 0 END) AS thumbs_down
+        FROM prompt_events e
+        JOIN chat_queries q ON q.id = e.query_id
+        WHERE ${sourceFilter ? `q.source = '${sourceFilter}'` : '1=1'}
+        GROUP BY e.agent, e.prompt_version, e.prompt_variant
+        ORDER BY e.agent, calls DESC
+    `).all();
+
     return {
         summary: { total, today, thisWeek, thisMonth },
         activeUsers: { dau, wau, mau },
@@ -229,6 +355,8 @@ function computeBlock(sourceFilter) {
         dailyVolume,
         confidenceDist,
         methodBreakdown,
+        promptQuality,
+        promptBreakdown,
         feedback: {
             thumbsUp: feedbackStats.thumbs_up,
             thumbsDown: feedbackStats.thumbs_down,
@@ -271,6 +399,7 @@ export function getUsageMetrics() {
  * Delete all rows from chat_feedback and chat_queries tables.
  */
 export function clearDatabase() {
+    db.exec('DELETE FROM prompt_events');
     db.exec('DELETE FROM chat_feedback');
     db.exec('DELETE FROM chat_queries');
 }

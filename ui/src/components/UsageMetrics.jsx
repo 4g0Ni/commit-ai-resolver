@@ -23,6 +23,11 @@ function UsageMetrics({ onClose }) {
     const data = metrics?.[source];
     const showQualityPanels = source === 'all' || source === 'ui';
     const showToolBreakdown = source === 'mcp';
+    const promptQuality = data?.promptQuality || {};
+    const structuredAttempts = (promptQuality.structuredCalls || 0) + (promptQuality.structuredFallbacks || 0);
+    const fallbackRate = structuredAttempts > 0
+        ? Math.round((promptQuality.structuredFallbacks / structuredAttempts) * 1000) / 10
+        : 0;
 
     const maxVolume = data?.dailyVolume?.length
         ? Math.max(...data.dailyVolume.map(d => d.count))
@@ -255,6 +260,79 @@ function UsageMetrics({ onClose }) {
                                 </div>
                             </div>
                             )}
+                        </div>
+
+                        {/* Prompt operations */}
+                        <div className="usage-grid">
+                            <div className="usage-section">
+                                <h3 className="usage-section-title">Prompt Quality</h3>
+                                <div className="usage-fe-cards">
+                                    <div className="usage-fe-card">
+                                        <span className="usage-fe-label">Schema Calls</span>
+                                        <span className="usage-fe-value">{promptQuality.structuredCalls || 0}</span>
+                                    </div>
+                                    <div className="usage-fe-card">
+                                        <span className="usage-fe-label">Fallback Rate</span>
+                                        <span className="usage-fe-value">{fallbackRate}%</span>
+                                    </div>
+                                    <div className="usage-fe-card">
+                                        <span className="usage-fe-label">Parse Errors</span>
+                                        <span className="usage-fe-value">{promptQuality.parseErrors || 0}</span>
+                                    </div>
+                                    <div className="usage-fe-card">
+                                        <span className="usage-fe-label">Rejected IDs</span>
+                                        <span className="usage-fe-value">{promptQuality.validationRejections || 0}</span>
+                                    </div>
+                                </div>
+                                <div className="usage-rate-list">
+                                    <div className="usage-rate-row">
+                                        <span className="usage-rate-label">Prompt Tokens</span>
+                                        <span className="usage-rate-value">{(promptQuality.promptTokens || 0).toLocaleString()}</span>
+                                    </div>
+                                    <div className="usage-rate-row">
+                                        <span className="usage-rate-label">Completion Tokens</span>
+                                        <span className="usage-rate-value">{(promptQuality.completionTokens || 0).toLocaleString()}</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="usage-section">
+                                <h3 className="usage-section-title">Agent Prompt Versions</h3>
+                                {!data.promptBreakdown?.length ? (
+                                    <div className="usage-empty">No prompt events yet</div>
+                                ) : (
+                                    <div className="usage-method-list">
+                                        {data.promptBreakdown.map((item, i) => (
+                                            <div className="usage-method-row" key={`${item.agent}-${item.version}-${i}`}>
+                                                <span className="usage-method-name" title={`${item.calls} calls, ${item.total_tokens || 0} tokens`}>
+                                                    {item.agent}: {item.version} ({item.variant})
+                                                </span>
+                                                <span className="usage-method-count">
+                                                    {item.calls} · {item.avg_elapsed_ms != null ? `${(item.avg_elapsed_ms / 1000).toFixed(1)}s` : 'N/A'}
+                                                </span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="usage-section">
+                                <h3 className="usage-section-title">Experiment Status</h3>
+                                <div className="usage-method-list">
+                                    {Object.entries(metrics.promptRegistry || {}).map(([agent, item]) => (
+                                        <div className="usage-method-row" key={agent}>
+                                            <span className="usage-method-name" title={item.rollbackReason || ''}>
+                                                {agent}: {item.stableVersion}
+                                            </span>
+                                            <span className="usage-method-count">
+                                                {item.candidateDisabled || item.candidatePercent === 0
+                                                    ? 'stable'
+                                                    : `${item.candidatePercent}% candidate`}
+                                            </span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
                         </div>
 
                         {/* Engagement & Performance */}

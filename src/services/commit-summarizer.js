@@ -8,8 +8,18 @@ import { classifyChanges, buildSkippedFilesSummary, MAX_FILES_FOR_DIFF, MAX_DIFF
 import { isConfigFile, prettifyMinifiedXml, CONFIG_FILE_PATTERNS } from './config-files.js';
 import { buildSmartDiff } from './diff-builder.js';
 import { detectSharedInfra } from './commit-paths.js';
+import { selectDomainKnowledge } from './domain-knowledge.js';
+import {
+    COMMIT_SUMMARY_PROMPT,
+    COMMIT_SUMMARY_PROMPT_VERSION,
+    buildCommitSummarySystemPrompt,
+} from '../prompts/commit-summary-prompt.js';
+import {
+    applyPromptVariant,
+    reportPromptOutcome,
+    selectPromptVariant,
+} from '../prompts/prompt-registry.js';
 import { writeFile, mkdir } from 'fs/promises';
-import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -17,27 +27,6 @@ const RISK_RANK = { LOW: 0, MEDIUM: 1, HIGH: 2 };
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DIFFS_DIR = join(process.env.DATA_DIR || join(__dirname, '..', '..', 'data'), 'diffs');
-const DOMAIN_DIR = join(__dirname, '..', '..', 'docs', 'domain');
-
-// Cache domain knowledge per repo (loaded once per process)
-const domainKnowledgeCache = new Map();
-
-/**
- * Load domain knowledge doc for a repository.
- * @param {string} repoName
- * @returns {string} Domain knowledge text, or empty string if not found
- */
-function loadDomainKnowledge(repoName) {
-    if (domainKnowledgeCache.has(repoName)) return domainKnowledgeCache.get(repoName);
-    try {
-        const content = readFileSync(join(DOMAIN_DIR, `${repoName}.md`), 'utf-8');
-        domainKnowledgeCache.set(repoName, content);
-        return content;
-    } catch {
-        domainKnowledgeCache.set(repoName, '');
-        return '';
-    }
-}
 
 /** Save the full LLM input for a commit to disk for inspection. */
 async function saveLlmInput(repoName, commitId, systemPrompt, userMessage) {
@@ -53,112 +42,6 @@ async function saveLlmInput(repoName, commitId, systemPrompt, userMessage) {
 // Prompt templates
 // ---------------------------------------------------------------------------
 
-const COMMIT_SUMMARY_PROMPT = `You are a senior software engineer analyzing code changes in a Microsoft Advertising codebase.
-Your job is to summarize each commit's changes for an on-call DRI investigating production incidents.
-
-For each commit diff provided, produce a JSON response with EXACTLY these fields:
-
-{
-  "title": "Concise one-line summary, max 80 chars. Be specific about WHAT changed, not just where.",
-  "summary": "2-3 sentences max. Focus on behavioral impact: what changed, what it affects, and any risk. Skip obvious context.",
-  "riskLevel": "LOW | MEDIUM | HIGH",
-  "affectedAreas": ["Max 3-4 areas. Use the most specific component name, not generic paths."],
-  "flags": ["Only ACTUAL flag/pilot names found literally in the diff. Never guess or invent flag names."],
-  "changeType": "code | config | mixed",
-  "configChanges": [{"key": "config key name", "action": "added|modified|removed", "from": "previous value if modified", "to": "new value", "detail": "behavioral impact"}],
-  "breakingChange": false
-}
-
-FIELD RULES:
-- "title": Max 80 chars. Start with a verb. Expand key acronyms. Bad: "Updates to campaign grid component". Good: "Add bulk edit drawer to campaign grid". Bad: "Add PMax support". Good: "Add Performance Max (PMax) Xbox campaign subtype".
-- "summary": Max 3 sentences. MUST include: (1) WHAT behavior changed, (2) WHO is affected (advertisers, agencies, internal teams, specific geo users — never omit this), (3) potential failure mode for MEDIUM+ risk. Skip listing files.
-- "riskLevel": See criteria below. When in doubt between MEDIUM and LOW, prefer LOW. When in doubt between MEDIUM and HIGH, prefer MEDIUM.
-- "affectedAreas": Max 4 items. Use feature names (e.g. "Campaign Grid", "Budget API"), not file paths.
-- "flags": ONLY include flag/pilot names that appear LITERALLY as string constants in the diff. If no flags exist, use empty array []. NEVER output "TBD", "unknown", or guessed names.
-- "changeType": "config" = ONLY config/pilot/flag files changed. "mixed" = both code + config. "code" = everything else.
-- "configChanges": Required when changeType is "config" or "mixed". Each entry: key (the SHORT flag/setting name — e.g., "NewGoogleLoginGSI" not "/Configuration/Flights/FlightSet[@name='NewGoogleLoginGSI']/Flight/@allocation"), action (added|modified|removed), from (old value if modified, omit if added), to (new value, omit if removed), detail (what this change does to production behavior). When multiple XML elements reference the same flag (feature declaration, flight set, ap-config override), emit ONE row with the flag name as key, not separate rows with XPath keys.
-- "breakingChange": true if the commit removes public APIs, changes function signatures used by other packages, alters DB schemas, removes feature gates without replacement, or changes shared contracts/interfaces. false otherwise.
-
-RISK LEVEL CRITERIA:
-- LOW: Tests only, documentation, comments, localization strings, version bumps, dependency updates, build/CI config, adding new code behind a feature flag (not yet enabled)
-- MEDIUM: Business logic in a single feature, new API parameters, UI behavior changes scoped to one page, pilot ramp changes < 50%
-- HIGH: Shared utility/infrastructure changes, auth/authz changes, DB schema, pilot ramp ≥ 50% or to 100%, removal of feature gates, error handling in critical paths, breaking contract changes
-
-IMPORTANT:
-- Be factual — ONLY describe what you see in the diff
-- If the diff is a lock file or auto-generated code, say so briefly and mark LOW
-- Do NOT speculate about intent or future plans
-- Do NOT invent flag names that don't appear in the code
-
-SUMMARY QUALITY RULES:
-- TITLE: Always expand acronyms in the title. Bad: "Add PMax Xbox subtype". Good: "Add Performance Max (PMax) Xbox campaign subtype support".
-- WHO: Every MEDIUM+ summary MUST name who is affected: "advertisers", "internal DRI team", "agency users", "India billing users", "Shopping campaign advertisers", etc. Be specific — "users" alone is too vague.
-- SCOPE: For config/pilot changes, ALWAYS state rollout scope: "5% rollout in prod", "SI only", "behind EnableFoo flag", "GA'd to 100%". Never leave scope ambiguous.
-- FAILURE: For MEDIUM+ risk, include a concrete failure scenario: "could cause the inline budget suggestion table to disappear" not just "could break things".
-- ACRONYMS: Always explain domain acronyms on first use in the summary (e.g., "OMS (Order Management System)", "PMax (Performance Max)", "UET (Universal Event Tracking)", "FDP (Fast Data Pipeline)").
-- FEATURES: Use user-facing feature names, not file paths or component names. "Campaign Grid budget editing" not "FluentCampaignsPage budget repo".
-- FLAGS: Briefly state what each flag gates (e.g., "EnablePMaxGoals — gates PMax goal-based bidding"). If a flag is being removed/GA'd, say "ships to all users".
-- BREAKING: Specify what callers or contracts are affected and the blast radius.
-
-CONFIG/PILOT CHANGE EXTRACTION:
-- "config" changeType means PRODUCTION FEATURE FLAGS and PILOT SETTINGS that control user-facing behavior. It does NOT mean any YAML/JSON/XML file.
-- For config files (DynamicConfig, sharedfeatures.config, appsettings, .cscfg):
-  - Extract EVERY feature flag/pilot key that was added, modified, or removed
-  - For modified keys: include "from" (old value) and "to" (new value) — e.g., from "0" to "50", from "false" to "true"
-  - For pilot/feature ramp changes: state the percentage change and who it affects
-  - changeType MUST be "config" or "mixed" for these files
-- Config changes that increase rollout (0→50%, false→true, adding new flag) = higher risk
-- Config changes that decrease rollout (50%→0%, true→false, removing flag) = note as rollback
-- Deployment scripts (PowerShell, bash) that programmatically modify Web.config or other config files at deploy time ALSO count as config changes. If a script updates keys like CampaignResourcesContainer, NewWebUIResourceContainer, etc., include them in configChanges with action "modified" and detail explaining the deployment-time behavior change. Use "set at deploy time" for from/to when values are dynamic.
-
-WHAT IS NOT A CONFIG CHANGE (do NOT use changeType "config" or "mixed" for these):
-- Kubernetes/Helm infrastructure: AFD custom domains, ingress rules, replica counts, resource limits, image digests/tags, pod specs, service definitions, Helm chart values. These are INFRASTRUCTURE, not feature flags. Use changeType "code".
-- Agent/AI workflow files: project-config.json, pipeline-config.json, instruction.md, skill definitions, agentic workflow prompts. These are DEVELOPER TOOLING, not production config. Use changeType "code".
-- AKS packaging artifacts: serviceConfig.ini, build dependencies, package folder layouts, config flattener file lists. These are BUILD/DEPLOY scaffolding, not feature flags. Use changeType "code".
-- Dependabot or automated dependency bumps (image digests, package versions). Use changeType "code".
-
-TEST FILE HANDLING (audit-derived, 2026-05-15):
-- Files matching /test/, /tests/, /jest/, /selenium/, /cloud-test/, .test.{js,ts,jsx,tsx}, .spec.{js,ts}, *-tests.{js,ts}, *-test-* are TEST CODE.
-- For commits where the ONLY changed files are tests: riskLevel "LOW" unless the test reveals a behavior change in shared/production code. Lead the summary with "Test coverage for X" or "Adds E2E suite for Y" — do NOT describe test code as if it were production logic.
-- In affectedAreas, name the production area being tested ("Campaign Grid", not "campaign-grid-tests.js"). Never put the test framework or filename in affectedAreas.
-- For mixed test+production commits: focus the summary on the production change. Mention tests only if they materially expand coverage of a risky area (auth, billing, pilot-gated paths).
-- Test mocks, fixtures, and selenium page objects are still test code — same rules apply.
-
-BUILD SCRIPT HANDLING:
-- gulpfile.js, .buildxl.pipeline.config.js, build-and-deploy.{ps1,sh}, build.cake, and similar build orchestration files affect WHAT gets built and tested, but not the runtime product. Use changeType "code", riskLevel typically LOW.
-- Risk MEDIUM only if the change enables/disables major test suites in CI, alters deploy targets/environments, or removes packages from the build pipeline.
-- ALWAYS state in the summary which packages/areas the build change scopes — e.g., "excludes adsappsbae from BuildXL pipeline" not just "updates pipeline config".
-
-PACKAGE.JSON CHANGES:
-- A package.json with ONLY "version", "dependencies", "devDependencies", or "peerDependencies" changes is a dependency bump. Use riskLevel LOW, summary "Bumps <pkg> from X.Y.Z to A.B.C in <package-name>". Do not invent feature impact.
-- A package.json with changes to "scripts", "main", "exports", or "files" is a real packaging/runtime change — keep risk MEDIUM and describe the consumer impact (which scripts run differently, which exports moved).
-
-DESIGN-DOC FILES (.design-docs/, knowledge-docs/, knowledge.md):
-- These are planning/reference artifacts. Use changeType "code", riskLevel LOW.
-- Title prefix: "Design doc:" or "Plan:" — never describe them as feature work or imply the documented feature has shipped.
-- Do NOT include the documented feature in affectedAreas unless production code in the same commit also touches it.
-
-CONFIG KEY NAMING:
-- Use the SHORT flag/setting name, not XPath or XML path. Example: use "NewGoogleLoginGSI" not "/Configuration/Features/NewGoogleLoginGSI/@value" or "FlightSet[@name='NewGoogleLoginGSI']".
-- When a commit adds or removes a feature flag that has multiple XML elements (feature declaration + flight set + ap-config override), emit ONE configChange row with the flag name as key, not separate rows per XML element.
-- For sharedfeatures.config: the key is the Feature name attribute (e.g., "NewGoogleLoginGSI", "AdsCopilotProtocolMigration").
-- For Dynamic.config: the key is the setting name attribute.
-- For .cscfg: the key is the Setting name attribute.
-
-REPO-SPECIFIC CONFIG DETECTION RULES:
-- AdsAppUI: Config/pilot files are .cscfg, .csdef, Web.config, appsettings*.json, sharedfeatures.config, AllowedFeature.cs, PermissionProvider.cs, IPermissionProvider.cs. These control pilot flags and feature rollout for the UI. NOT config: serviceConfig.ini, build packaging scripts, AKS deployment artifacts.
-- AdsAppsMT: Config/pilot files are ONLY Dynamic.config, *Dynamic.config, DynamicConfigValues.cs. These control backend feature flags. NOT config: helm-*.yaml, values.yaml, Kubernetes manifests, Dockerfiles, agent/*.json, agent/*.md — these are infrastructure/tooling, not feature flags. Use changeType "code" for Helm/k8s/agent changes.
-- AdsAppsCampaignUI: Do NOT classify changes as "config" or "mixed" changeType. This repo does NOT contain pilot/config controls — pilots are managed in AdsAppUI server-side. Always use changeType "code" for this repo.
-- AnB: Config/pilot files are appsettings*.json, Web.config, *.cscfg. NOT config: build scripts, pipeline YAML. Use changeType "code" for build/deploy changes.
-- AdsAppsDB: Do NOT classify changes as "config" or "mixed" changeType. This is a database repo — stored procedures, migrations, and schema changes are all "code". Always use changeType "code" for this repo.
-
-ENVIRONMENT-SPECIFIC CONFIG EXTRACTION:
-- When .cscfg filenames contain environment info (e.g., "ServiceConfiguration.EastUS.SI.cscfg", "ServiceConfiguration.WestUS.Prod.cscfg"), include the environment in each configChange's "detail" field — e.g., "Enabled in EastUS SI environment".
-- When multiple environments are changed for the same key, emit one configChange row PER environment (not one combined row).
-- For Dynamic.config XML files: these may be minified on a single line. Look for XML attribute changes like enabled="true/false", value="...", rollout="...". Extract the full key name and per-environment overrides.
-- Common environment naming: SI = System Integration (staging), Prod = Production. Filename patterns: EastUS.SI, WestUS.Prod, EastUS2.Prod, NorthEurope.SI, etc.
-
-Respond with valid JSON only, no markdown fencing.`;
 
 /**
  * Summarize a single commit using LLM, with diff filtering.
@@ -255,10 +138,15 @@ async function summarizeCommit(repoConfig, commit) {
         ].join('\n');
 
         // Save LLM input for inspection
-        const domainContext = loadDomainKnowledge(repoConfig.name);
-        const systemPrompt = domainContext
-            ? `${COMMIT_SUMMARY_PROMPT}\n\nDOMAIN KNOWLEDGE FOR ${repoConfig.name}:\n${domainContext}`
-            : COMMIT_SUMMARY_PROMPT;
+        const domainContext = selectDomainKnowledge(repoConfig.name, {
+            changedFiles,
+            commitMessage: commit.message,
+        });
+        const prompt = selectPromptVariant('commit-summary', commit.commitId);
+        const systemPrompt = applyPromptVariant(buildCommitSummarySystemPrompt({
+            repoName: repoConfig.name,
+            domainContext,
+        }), prompt);
         await saveLlmInput(repoConfig.name, commit.commitId, systemPrompt, userMessage);
 
         const tLlm = Date.now();
@@ -274,7 +162,9 @@ async function summarizeCommit(repoConfig, commit) {
         let summary;
         try {
             summary = JSON.parse(response);
+            reportPromptOutcome('commit-summary', prompt.variant, { failed: false });
         } catch {
+            reportPromptOutcome('commit-summary', prompt.variant, { failed: true });
             summary = {
                 title: commit.title,
                 summary: response,
@@ -286,6 +176,8 @@ async function summarizeCommit(repoConfig, commit) {
                 breakingChange: false,
             };
         }
+        summary._promptVersion = prompt.version;
+        summary._promptVariant = prompt.variant;
 
         // Fix 2: Shared-infrastructure escalation. The PR message states INTENT,
         // but the changed-file list states BLAST RADIUS. When a commit edits
@@ -396,4 +288,13 @@ async function summarizeCommits(repoConfig, commits, onProgress, concurrency = 6
     return results;
 }
 
-export { summarizeCommit, summarizeCommits, fetchFilteredDiffs, COMMIT_SUMMARY_PROMPT, isConfigFile, prettifyMinifiedXml, CONFIG_FILE_PATTERNS };
+export {
+    summarizeCommit,
+    summarizeCommits,
+    fetchFilteredDiffs,
+    COMMIT_SUMMARY_PROMPT,
+    COMMIT_SUMMARY_PROMPT_VERSION,
+    isConfigFile,
+    prettifyMinifiedXml,
+    CONFIG_FILE_PATTERNS,
+};
