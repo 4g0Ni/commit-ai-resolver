@@ -1,5 +1,7 @@
 # Commit AI Resolver — 产品规格说明
 
+> 当前仓库默认以公开 `facebook/react` commit corpus 运行离线 demo；下文涉及原公司 ADO 仓库的内容属于历史产品背景，不是当前离线数据依赖。
+
 ## 1. 概述
 
 **Commit AI Resolver** 是一个由 LLM 驱动的每日变更跟踪与回归诊断系统。它会自动收集、总结并索引多个仓库中的每日代码变更和配置差异，然后通过带有交互式 LLM 聊天界面的 React 仪表板呈现这些信息，使工程师能够快速分析生产事故与近期部署之间的关联。
@@ -19,6 +21,19 @@
 | 本地运行环境 | ✅ 已完成 | 匿名 localhost API + UI；外部提供商集成为可选项 |
 | C2C Cosmos DB 试点跟踪器 | 🚫 已移除（ROI 较低） | DB 级试点渐进发布跟踪 — 已取消范围 |
 | 可查询存储 | ✅ 已完成 | 每日 JSON 文件 + SQLite 向量存储（按作者/仓库/日期进行 SQL 筛选） |
+| RAG Eval Harness | ✅ 已完成 | 75 条公开验证集、dev/test 切分、分层检索指标、Evidence Gate、Agent batch runner 与 CI gate |
+
+### 当前离线评测
+
+评测说明、数据标签策略和命令见 [`src/eval/README.md`](src/eval/README.md)。常用命令：
+
+```powershell
+cd src
+npm run eval:generate
+npm run test:eval
+npm run eval:full -- --device cuda
+npm run eval:agent -- --base-url http://127.0.0.1:4399 --split test --repeat 3
+```
 
 ### 范围内的仓库
 

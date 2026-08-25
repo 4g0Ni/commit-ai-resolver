@@ -40,6 +40,7 @@ const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4.1';
 const OPENAI_FAST_MODEL = process.env.OPENAI_FAST_MODEL || 'gpt-4.1-mini';
 const EMBEDDING_CONFIG = getEmbeddingConfig();
+const AGENT_MAX_ITERATIONS = Number.parseInt(process.env.AGENT_MAX_ITERATIONS || '3', 10);
 const AI_CONFIGURED = Boolean(process.env.OPENAI_API_KEY || OPENAI_BASE_URL);
 const ADO_CONFIGURED = Boolean(process.env.ADO_PAT || process.env.ADO_BEARER_TOKEN);
 
@@ -271,6 +272,7 @@ app.post('/api/chat', async (req, res) => {
 
         const queryId = randomUUID();
         const wantsStream = req.headers.accept?.includes('text/event-stream');
+        const wantsEvalTrace = req.headers['x-eval-harness'] === '1';
         const clientSource = req.headers['x-client'] === 'ui' ? 'ui' : 'api';
 
         if (useVectors && wantsStream) {
@@ -299,7 +301,7 @@ app.post('/api/chat', async (req, res) => {
                 buildFullContext,
                 query: message,
                 history,
-                maxIterations: 5,
+                maxIterations: AGENT_MAX_ITERATIONS,
                 workItemContext,
                 correlationId: queryId,
                 onProgress: (iteration, stage, details) => {
@@ -327,26 +329,21 @@ app.post('/api/chat', async (req, res) => {
             const totalMs = Date.now() - t0;
             console.log(`  Agentic search (SSE): ${result.searchMethod}, ${result.iterations} iteration(s), ${totalMs}ms`);
 
-            try {
-                logQuery({
-                    id: queryId,
-                    query: message,
-                    response: result.reply,
-                    confidence: result.confidence,
-                    iterations: result.iterations,
-                    searchMethod: result.searchMethod,
-                    resultCount: result.resultCount,
-                    iterationLog: result.iterationLog,
-                    workItemId: workItemContext?.id?.toString(),
-                    workItemTitle: workItemContext?.title,
-                    elapsedMs: totalMs,
-                    userId: LOCAL_USER_ID,
-                    source: clientSource,
-                    promptVersions: result.promptVersions,
-                    promptMetrics: result.promptMetrics,
-                });
-            } catch (dbErr) {
-                console.error('  [Local DB] Failed to log query:', dbErr.message);
+            if (!wantsEvalTrace) {
+                try {
+                    logQuery({
+                        id: queryId, query: message, response: result.reply,
+                        confidence: result.confidence, iterations: result.iterations,
+                        searchMethod: result.searchMethod, resultCount: result.resultCount,
+                        iterationLog: result.iterationLog,
+                        workItemId: workItemContext?.id?.toString(), workItemTitle: workItemContext?.title,
+                        elapsedMs: totalMs, userId: LOCAL_USER_ID, source: clientSource,
+                        promptVersions: result.promptVersions,
+                        promptMetrics: result.promptMetrics,
+                    });
+                } catch (dbErr) {
+                    console.error('  [Local DB] Failed to log query:', dbErr.message);
+                }
             }
 
             sendEvent('complete', {
@@ -378,7 +375,7 @@ app.post('/api/chat', async (req, res) => {
                 buildFullContext,
                 query: message,
                 history,
-                maxIterations: 5,
+                maxIterations: AGENT_MAX_ITERATIONS,
                 workItemContext,
                 correlationId: queryId,
                 onProgress: (iteration, stage, details) => {
@@ -389,26 +386,21 @@ app.post('/api/chat', async (req, res) => {
             console.log(`  Agentic search: ${result.searchMethod}, ${result.iterations} iteration(s), ${totalMs}ms`);
 
             // Log to the local usage database.
-            try {
-                logQuery({
-                    id: queryId,
-                    query: message,
-                    response: result.reply,
-                    confidence: result.confidence,
-                    iterations: result.iterations,
-                    searchMethod: result.searchMethod,
-                    resultCount: result.resultCount,
-                    iterationLog: result.iterationLog,
-                    workItemId: workItemContext?.id?.toString(),
-                    workItemTitle: workItemContext?.title,
-                    elapsedMs: totalMs,
-                    userId: LOCAL_USER_ID,
-                    source: clientSource,
-                    promptVersions: result.promptVersions,
-                    promptMetrics: result.promptMetrics,
-                });
-            } catch (dbErr) {
-                console.error('  [Local DB] Failed to log query:', dbErr.message);
+            if (!wantsEvalTrace) {
+                try {
+                    logQuery({
+                        id: queryId, query: message, response: result.reply,
+                        confidence: result.confidence, iterations: result.iterations,
+                        searchMethod: result.searchMethod, resultCount: result.resultCount,
+                        iterationLog: result.iterationLog,
+                        workItemId: workItemContext?.id?.toString(), workItemTitle: workItemContext?.title,
+                        elapsedMs: totalMs, userId: LOCAL_USER_ID, source: clientSource,
+                        promptVersions: result.promptVersions,
+                        promptMetrics: result.promptMetrics,
+                    });
+                } catch (dbErr) {
+                    console.error('  [Local DB] Failed to log query:', dbErr.message);
+                }
             }
 
             res.json({
@@ -423,6 +415,17 @@ app.post('/api/chat', async (req, res) => {
                 suspects: result.suspects || [],
                 workItem: result.workItem || undefined,
                 ...(result.type === 'clarification' ? { question: result.question } : {}),
+                ...(wantsEvalTrace ? {
+                    iterationLog: result.iterationLog || [],
+                    evidenceGate: result.evidenceGate || null,
+                    evalMetadata: {
+                        chatModel: OPENAI_MODEL,
+                        fastModel: OPENAI_FAST_MODEL,
+                        embeddingModel: EMBEDDING_CONFIG.model,
+                        embeddingDimensions: EMBEDDING_CONFIG.dimensions,
+                        maxIterations: AGENT_MAX_ITERATIONS,
+                    },
+                } : {}),
             });
         } else {
             // --- Fallback: stuff all data into context (no vector store) ---

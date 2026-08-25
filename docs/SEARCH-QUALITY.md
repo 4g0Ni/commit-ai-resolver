@@ -1,5 +1,7 @@
 # Search Quality Requirements & Test Plan
 
+> **Legacy reference (private corpus, no longer runnable).** The repositories, dates, and manual scores below came from the original company-internal deployment and are retained only as historical design context. The active offline eval source of truth is [`src/eval/README.md`](../src/eval/README.md) plus the versioned `public-react-v1` manifest and baseline. Do not use the legacy scores below as current regression gates.
+
 ## Overview
 
 This document defines the fundamental search use cases for the Commit AI Resolver's agentic search pipeline, a quality scoring rubric, and baseline/post-improvement test results. It serves as the single source of truth for what the search system must accomplish and how quality is measured.

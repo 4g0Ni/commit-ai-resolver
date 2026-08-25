@@ -1,0 +1,2 @@
+{"caseId":"sha-001","reply":"The relevant commit is 9faf1f39698463cd5220e58a5d325c8e2c006997.","confidence":0.9,"iterations":1,"iterationLog":[]}
+{"caseId":"negative-001","reply":"No matching commit evidence was found in the indexed corpus.","confidence":0.8,"iterations":1,"iterationLog":[]}

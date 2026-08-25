@@ -10,7 +10,13 @@
     "generate-data": "node scripts/generate-sample-data.js",
     "import-public": "node scripts/import-public-commits.js",
     "refresh": "node scripts/scheduled-refresh.js",
-    "refresh:loop": "node scripts/scheduled-refresh.js --loop 60"
+    "refresh:loop": "node scripts/scheduled-refresh.js --loop 60",
+    "eval:generate": "node eval/generate-cases.js",
+    "eval:index": "node eval/run-eval.js --mode index",
+    "eval:lexical": "node eval/run-eval.js --mode lexical",
+    "eval:full": "node eval/run-eval.js --mode all",
+    "eval:agent": "node eval/run-agent-eval.js",
+    "test:eval": "node tests/test-eval-metrics.js && node tests/test-evidence-gate.js && node tests/test-evidence-gate-orchestrator.js && node tests/test-agent-eval-runner.js"
   },
   "dependencies": {
     "apache-arrow": "^18.1.0",

@@ -18,6 +18,7 @@ const {
     upsertVectors,
     searchVectors,
     searchLexical,
+    lookupByCommitIds,
     getVectorStats,
     closeVectorStore,
 } = await import('../services/vector-store.js');
@@ -68,6 +69,12 @@ try {
 
     const lexical = await searchLexical('AuthConfig.ts rollout', { repo: 'demo/ui', topK: 5 });
     assert(lexical[0]?.id === 'aaaaaaaa', 'FTS5 retrieves an exact code/path term');
+
+    const fullShaLookup = await lookupByCommitIds(['a'.repeat(40)]);
+    assert(fullShaLookup.length === 1 && fullShaLookup[0].commitId === 'a'.repeat(40), 'full SHA lookup remains exact when short IDs collide across repositories');
+
+    const shortShaLookup = await lookupByCommitIds(['aaaaaaaa']);
+    assert(shortShaLookup.length === 2, 'short SHA lookup returns matching commits across repositories');
 
     const filtered = await searchVectors([0, 1, 0, 0], {
         repo: 'demo/ui', dateFrom: '2021-06-02', dateTo: '2021-06-02', topK: 5, minScore: 0,

@@ -451,10 +451,24 @@ async function lookupByCommitIds(shortIds) {
     if (!shortIds || shortIds.length === 0) return [];
     const db = getDb();
 
-    const placeholders = shortIds.map(() => '?').join(', ');
+    // Preserve a full SHA for exact matching. Short SHAs are matched as an ID
+    // prefix because callers commonly provide seven or eight characters.
+    const normalizedIds = [...new Set(shortIds.map(value => String(value).trim().toLowerCase()).filter(Boolean))];
+    if (normalizedIds.length === 0) return [];
+    const clauses = [];
+    const params = [];
+    for (const value of normalizedIds) {
+        if (value.length > 8) {
+            clauses.push('lower(commitId) = ?');
+            params.push(value);
+        } else {
+            clauses.push('lower(id) LIKE ?');
+            params.push(`${value}%`);
+        }
+    }
     const rows = db.prepare(
-        `SELECT id, commitId, repo, date, author, text, metadata FROM commit_metadata WHERE id IN (${placeholders})`
-    ).all(...shortIds);
+        `SELECT id, commitId, repo, date, author, text, metadata FROM commit_metadata WHERE ${clauses.join(' OR ')}`
+    ).all(...params);
 
     return rows.map(row => ({
         id: row.id,

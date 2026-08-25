@@ -1,0 +1,32 @@
+name: Eval smoke
+
+on:
+  pull_request:
+    paths:
+      - "src/eval/**"
+      - "src/services/vector-store.js"
+      - "src/services/rank-fusion.js"
+      - "src/tests/test-eval-metrics.js"
+      - "src/tests/test-evidence-gate.js"
+      - "src/tests/test-evidence-gate-orchestrator.js"
+      - "src/tests/test-agent-eval-runner.js"
+      - "src/tests/test-hybrid-search.js"
+      - "src/package*.json"
+  workflow_dispatch:
+
+jobs:
+  deterministic-eval:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: src/package-lock.json
+      - run: npm ci
+      - run: npm run test:eval
+      - run: node tests/test-hybrid-search.js

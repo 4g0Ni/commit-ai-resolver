@@ -4,7 +4,7 @@
  * Coordinates the 4-agent pipeline with iterative refinement:
  *   Intent Extractor → Extraction Analyzer → RAG Search → Answer Synthesizer → Answer Evaluator
  *
- * Max 5 iterations per query. Returns best answer found or a clarification question.
+ * Max 3 iterations per query by default. Returns best answer found or a clarification question.
  */
 
 import { extractIntent } from './intent-extractor.js';
@@ -12,6 +12,7 @@ import { synthesizeAnswer, synthesizeAnswerStream } from './answer-synthesizer.j
 import { evaluateAnswer } from './answer-evaluator.js';
 import { FALLBACK_SYSTEM_PROMPT } from './synthesis-prompt.js';
 import { fuseRankedResults } from '../../src/services/rank-fusion.js';
+import { evaluateEvidence } from '../../src/services/evidence-gate.js';
 
 const RRF_K = Number.parseInt(process.env.RRF_K || '20', 10);
 const SECONDARY_QUERY_WEIGHT = Number.parseFloat(process.env.RRF_SECONDARY_WEIGHT || '0.7');
@@ -36,7 +37,7 @@ function daysBefore(n, referenceDate = new Date().toISOString().slice(0, 10)) {
  * @param {Function} params.buildFullContext - Async function: () => string (fallback)
  * @param {string} params.query - User's question
  * @param {Array} params.history - Conversation history
- * @param {number} params.maxIterations - Max loop iterations (default: 5)
+ * @param {number} params.maxIterations - Max loop iterations (default: 3)
  * @param {Function} params.onProgress - Optional callback: (iteration, stage, details) => void
  * @param {Function} params.onToken - Optional callback for streaming synthesizer tokens: (token: string) => void
  * @returns {Promise<object>} { type: 'answer'|'clarification', reply, searchMethod, iterations, ... }
@@ -61,7 +62,7 @@ export async function agenticSearch({
     let bestAnswer = null;
     let bestScore = 0;
     let bestResults = [];
-    let prevResultCount = 0;
+    let prevResultKeys = null;
     const iterationLog = [];
     const pipelineStart = Date.now();
 
@@ -141,6 +142,18 @@ export async function agenticSearch({
             promptTokens: intent._promptTokens,
             completionTokens: intent._completionTokens,
             totalTokens: intent._tokens,
+            intent: {
+                author: intent.author || null,
+                repo: intent.repo || null,
+                dateFrom: intent.dateFrom || null,
+                dateTo: intent.dateTo || null,
+                riskLevel: intent.riskLevel || null,
+                changeType: intent.changeType || null,
+                commitIds: intent.commitIds || [],
+                searchQuery: intent.searchQuery,
+                secondarySearchQuery: intent.secondarySearchQuery || null,
+                verdict: intent.verdict,
+            },
         });
         console.log(`  [Intent] searchQuery: "${intent.searchQuery}"`);
         if (intent.secondarySearchQuery) console.log(`  [Intent] secondarySearchQuery: "${intent.secondarySearchQuery}"`);
@@ -228,7 +241,11 @@ export async function agenticSearch({
         const allResultLists = [{ results: primaryResults, weight: 1, channel: 'dense-primary' }];
         if (lexicalResults.length > 0) {
             allResultLists.push({ results: lexicalResults, weight: 1, channel: 'lexical-fts5' });
-            log(i, 'rag-search-lexical', { status: 'done', resultCount: lexicalResults.length });
+            log(i, 'rag-search-lexical', {
+                status: 'done',
+                resultCount: lexicalResults.length,
+                rankedIds: lexicalResults.map(result => `${result.repo}:${result.id}`),
+            });
         }
 
         // Second search using LLM secondary query — may bridge semantic gap
@@ -238,7 +255,10 @@ export async function agenticSearch({
             const secondaryEmbedding = await embedQuery(intent.secondarySearchQuery);
             const secondaryResults = await searchVectors(secondaryEmbedding, broadSearchOpts);
             const secondaryMs = Date.now() - t2;
-            log(i, 'rag-search-secondary', { status: 'done', resultCount: secondaryResults.length, elapsed: secondaryMs });
+            log(i, 'rag-search-secondary', {
+                status: 'done', resultCount: secondaryResults.length, elapsed: secondaryMs,
+                rankedIds: secondaryResults.map(result => `${result.repo}:${result.id}`),
+            });
             allResultLists.push({ results: secondaryResults, weight: SECONDARY_QUERY_WEIGHT, channel: 'dense-secondary' });
         }
 
@@ -251,7 +271,10 @@ export async function agenticSearch({
             const titleEmbedding = await embedQuery(cleanTitle);
             const titleResults = await searchVectors(titleEmbedding, broadSearchOpts);
             const titleMs = Date.now() - t3;
-            log(i, 'rag-search-title', { status: 'done', resultCount: titleResults.length, elapsed: titleMs });
+            log(i, 'rag-search-title', {
+                status: 'done', resultCount: titleResults.length, elapsed: titleMs,
+                rankedIds: titleResults.map(result => `${result.repo}:${result.id}`),
+            });
             allResultLists.push({ results: titleResults, weight: BUG_TITLE_WEIGHT, channel: 'dense-bug-title' });
         }
 
@@ -271,10 +294,12 @@ export async function agenticSearch({
         const allCommitIds = [...new Set([...queryCommitIds, ...priorSuspectIds.filter(id =>
             query.toLowerCase().includes(id.slice(0, 7).toLowerCase())
         )])];
+        let directMatchCount = 0;
 
         if (allCommitIds.length > 0 && lookupByCommitIds) {
             log(i, 'commit-lookup', { status: 'running', commitIds: allCommitIds });
             const directMatches = await lookupByCommitIds(allCommitIds);
+            directMatchCount = directMatches.length;
             if (directMatches.length > 0) {
                 // Prepend direct matches, dedup against existing results
                 const existingIds = new Set(results.map(r => r.id));
@@ -287,15 +312,76 @@ export async function agenticSearch({
         }
 
         const topScores = results.slice(0, 5).map(r => r.score?.toFixed(3)).join(', ');
-        log(i, 'rag-search', { status: 'done', resultCount: results.length, embeddingMs, searchMs });
+        const rankedResults = results.slice(0, 50).map((result, rank) => ({
+            rank: rank + 1,
+            repo: result.repo,
+            id: result.id,
+            commitId: result.commitId,
+            score: result.score,
+            rrfScore: result._rrfScore,
+            channels: result._retrievalChannels,
+        }));
+        log(i, 'rag-search', {
+            status: 'done', resultCount: results.length, embeddingMs, searchMs,
+            filters: searchOpts,
+            rankedResults,
+        });
         if (results.length > 0) {
             console.log(`  [Search] ${results.length} results, top-5 scores: [${topScores}], date range: ${finalDateFrom || 'open'}..${finalDateTo || 'open'}`);
         }
 
-        // If vector search returned nothing and this is the first iteration, try full context
-        if (results.length === 0 && i === 1) {
-            log(i, 'fallback', { reason: 'no vector results' });
-            return await fallbackFullContext({ llm, buildFullContext, query, history, iterationLog, i });
+        const evidenceGate = evaluateEvidence({
+            query,
+            results,
+            denseResults: primaryResults,
+            lexicalResults,
+            filters: {
+                repo: intent.repo || undefined,
+                author: intent.author || undefined,
+                dateFrom: context.dateOverrides?.dateFrom || intent.dateFrom || undefined,
+                dateTo: context.dateOverrides?.dateTo || intent.dateTo || undefined,
+                riskLevel: intent.riskLevel || undefined,
+                changeType: intent.changeType || undefined,
+            },
+            directMatchCount,
+        });
+        log(i, 'evidence-gate', {
+            status: 'done',
+            verdict: evidenceGate.verdict,
+            evidenceScore: evidenceGate.evidenceScore,
+            reason: evidenceGate.reason,
+            features: evidenceGate.features,
+        });
+
+        if (evidenceGate.verdict === 'ASK_USER') {
+            const clarification = 'Could you share the affected feature or component, the symptom or error, and roughly when it started?';
+            return {
+                type: 'clarification',
+                question: clarification,
+                reply: clarification,
+                confidence: 0,
+                evidenceGate,
+                searchMethod: 'agentic',
+                iterations: i,
+                resultCount: results.length,
+                iterationLog,
+                ...buildPromptTelemetry(iterationLog),
+            };
+        }
+
+        if (evidenceGate.verdict === 'ABSTAIN') {
+            return {
+                type: 'answer',
+                reply: 'I could not find sufficiently strong commit evidence for this question in the indexed repository and date range. Try adding a component, file, error term, commit ID, or narrower time window.',
+                confidence: 0,
+                evidenceGate,
+                searchMethod: 'agentic',
+                iterations: i,
+                resultCount: results.length,
+                suspects: [],
+                iterationLog,
+                ...buildPromptTelemetry(iterationLog),
+            };
         }
 
         // --- Agent 3: Answer Synthesizer ---
@@ -379,9 +465,14 @@ export async function agenticSearch({
             return await formatAnswer(synthesis, 'agentic', i, iterationLog, 'Results may be incomplete — I searched with the best available context.', results, workItemContext, lookupByCommitIds);
         }
 
-        // RETRY — but detect stale retries (same result count as previous iteration)
-        if (results.length <= prevResultCount && results.length > 0 && i > 1) {
-            console.log(`  [Pipeline] STALE RETRY — result count unchanged (${results.length}), returning as PARTIAL`);
+        // RETRY — detect a genuinely stale result set rather than only comparing counts.
+        const resultKeys = new Set(results.map(result => `${result.repo}:${result.id}`));
+        const sameResultSet = prevResultKeys
+            && resultKeys.size === prevResultKeys.size
+            && [...resultKeys].every(key => prevResultKeys.has(key));
+        if (sameResultSet && results.length > 0 && i > 1) {
+            console.log(`  [Pipeline] STALE RETRY — result set unchanged (${results.length}), returning as PARTIAL`);
+            log(i, 'stale-retry', { resultCount: results.length, reason: 'unchanged-result-set' });
             if (onToken) {
                 log(i, 'answer-synthesizer', { status: 'streaming', resultCount: results.length });
                 const streamedSynthesis = await synthesizeAnswerStream(llm, results, intent, context, i, onToken);
@@ -390,7 +481,7 @@ export async function agenticSearch({
             }
             return await formatAnswer(synthesis, 'agentic', i, iterationLog, 'Results may be incomplete — I searched with the best available context.', results, workItemContext, lookupByCommitIds);
         }
-        prevResultCount = results.length;
+        prevResultKeys = resultKeys;
 
         // RETRY — prepare feedback for next iteration
         console.log(`  [Pipeline] RETRY — will retry (iteration ${i} → ${i + 1})`);

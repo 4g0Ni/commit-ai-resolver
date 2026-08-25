@@ -1,0 +1,2 @@
+{"caseId":"sha-001","intent":{"commitIds":["9faf1f39698463cd5220e58a5d325c8e2c006997"],"verdict":"GOOD"}}
+{"caseId":"negative-001","intent":{"commitIds":[],"verdict":"GOOD"}}
