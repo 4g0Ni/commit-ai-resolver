@@ -24,6 +24,7 @@ const {
 } = await import('../services/vector-store.js');
 const { fuseRankedResults } = await import('../services/rank-fusion.js');
 const { buildSearchableCommitText } = await import('../services/commit-embedding-text.js');
+const { buildEmbeddingRequest } = await import('../services/embedding-config.js');
 
 let passed = 0;
 function assert(condition, message) {
@@ -33,6 +34,9 @@ function assert(condition, message) {
 }
 
 try {
+    const embeddingRequest = buildEmbeddingRequest(['find auth changes'], 'query');
+    assert(embeddingRequest.encoding_format === 'float', 'embedding requests explicitly use float encoding');
+
     const searchableText = buildSearchableCommitText({
         author: 'Alice', date: '2021-06-01', message: 'Fix AuthConfig rollout crash',
         changedFiles: ['src/auth/AuthConfig.ts'],
@@ -96,14 +100,18 @@ try {
 
     closeVectorStore();
     process.env.OPENAI_EMBEDDING_DIMENSIONS = '2';
-    let rejectedStaleIndex = false;
-    try {
-        await getVectorStats();
-    } catch (err) {
-        rejectedStaleIndex = /contract mismatch/.test(err.message);
+    for (let attempt = 1; attempt <= 2; attempt++) {
+        let rejectedStaleIndex = false;
+        try {
+            await getVectorStats();
+        } catch (err) {
+            rejectedStaleIndex = /contract mismatch/.test(err.message);
+        }
+        assert(rejectedStaleIndex, `index contract rejects mismatch on attempt ${attempt}`);
     }
-    assert(rejectedStaleIndex, 'index contract rejects a model/dimension change without rebuild');
     process.env.OPENAI_EMBEDDING_DIMENSIONS = '4';
+    const reopenedStats = await getVectorStats();
+    assert(reopenedStats.totalCommits === 3, 'index reopens after restoring the correct contract');
 
     console.log(`\n== Results: ${passed} passed ==`);
 } finally {

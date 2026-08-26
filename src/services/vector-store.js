@@ -31,37 +31,43 @@ let _db = null;
 function getDb() {
     if (_db) return _db;
     mkdirSync(dirname(VECTORS_DB_PATH), { recursive: true });
-    _db = new Database(VECTORS_DB_PATH);
-    sqliteVec.load(_db);
-    _db.pragma('journal_mode = WAL');
-    const embeddingConfig = getEmbeddingConfig();
-    _db.exec(`
-        CREATE VIRTUAL TABLE IF NOT EXISTS commit_vectors USING vec0(
-            embedding float[${embeddingConfig.dimensions}] distance_metric=cosine,
-            repo text partition key
-        );
-        CREATE TABLE IF NOT EXISTS commit_metadata (
-            rowid INTEGER PRIMARY KEY,
-            id TEXT NOT NULL,
-            commitId TEXT,
-            repo TEXT NOT NULL,
-            date TEXT NOT NULL,
-            author TEXT,
-            text TEXT,
-            metadata TEXT
-        );
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_meta_repo_id ON commit_metadata(repo, id);
-        CREATE INDEX IF NOT EXISTS idx_meta_date ON commit_metadata(date);
-        CREATE INDEX IF NOT EXISTS idx_meta_repo_date ON commit_metadata(repo, date);
-        CREATE VIRTUAL TABLE IF NOT EXISTS commit_fts USING fts5(text, tokenize='unicode61');
-        CREATE TABLE IF NOT EXISTS vector_store_meta (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        );
-    `);
-    ensureIndexContract(_db, embeddingConfig);
-    ensureFtsSynchronized(_db);
-    return _db;
+    const db = new Database(VECTORS_DB_PATH);
+    try {
+        sqliteVec.load(db);
+        db.pragma('journal_mode = WAL');
+        const embeddingConfig = getEmbeddingConfig();
+        db.exec(`
+            CREATE VIRTUAL TABLE IF NOT EXISTS commit_vectors USING vec0(
+                embedding float[${embeddingConfig.dimensions}] distance_metric=cosine,
+                repo text partition key
+            );
+            CREATE TABLE IF NOT EXISTS commit_metadata (
+                rowid INTEGER PRIMARY KEY,
+                id TEXT NOT NULL,
+                commitId TEXT,
+                repo TEXT NOT NULL,
+                date TEXT NOT NULL,
+                author TEXT,
+                text TEXT,
+                metadata TEXT
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_meta_repo_id ON commit_metadata(repo, id);
+            CREATE INDEX IF NOT EXISTS idx_meta_date ON commit_metadata(date);
+            CREATE INDEX IF NOT EXISTS idx_meta_repo_date ON commit_metadata(repo, date);
+            CREATE VIRTUAL TABLE IF NOT EXISTS commit_fts USING fts5(text, tokenize='unicode61');
+            CREATE TABLE IF NOT EXISTS vector_store_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+        `);
+        ensureIndexContract(db, embeddingConfig);
+        ensureFtsSynchronized(db);
+        _db = db;
+        return _db;
+    } catch (error) {
+        db.close();
+        throw error;
+    }
 }
 
 function ensureIndexContract(db, config) {

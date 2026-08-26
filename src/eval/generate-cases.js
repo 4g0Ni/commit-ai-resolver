@@ -7,7 +7,8 @@ import { groupBy, loadDailyCorpus, mulberry32, sampleStable } from './lib/corpus
 const here = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(here, '..', '..');
 const dailyDir = process.env.DATA_DIR ? join(resolve(process.env.DATA_DIR), 'daily') : join(projectRoot, 'data', 'daily');
-const datasetDir = resolve(here, 'datasets', 'public-react-v1');
+const datasetName = 'public-react-v2';
+const datasetDir = resolve(here, 'datasets', datasetName);
 const seed = 20260820;
 const random = mulberry32(seed);
 
@@ -165,7 +166,7 @@ const bySplit = Object.fromEntries([...groupBy(cases, item => item.split)].map((
 const repos = [...new Set(corpus.commits.map(item => item.repo))].sort();
 const manifest = {
     schemaVersion: 1,
-    dataset: 'public-react-v1',
+    dataset: datasetName,
     generator: 'src/eval/generate-cases.js',
     seed,
     corpus: {

@@ -9,6 +9,7 @@
     "fetch-commits": "node index.js",
     "generate-data": "node scripts/generate-sample-data.js",
     "import-public": "node scripts/import-public-commits.js",
+    "embedding:serve": "conda run -n hello-agents --no-capture-output python scripts/serve-embedding.py --device cuda",
     "refresh": "node scripts/scheduled-refresh.js",
     "refresh:loop": "node scripts/scheduled-refresh.js --loop 60",
     "eval:generate": "node eval/generate-cases.js",

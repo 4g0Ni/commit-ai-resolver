@@ -9,45 +9,7 @@ Commit AI Resolver 是一个面向代码变更检索和回归排查的 Agentic R
 ```text
 用户问题
   → Intent Extractor（实体、日期、过滤条件、查询改写）
-  → Direct SHA / Dense / FTS5 / Secondary Query / Bug Title{
-  "schemaVersion": 1,
-  "dataset": "public-react-v1",
-  "generator": "src/eval/generate-cases.js",
-  "seed": 20260820,
-  "corpus": {
-    "path": "data/daily",
-    "sha256": "37216bf50c46920846cbbcc0e2ace3b683bf75608f63ce73cb979f000832522e",
-    "files": 1741,
-    "commits": 10000,
-    "repos": [
-      "facebook/react"
-    ],
-    "dateRange": {
-      "from": "2013-05-28",
-      "to": "2019-02-20"
-    }
-  },
-  "cases": {
-    "count": 75,
-    "sha256": "e71ec8279972bbc2c4258891fbcb423915d07d1e7d28b4fe0e54d5fafc26109c",
-    "byCategory": {
-      "exact_sha": 12,
-      "semantic_title": 18,
-      "author_date": 10,
-      "risk_date": 10,
-      "repo_date": 5,
-      "negative": 5,
-      "negative_natural": 10,
-      "ambiguous": 5
-    },
-    "bySplit": {
-      "test": 23,
-      "dev": 52
-    }
-  },
-  "labelPolicy": "Positive commit IDs and filters are deterministically derived from public corpus metadata. OOD and ambiguous cases are fixed human-authored labels. No LLM output is treated as ground truth."
-}
-
+  → Direct SHA / Dense / FTS5 / Secondary Query / Bug Title
   → Weighted Reciprocal Rank Fusion
   → Answer Synthesizer
   → Answer Evaluator（PASS / RETRY / PARTIAL）
@@ -114,13 +76,13 @@ Harness 将系统拆成六层：
 
 ### 5.1 当前公开语料
 
-`public-react-v1` 基于本地公开 `facebook/react` commit corpus：
+`public-react-v2` 基于完整的本地公开 `facebook/react` commit corpus。此前的 `public-react-v1` 保持冻结，作为历史快照：
 
-- 10,000 commits
-- 1,741 个 daily JSON 文件
-- 时间范围：2013-05-28 至 2019-02-20
+- 27,646 commits
+- 3,803 个 daily JSON 文件
+- 时间范围：2013-05-28 至 2026-08-09
 - 单仓库：`facebook/react`
-- Corpus SHA-256：`37216bf50c46920846cbbcc0e2ace3b683bf75608f63ce73cb979f000832522e`
+- Corpus SHA-256：`9fbdfdaa438d1a9389c147e5d8adb4e0d79b0b6be2b0bb5d5777ef88f5675deb`
 
 Daily JSON 是 source of truth，SQLite metadata、FTS5 和 sqlite-vec 都是可重建派生物。
 
@@ -514,14 +476,14 @@ GitHub PR 不包含 `data/` 和本地模型，因此 workflow 只运行确定性
 
 ## 18. 当前基线及解释
 
-当前 `public-react-qwen06b-v1` 基线：
+当前 `public-react-qwen06b-v2` 基线：
 
 | Channel | Recall@10 | MRR@10 | nDCG@10 | Negative no-result | p95 |
 |---|---:|---:|---:|---:|---:|
 | Direct | 100.0% | 1.000 | 1.000 | n/a | 0 ms |
-| Lexical | 43.9% | 0.418 | 0.415 | 100.0% | 约 6 ms |
-| Dense | 78.2% | 0.764 | 0.768 | 0.0% | 约 230 ms |
-| Hybrid | 100.0% | 0.982 | 0.987 | 0.0% | 约 232 ms |
+| Lexical | 43.6% | 0.391 | 0.393 | 33.3% | 约 30 ms |
+| Dense | 78.2% | 0.710 | 0.726 | 0.0% | 约 318 ms |
+| Hybrid | 100.0% | 0.940 | 0.953 | 0.0% | 约 334 ms |
 
 解释时应注意：
 
@@ -574,7 +536,7 @@ src/eval/
 ├── embed-queries.py                  # 本地 Qwen query embedding
 ├── lib/corpus.js                     # Corpus 加载、hash、稳定采样
 ├── lib/metrics.js                    # 排序、校准和 baseline 指标
-├── datasets/public-react-v1/         # 冻结 cases 与 manifest
+├── datasets/public-react-v2/         # 当前冻结 cases 与 manifest
 ├── baselines/                        # 审核后的 baseline
 ├── fixtures/                         # Intent/Answer 输入格式示例
 └── reports/                           # 生成报告，不作为 ground truth
@@ -594,14 +556,14 @@ npm run eval:full -- --device cuda
 
 ```powershell
 node eval/run-eval.js --mode all `
-  --write-baseline eval/baselines/public-react-qwen06b-v1.json
+  --write-baseline eval/baselines/public-react-qwen06b-v2.json
 ```
 
 执行对比和门禁：
 
 ```powershell
 node eval/run-eval.js --mode all `
-  --baseline eval/baselines/public-react-qwen06b-v1.json `
+  --baseline eval/baselines/public-react-qwen06b-v2.json `
   --gate
 ```
 

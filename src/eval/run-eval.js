@@ -14,7 +14,7 @@ const projectRoot = resolve(here, '..', '..');
 
 function parseArgs(argv) {
     const args = {
-        dataset: join(here, 'datasets', 'public-react-v1'),
+        dataset: join(here, 'datasets', 'public-react-v2'),
         mode: 'all',
         output: join(here, 'reports', `eval-${new Date().toISOString().replace(/[:.]/g, '-')}`),
         device: 'cuda',

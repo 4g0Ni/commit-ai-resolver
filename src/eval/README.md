@@ -9,7 +9,7 @@ Full design rationale:
 
 ## Dataset policy
 
-`datasets/public-react-v1` is generated deterministically from `data/daily` with seed `20260820`. Positive commit IDs and metadata filters are derived from the corpus; OOD and ambiguous queries are fixed human-authored labels. No LLM-generated answer is accepted as a gold label. The manifest freezes the corpus and case SHA-256 hashes, so an eval stops when the local corpus silently changes.
+`datasets/public-react-v2` is generated deterministically from `data/daily` with seed `20260820`. Positive commit IDs and metadata filters are derived from the corpus; OOD and ambiguous queries are fixed human-authored labels. No LLM-generated answer is accepted as a gold label. The manifest freezes the corpus and case SHA-256 hashes, so an eval stops when the local corpus silently changes. The earlier `public-react-v1` artifacts remain frozen for historical comparison.
 
 Cases are stratified into `dev` and frozen `test` splits. Thresholds are tuned on dev; release gates read the test split.
 
@@ -41,13 +41,13 @@ npm run eval:full -- --device cuda
 Create a reviewed baseline deliberately:
 
 ```powershell
-node eval/run-eval.js --mode all --write-baseline eval/baselines/public-react-qwen06b-v1.json
+node eval/run-eval.js --mode all --write-baseline eval/baselines/public-react-qwen06b-v2.json
 ```
 
 Compare and enforce gates:
 
 ```powershell
-node eval/run-eval.js --mode all --baseline eval/baselines/public-react-qwen06b-v1.json --gate
+node eval/run-eval.js --mode all --baseline eval/baselines/public-react-qwen06b-v2.json --gate
 ```
 
 Run the frozen test split through a live local API and automatically score its Intent, answer grounding, retry trace, latency, Brier score, and ECE:

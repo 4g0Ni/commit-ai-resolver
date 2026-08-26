@@ -5,7 +5,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const cases = (await readFile(new URL('../eval/datasets/public-react-v1/cases.jsonl', import.meta.url), 'utf8'))
+const cases = (await readFile(new URL('../eval/datasets/public-react-v2/cases.jsonl', import.meta.url), 'utf8'))
     .split(/\r?\n/).filter(Boolean).map(JSON.parse);
 const byQuery = new Map(cases.map(item => [item.query, item]));
 const output = await mkdtemp(join(tmpdir(), 'commit-rag-agent-eval-'));

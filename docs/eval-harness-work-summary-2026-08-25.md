@@ -1,5 +1,7 @@
 # Eval Harness 工作总结（2026-08-25）
 
+> **2026-08-26 增量更新：** 当前活跃数据集已升级为 `public-react-v2`，完整导入 `facebook/react` 的 27,646 条 Commit、3,803 个 daily JSON 文件，日期覆盖 2013-05-28 至 2026-08-09。Corpus SHA-256 为 `9fbdfdaa438d1a9389c147e5d8adb4e0d79b0b6be2b0bb5d5777ef88f5675deb`；metadata、FTS5 和 Qwen 1024 维向量均为 27,646 行且无 missing、stale 或 duplicate。新的检索基线为 `src/eval/baselines/public-react-qwen06b-v2.json`；原 `public-react-v1` 内容保留为本总结所记录工作的历史快照。
+
 ## 总览
 
 本轮工作将 Commit AI Resolver 从依赖原公司内部 Commit 和人工 badcase 的评测方式，升级为一套基于公开语料、可复现、可分层诊断、可做 baseline 回归的 Eval Harness。
@@ -333,14 +335,14 @@ npm run eval:full -- --device cuda
 
 ```powershell
 node eval/run-eval.js --mode all `
-  --write-baseline eval/baselines/public-react-qwen06b-v1.json
+  --write-baseline eval/baselines/public-react-qwen06b-v2.json
 ```
 
 执行 baseline 对比和门禁：
 
 ```powershell
 node eval/run-eval.js --mode all `
-  --baseline eval/baselines/public-react-qwen06b-v1.json `
+  --baseline eval/baselines/public-react-qwen06b-v2.json `
   --gate
 ```
 

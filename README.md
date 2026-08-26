@@ -918,6 +918,8 @@ node scripts/reset-and-refresh.js --rebuild-embeddings
 | `HOST` | `127.0.0.1` | 绑定地址；除非添加外部身份验证层，否则保持为本地地址 |
 | `OPENAI_API_KEY` | （可选） | 启用聊天、摘要和嵌入 |
 | `OPENAI_BASE_URL` | （可选） | OpenAI 兼容/自托管端点 |
+| `OPENAI_EMBEDDING_BASE_URL` | 回退到 `OPENAI_BASE_URL` | 独立的 OpenAI-compatible embedding 端点 |
+| `OPENAI_EMBEDDING_API_KEY` | 回退到 `OPENAI_API_KEY` | 独立 embedding 端点的凭据；本地服务可设为 `local` |
 | `OPENAI_EMBEDDING_MODEL` | `text-embedding-3-large` | 托管或本地嵌入模型名称 |
 | `OPENAI_EMBEDDING_DIMENSIONS` | 推断值/默认值 3072 | 实际向量维度；更改后需要重建索引 |
 | `EMBEDDING_QUERY_INSTRUCTION` | 感知模型 | 可选的非对称查询指令；Qwen3 使用默认的提交检索指令 |

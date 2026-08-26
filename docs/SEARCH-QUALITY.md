@@ -1,6 +1,6 @@
 # Search Quality Requirements & Test Plan
 
-> **Legacy reference (private corpus, no longer runnable).** The repositories, dates, and manual scores below came from the original company-internal deployment and are retained only as historical design context. The active offline eval source of truth is [`src/eval/README.md`](../src/eval/README.md) plus the versioned `public-react-v1` manifest and baseline. Do not use the legacy scores below as current regression gates.
+> **Legacy reference (private corpus, no longer runnable).** The repositories, dates, and manual scores below came from the original company-internal deployment and are retained only as historical design context. The active offline eval source of truth is [`src/eval/README.md`](../src/eval/README.md) plus the versioned `public-react-v2` manifest and baseline. Do not use the legacy scores below as current regression gates.
 
 ## Overview
 

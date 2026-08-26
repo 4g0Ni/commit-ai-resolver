@@ -73,13 +73,13 @@ Full API E2E tests remain useful as the outermost layer. Core scorers call modul
 
 ### 5.1 Public corpus
 
-`public-react-v1` uses the local public `facebook/react` commit corpus:
+`public-react-v2` uses the complete local public `facebook/react` commit corpus. The earlier `public-react-v1` dataset remains frozen as a historical snapshot:
 
-- 10,000 commits
-- 1,741 daily JSON files
-- Date range: 2013-05-28 through 2019-02-20
+- 27,646 commits
+- 3,803 daily JSON files
+- Date range: 2013-05-28 through 2026-08-09
 - One repository: `facebook/react`
-- Corpus SHA-256: `37216bf50c46920846cbbcc0e2ace3b683bf75608f63ce73cb979f000832522e`
+- Corpus SHA-256: `9fbdfdaa438d1a9389c147e5d8adb4e0d79b0b6be2b0bb5d5777ef88f5675deb`
 
 Daily JSON is the source of truth. SQLite metadata, FTS5, and sqlite-vec are rebuildable derived artifacts.
 
@@ -473,14 +473,14 @@ GitHub pull requests do not contain `data/` or the local model, so the workflow 
 
 ## 18. Current baseline and interpretation
 
-Current `public-react-qwen06b-v1` baseline:
+Current `public-react-qwen06b-v2` baseline:
 
 | Channel | Recall@10 | MRR@10 | nDCG@10 | Negative no-result | p95 |
 |---|---:|---:|---:|---:|---:|
 | Direct | 100.0% | 1.000 | 1.000 | n/a | 0 ms |
-| Lexical | 43.9% | 0.418 | 0.415 | 100.0% | about 6 ms |
-| Dense | 78.2% | 0.764 | 0.768 | 0.0% | about 230 ms |
-| Hybrid | 100.0% | 0.982 | 0.987 | 0.0% | about 232 ms |
+| Lexical | 43.6% | 0.391 | 0.393 | 33.3% | about 30 ms |
+| Dense | 78.2% | 0.710 | 0.726 | 0.0% | about 318 ms |
+| Hybrid | 100.0% | 0.940 | 0.953 | 0.0% | about 334 ms |
 
 Interpretation caveats:
 
@@ -533,7 +533,7 @@ src/eval/
 ├── embed-queries.py                  # Local Qwen query embeddings
 ├── lib/corpus.js                     # Corpus loading, hashing, stable sampling
 ├── lib/metrics.js                    # Ranking, calibration, baseline metrics
-├── datasets/public-react-v1/         # Frozen cases and manifest
+├── datasets/public-react-v2/         # Active frozen cases and manifest
 ├── baselines/                        # Reviewed baselines
 ├── fixtures/                         # Intent/Answer format examples
 └── reports/                           # Generated output, never ground truth
@@ -553,14 +553,14 @@ Write a baseline:
 
 ```powershell
 node eval/run-eval.js --mode all `
-  --write-baseline eval/baselines/public-react-qwen06b-v1.json
+  --write-baseline eval/baselines/public-react-qwen06b-v2.json
 ```
 
 Compare and enforce gates:
 
 ```powershell
 node eval/run-eval.js --mode all `
-  --baseline eval/baselines/public-react-qwen06b-v1.json `
+  --baseline eval/baselines/public-react-qwen06b-v2.json `
   --gate
 ```
 

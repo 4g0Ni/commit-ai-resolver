@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "dataset": "public-react-v2",
+  "generator": "src/eval/generate-cases.js",
+  "seed": 20260820,
+  "corpus": {
+    "path": "data/daily",
+    "sha256": "9fbdfdaa438d1a9389c147e5d8adb4e0d79b0b6be2b0bb5d5777ef88f5675deb",
+    "files": 3803,
+    "commits": 27646,
+    "repos": [
+      "facebook/react"
+    ],
+    "dateRange": {
+      "from": "2013-05-28",
+      "to": "2026-08-09"
+    }
+  },
+  "cases": {
+    "count": 75,
+    "sha256": "1c5133eb35a41ee1d2c25d1e54897f981c9a5046c4367d1be491c547f047ebb6",
+    "byCategory": {
+      "exact_sha": 12,
+      "semantic_title": 18,
+      "author_date": 10,
+      "risk_date": 10,
+      "repo_date": 5,
+      "negative": 5,
+      "negative_natural": 10,
+      "ambiguous": 5
+    },
+    "bySplit": {
+      "test": 23,
+      "dev": 52
+    }
+  },
+  "labelPolicy": "Positive commit IDs and filters are deterministically derived from public corpus metadata. OOD and ambiguous cases are fixed human-authored labels. No LLM output is treated as ground truth."
+}

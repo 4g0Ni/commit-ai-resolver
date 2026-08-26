@@ -1,20 +1,22 @@
 /** Text embedding client for an OpenAI-compatible API. */
 
 import OpenAI from 'openai';
-import { buildEmbeddingRequest, getEmbeddingConfig } from './embedding-config.js';
-
-const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL;
+import { buildEmbeddingRequest, getEmbeddingConfig, getEmbeddingProviderConfig } from './embedding-config.js';
 
 let _instance = null;
 
 function getEmbeddingClient() {
     if (_instance) return _instance;
-    if (!process.env.OPENAI_API_KEY && !OPENAI_BASE_URL) {
-        throw new Error('Embeddings are not configured. Set OPENAI_API_KEY or OPENAI_BASE_URL.');
+    const provider = getEmbeddingProviderConfig();
+    if (!provider.configured) {
+        throw new Error(
+            'Embeddings are not configured. Set OPENAI_EMBEDDING_BASE_URL, OPENAI_EMBEDDING_API_KEY, ' +
+            'OPENAI_BASE_URL, or OPENAI_API_KEY.'
+        );
     }
     _instance = new OpenAI({
-        apiKey: process.env.OPENAI_API_KEY || 'local',
-        ...(OPENAI_BASE_URL ? { baseURL: OPENAI_BASE_URL } : {}),
+        apiKey: provider.apiKey,
+        ...(provider.baseURL ? { baseURL: provider.baseURL } : {}),
     });
     return _instance;
 }

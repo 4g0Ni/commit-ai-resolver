@@ -11,7 +11,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 function parseArgs(argv) {
     const args = {
         baseUrl: 'http://127.0.0.1:4399',
-        dataset: join(here, 'datasets', 'public-react-v1'),
+        dataset: join(here, 'datasets', 'public-react-v2'),
         output: join(here, 'reports', `agent-${new Date().toISOString().replace(/[:.]/g, '-')}`),
         split: 'test',
         concurrency: 2,

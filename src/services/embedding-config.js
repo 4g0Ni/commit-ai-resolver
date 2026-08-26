@@ -26,6 +26,17 @@ function inferDimensions(model) {
     return MODEL_DIMENSIONS.find(([pattern]) => pattern.test(model))?.[1] || DEFAULT_DIMENSIONS;
 }
 
+/** Return connection settings for an embedding provider independent of chat. */
+function getEmbeddingProviderConfig() {
+    const baseURL = process.env.OPENAI_EMBEDDING_BASE_URL || process.env.OPENAI_BASE_URL;
+    const apiKey = process.env.OPENAI_EMBEDDING_API_KEY || process.env.OPENAI_API_KEY;
+    return {
+        baseURL,
+        apiKey: apiKey || (baseURL ? 'local' : undefined),
+        configured: Boolean(apiKey || baseURL),
+    };
+}
+
 /** Return the model contract shared by embedding generation and vector storage. */
 function getEmbeddingConfig() {
     const model = process.env.OPENAI_EMBEDDING_MODEL || DEFAULT_MODEL;
@@ -58,8 +69,9 @@ function buildEmbeddingRequest(texts, inputType = 'document') {
     return {
         input,
         model: config.model,
+        encoding_format: 'float',
         ...(config.requestDimensions ? { dimensions: config.dimensions } : {}),
     };
 }
 
-export { buildEmbeddingRequest, getEmbeddingConfig, inferDimensions };
+export { buildEmbeddingRequest, getEmbeddingConfig, getEmbeddingProviderConfig, inferDimensions };

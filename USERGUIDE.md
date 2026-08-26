@@ -144,7 +144,7 @@ Invoke-WebRequest `
   -OutFile ".\data\public\facebook_react.parquet"
 
 # 在项目根目录执行；导入器支持 .parquet、.jsonl 和 .ndjson
-node src/scripts/import-public-commits.js --input ".\data\public\facebook_react.parquet" --limit 10000 --force
+node src/scripts/import-public-commits.js --input ".\data\public\facebook_react.parquet" --limit 27646 --force
 
 # Optional repository selection; repeat --repo as needed
 node src/scripts/import-public-commits.js --input "<本机真实存在的 JSONL 文件路径>" --repo facebook/react --limit 5000 --force
@@ -193,11 +193,18 @@ node ../scripts/reset-and-refresh.js --rebuild-embeddings
 Example local Qwen3-compatible configuration:
 
 ```powershell
-$env:OPENAI_BASE_URL = 'http://127.0.0.1:8000/v1'
-$env:OPENAI_API_KEY = 'local'
+$env:OPENAI_EMBEDDING_BASE_URL = 'http://127.0.0.1:8000/v1'
+$env:OPENAI_EMBEDDING_API_KEY = 'local'
 $env:OPENAI_EMBEDDING_MODEL = 'Qwen/Qwen3-Embedding-0.6B'
 $env:OPENAI_EMBEDDING_DIMENSIONS = '1024'
 conda run -n hello-agents python src/scripts/generate-embedding.py --force
+```
+
+Start the bundled local endpoint before the API when the chat provider does not serve the same embedding model:
+
+```powershell
+cd src
+npm run embedding:serve
 ```
 
 ### 3. Start the Backend API
@@ -457,6 +464,8 @@ To customize, edit `repoFilters` in `src/services/diff-filter.js`.
 | Compatible endpoint | `OPENAI_BASE_URL` | OpenAI API |
 | Quality model | `OPENAI_MODEL` | `gpt-4.1` |
 | Fast model | `OPENAI_FAST_MODEL` | `gpt-4.1-mini` |
+| Embedding endpoint | `OPENAI_EMBEDDING_BASE_URL` | Falls back to `OPENAI_BASE_URL` |
+| Embedding API key | `OPENAI_EMBEDDING_API_KEY` | Falls back to `OPENAI_API_KEY` |
 | Embedding model | `OPENAI_EMBEDDING_MODEL` | `text-embedding-3-large` |
 | Retry attempts | Code default | `3` with exponential backoff |
 | Concurrency | Code default | `10` parallel summary calls |

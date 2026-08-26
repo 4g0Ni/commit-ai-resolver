@@ -27,7 +27,11 @@ import { isInitializeRequest } from '@modelcontextprotocol/server';
 import { createMcpServer } from './mcp.js';
 import { FALLBACK_SYSTEM_PROMPT } from './agents/synthesis-prompt.js';
 import { getPromptRegistrySnapshot } from '../src/prompts/prompt-registry.js';
-import { buildEmbeddingRequest, getEmbeddingConfig } from '../src/services/embedding-config.js';
+import {
+    buildEmbeddingRequest,
+    getEmbeddingConfig,
+    getEmbeddingProviderConfig,
+} from '../src/services/embedding-config.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(process.env.DATA_DIR || join(__dirname, '..', 'data'), 'daily');
@@ -40,6 +44,7 @@ const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4.1';
 const OPENAI_FAST_MODEL = process.env.OPENAI_FAST_MODEL || 'gpt-4.1-mini';
 const EMBEDDING_CONFIG = getEmbeddingConfig();
+const EMBEDDING_PROVIDER = getEmbeddingProviderConfig();
 const AGENT_MAX_ITERATIONS = Number.parseInt(process.env.AGENT_MAX_ITERATIONS || '3', 10);
 const AI_CONFIGURED = Boolean(process.env.OPENAI_API_KEY || OPENAI_BASE_URL);
 const ADO_CONFIGURED = Boolean(process.env.ADO_PAT || process.env.ADO_BEARER_TOKEN);
@@ -64,7 +69,12 @@ function withDefaultChatModel(client, model) {
 
 const openaiClient = withDefaultChatModel(openaiApiClient, OPENAI_MODEL);
 const openaiMiniClient = withDefaultChatModel(openaiApiClient, OPENAI_FAST_MODEL);
-const embeddingClient = openaiApiClient;
+const embeddingClient = EMBEDDING_PROVIDER.configured
+    ? new OpenAI({
+        apiKey: EMBEDDING_PROVIDER.apiKey,
+        ...(EMBEDDING_PROVIDER.baseURL ? { baseURL: EMBEDDING_PROVIDER.baseURL } : {}),
+    })
+    : null;
 
 const app = express();
 const allowedOrigins = [
@@ -114,7 +124,10 @@ const EMBEDDING_CACHE_MAX = 100;
 
 async function embedQuery(text) {
     if (!embeddingClient) {
-        throw new Error('AI is not configured. Set OPENAI_API_KEY or OPENAI_BASE_URL.');
+        throw new Error(
+            'Embeddings are not configured. Set OPENAI_EMBEDDING_BASE_URL, OPENAI_EMBEDDING_API_KEY, ' +
+            'OPENAI_BASE_URL, or OPENAI_API_KEY.'
+        );
     }
     if (_embeddingCache.has(text)) {
         return _embeddingCache.get(text);
