@@ -47,6 +47,19 @@ const intentLlm = mockLlm(async params => {
             ambiguities: [],
             verdict: 'GOOD',
             clarificationQuestion: null,
+            specificity: {
+                verdict: 'SUFFICIENT',
+                confidence: 0.92,
+                signals: {
+                    component: 'grid',
+                    symptom: 'disappeared',
+                    time: null,
+                    errorCode: null,
+                    fileOrSymbol: null,
+                },
+                missingFields: [],
+                clarificationQuestion: null,
+            },
         }) } }],
     };
 });
@@ -58,6 +71,7 @@ const intent = await extractIntent(intentLlm, {
     workItemContext: { id: 1, title: 'Grid missing', createdDate: '2026-08-20', description: injection },
 });
 assert(intent.repo === 'AdsAppUI' && intent.searchQuery === 'grid rendering regression', 'intent output is normalized');
+assert(intent.specificity.verdict === 'SUFFICIENT' && intent.specificity.signals.component === 'grid', 'intent specificity is normalized');
 assert(intentParams.messages[0].role === 'system' && intentParams.messages[1].role === 'user', 'intent instructions use the system role');
 assert(!intentParams.messages[0].content.includes(injection), 'work-item injection text is absent from the system prompt');
 assert(intentParams.messages[1].content.includes(injection), 'work-item text is retained as untrusted user data');

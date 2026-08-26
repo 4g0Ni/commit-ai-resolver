@@ -60,6 +60,25 @@ function actualVerdict(response) {
     return 'SEARCH';
 }
 
+function languageBucket(query) {
+    const value = String(query || '');
+    const hasHan = /\p{Script=Han}/u.test(value);
+    const hasLatin = /[A-Za-z]/u.test(value);
+    if (hasHan && hasLatin) return 'mixed';
+    if (hasHan) return 'zh';
+    if (hasLatin) return 'en';
+    return 'other';
+}
+
+function rate(items, predicate) {
+    return items.length ? items.filter(predicate).length / items.length : null;
+}
+
+function mean(values) {
+    const finite = values.filter(Number.isFinite);
+    return finite.length ? finite.reduce((sum, value) => sum + value, 0) / finite.length : null;
+}
+
 async function callCase(task, args) {
     const started = performance.now();
     try {
@@ -90,6 +109,9 @@ async function callCase(task, args) {
             ok: true,
             ...payload,
             extractedIntent: intentEntry?.intent || null,
+            extractedSpecificity: intentEntry?.specificity || intentEntry?.intent?.specificity || null,
+            intentElapsedMs: intentEntry?.elapsed,
+            intentTokens: intentEntry?.totalTokens,
         };
     } catch (error) {
         return {
@@ -161,6 +183,16 @@ await writeFile(responsesPath, `${successful.map(item => JSON.stringify({
 await writeFile(intentsPath, `${successful.filter(item => item.extractedIntent).map(item => JSON.stringify({ caseId: item.caseId, intent: item.extractedIntent })).join('\n')}\n`);
 
 const latencies = successful.map(item => item.elapsedMs);
+const expectedSearch = successful.filter(item => item.expectedVerdict === 'SEARCH');
+const expectedNonSearch = successful.filter(item => item.expectedVerdict !== 'SEARCH');
+const expectedClarification = successful.filter(item => item.expectedVerdict === 'ASK_USER');
+const languageBuckets = [...new Set(successful.map(item => languageBucket(item.query)))].sort();
+const specificityByCase = new Map();
+for (const item of successful.filter(item => item.extractedSpecificity?.verdict)) {
+    if (!specificityByCase.has(item.caseId)) specificityByCase.set(item.caseId, []);
+    specificityByCase.get(item.caseId).push(item);
+}
+const repeatedSpecificity = [...specificityByCase.values()].filter(items => items.length > 1);
 const summary = {
     dataset: manifest.dataset,
     datasetCaseHash: manifest.cases.sha256,
@@ -174,6 +206,36 @@ const summary = {
         mean: latencies.length ? latencies.reduce((sum, value) => sum + value, 0) / latencies.length : null,
         p50: percentile(latencies, 0.50),
         p95: percentile(latencies, 0.95),
+    },
+    decisionQuality: {
+        overClarificationRate: rate(expectedSearch, item => item.actualVerdict === 'ASK_USER'),
+        unsafeSearchRate: rate(expectedNonSearch, item => item.actualVerdict === 'SEARCH'),
+        clarificationRequestAccuracy: rate(expectedClarification, item => item.actualVerdict === 'ASK_USER'),
+        // Requires a multi-turn label proving that the user's follow-up resolved the missing fields.
+        clarificationSuccessRate: null,
+        clarificationSuccessEligible: 0,
+    },
+    behaviorAccuracyByLanguage: Object.fromEntries(languageBuckets.map(bucket => {
+        const items = successful.filter(item => languageBucket(item.query) === bucket);
+        return [bucket, { cases: items.length, accuracy: rate(items, item => item.behaviorCorrect) }];
+    })),
+    specificity: {
+        consistency: rate(repeatedSpecificity, items => new Set(items.map(item => item.extractedSpecificity.verdict)).size === 1),
+        consistencyEligibleCases: repeatedSpecificity.length,
+        labeledAccuracy: null,
+    },
+    specificityCost: {
+        additionalModelCallsPerQuery: 0,
+        intentLatencyMs: {
+            mean: mean(successful.map(item => item.intentElapsedMs)),
+            p95: percentile(successful.map(item => item.intentElapsedMs).filter(Number.isFinite), 0.95),
+        },
+        intentTokens: {
+            mean: mean(successful.map(item => item.intentTokens)),
+            total: successful.map(item => item.intentTokens).filter(Number.isFinite).reduce((sum, value) => sum + value, 0),
+        },
+        incrementalLatencyVsBaselineMs: null,
+        incrementalTokensVsBaseline: null,
     },
     api: args.baseUrl,
     vectorStats,

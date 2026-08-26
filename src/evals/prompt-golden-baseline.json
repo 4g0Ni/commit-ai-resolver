@@ -1,5 +1,5 @@
 {
-  "datasetVersion": "v1",
+  "datasetVersion": "v2",
   "minimumPassRate": 0.8,
   "maximumRegression": 0.05,
   "reference": {

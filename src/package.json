@@ -17,7 +17,7 @@
     "eval:lexical": "node eval/run-eval.js --mode lexical",
     "eval:full": "node eval/run-eval.js --mode all",
     "eval:agent": "node eval/run-agent-eval.js",
-    "test:eval": "node tests/test-eval-metrics.js && node tests/test-evidence-gate.js && node tests/test-evidence-gate-orchestrator.js && node tests/test-agent-eval-runner.js"
+    "test:eval": "node tests/test-eval-metrics.js && node tests/test-intent-extractor-specificity.js && node tests/test-evidence-gate.js && node tests/test-evidence-gate-orchestrator.js && node tests/test-agent-eval-runner.js"
   },
   "dependencies": {
     "apache-arrow": "^18.1.0",

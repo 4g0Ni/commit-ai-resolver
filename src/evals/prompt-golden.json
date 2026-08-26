@@ -63,5 +63,62 @@
     "query": "2026-08-18 到 2026-08-20 AnB billing 改了什么",
     "today": "2026-08-24",
     "expected": { "verdict": "GOOD", "repo": "AnB", "dateFrom": "2026-08-18", "dateTo": "2026-08-20", "searchTerms": ["billing"] }
+  },
+  {
+    "id": "specificity-sufficient-zh",
+    "query": "广告页面从昨天开始加载很慢",
+    "today": "2026-08-26",
+    "expected": {
+      "verdict": "GOOD",
+      "specificityVerdict": "SUFFICIENT",
+      "specificitySignals": ["component", "symptom", "time"]
+    }
+  },
+  {
+    "id": "specificity-ambiguous-zh",
+    "query": "页面坏了",
+    "today": "2026-08-26",
+    "expected": {
+      "verdict": "ASK_USER",
+      "specificityVerdict": "AMBIGUOUS",
+      "missingFieldsRequired": true,
+      "clarificationLanguage": "zh"
+    }
+  },
+  {
+    "id": "specificity-long-generic-zh",
+    "query": "我遇到了一个非常严重而且影响工作的问题，请帮我深入调查为什么会这样",
+    "today": "2026-08-26",
+    "expected": {
+      "verdict": "ASK_USER",
+      "specificityVerdict": "AMBIGUOUS",
+      "missingFieldsRequired": true,
+      "clarificationLanguage": "zh"
+    }
+  },
+  {
+    "id": "specificity-short-symbol-mixed",
+    "query": "NewGoogleLoginGSI 怎么了？",
+    "today": "2026-08-26",
+    "expected": {
+      "verdict": "GOOD",
+      "specificityVerdict": "SUFFICIENT",
+      "specificitySignals": ["fileOrSymbol"],
+      "searchTerms": ["NewGoogleLoginGSI"]
+    }
+  },
+  {
+    "id": "specificity-follow-up-zh",
+    "query": "昨天开始变慢了",
+    "today": "2026-08-26",
+    "history": [
+      { "role": "user", "content": "广告页面最近有问题" },
+      { "role": "assistant", "content": "具体是什么现象？" }
+    ],
+    "expected": {
+      "verdict": "GOOD",
+      "specificityVerdict": "SUFFICIENT",
+      "specificitySignals": ["component", "symptom", "time"]
+    }
   }
 ]

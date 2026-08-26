@@ -36,7 +36,17 @@ const server = createServer((request, response) => {
             iterations: 1,
             resultCount: gateVerdict === 'SEARCH' ? 1 : 0,
             evidenceGate: { verdict: gateVerdict },
-            iterationLog: [{ stage: 'intent-extractor', status: 'done', intent: evalCase.expectedIntent }],
+            iterationLog: [{
+                stage: 'intent-extractor', status: 'done', elapsed: 12, totalTokens: 40,
+                intent: evalCase.expectedIntent,
+                specificity: {
+                    verdict: gateVerdict === 'ASK_USER' ? 'AMBIGUOUS' : 'SUFFICIENT',
+                    confidence: 0.9,
+                    signals: { component: null, symptom: null, time: null, errorCode: null, fileOrSymbol: null },
+                    missingFields: gateVerdict === 'ASK_USER' ? ['component', 'symptom'] : [],
+                    clarificationQuestion: null,
+                },
+            }],
             evalMetadata: { chatModel: 'mock', fastModel: 'mock', maxIterations: 3 },
         }));
     });
@@ -58,6 +68,12 @@ try {
     assert.equal(summary.requested, 23);
     assert.equal(summary.succeeded, 23);
     assert.equal(summary.behaviorAccuracy, 1);
+    assert.equal(summary.decisionQuality.overClarificationRate, 0);
+    assert.equal(summary.decisionQuality.unsafeSearchRate, 0);
+    assert.equal(summary.decisionQuality.clarificationSuccessRate, null);
+    assert.equal(summary.behaviorAccuracyByLanguage.en.accuracy, 1);
+    assert.equal(summary.specificityCost.additionalModelCallsPerQuery, 0);
+    assert.equal(summary.specificityCost.intentTokens.mean, 40);
     console.log('agent eval runner: PASS');
 } finally {
     await new Promise(resolve => server.close(resolve));

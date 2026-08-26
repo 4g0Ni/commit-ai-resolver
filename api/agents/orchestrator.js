@@ -18,11 +18,77 @@ const RRF_K = Number.parseInt(process.env.RRF_K || '20', 10);
 const SECONDARY_QUERY_WEIGHT = Number.parseFloat(process.env.RRF_SECONDARY_WEIGHT || '0.7');
 const BUG_TITLE_WEIGHT = Number.parseFloat(process.env.RRF_BUG_TITLE_WEIGHT || '1.5');
 const VECTOR_MIN_SCORE = Number.parseFloat(process.env.VECTOR_MIN_SCORE || '0');
+const SPECIFICITY_FIELDS = ['component', 'symptom', 'time', 'errorCode', 'fileOrSymbol'];
+
+const GENERIC_CLARIFICATION = {
+    zh: '请提供受影响的功能或组件、具体症状或错误，以及大致开始时间。',
+    en: 'Could you share the affected feature or component, the concrete symptom or error, and roughly when it started?',
+};
+
+const CLARIFICATION_FIELD_LABELS = {
+    zh: {
+        component: '受影响的功能或组件',
+        symptom: '具体症状',
+        time: '大致开始时间',
+        errorCode: '错误码',
+        fileOrSymbol: '相关文件、配置键或 symbol',
+    },
+    en: {
+        component: 'the affected feature or component',
+        symptom: 'the concrete symptom',
+        time: 'roughly when it started',
+        errorCode: 'the error code',
+        fileOrSymbol: 'the related file, configuration key, or symbol',
+    },
+};
+
+const CLARIFICATION_FIELD_HINTS = {
+    component: /(?:功能|组件|页面|模块|哪里|哪个|feature|component|page|screen|module|where)/iu,
+    symptom: /(?:症状|现象|表现|错误|发生|变慢|失败|symptom|behavior|error|happen|slow|fail|issue)/iu,
+    time: /(?:时间|何时|什么时候|开始|when|time|start|since)/iu,
+    errorCode: /(?:错误码|错误代码|异常|error\s*code|exception)/iu,
+    fileOrSymbol: /(?:文件|配置|键|符号|file|config|key|symbol)/iu,
+};
 
 function daysBefore(n, referenceDate = new Date().toISOString().slice(0, 10)) {
     const d = new Date(`${referenceDate}T00:00:00Z`);
     d.setDate(d.getDate() - n);
     return d.toISOString().slice(0, 10);
+}
+
+function queryLanguage(query) {
+    return /\p{Script=Han}/u.test(String(query || '')) ? 'zh' : 'en';
+}
+
+function languageMatches(question, language) {
+    const containsHan = /\p{Script=Han}/u.test(question);
+    return language === 'zh' ? containsHan : !containsHan;
+}
+
+function targetsMissingField(question, missingFields) {
+    return missingFields.some(field => CLARIFICATION_FIELD_HINTS[field]?.test(question));
+}
+
+function selectClarification(intent, query) {
+    const language = queryLanguage(query);
+    const missingFields = [...new Set(Array.isArray(intent.specificity?.missingFields)
+        ? intent.specificity.missingFields.filter(field => SPECIFICITY_FIELDS.includes(field))
+        : [])];
+    const generated = [intent.specificity?.clarificationQuestion, intent.clarificationQuestion]
+        .find(question => typeof question === 'string'
+            && question.trim().length > 0
+            && question.trim().length <= 300
+            && missingFields.length > 0
+            && languageMatches(question.trim(), language)
+            && targetsMissingField(question.trim(), missingFields));
+    if (generated) return generated.trim();
+
+    if (missingFields.length > 0) {
+        const labels = missingFields.slice(0, 2).map(field => CLARIFICATION_FIELD_LABELS[language][field]);
+        if (language === 'zh') return `请提供${labels.join('和')}。`;
+        return `Could you share ${labels.join(' and ')}?`;
+    }
+    return GENERIC_CLARIFICATION[language];
 }
 
 /**
@@ -138,6 +204,7 @@ export async function agenticSearch({
             promptVariant: intent._promptVariant,
             structuredOutput: intent._structuredOutput,
             structuredFallback: intent._structuredFallback,
+            specificityFallback: intent._specificityFallback,
             parseError: intent._parseError,
             promptTokens: intent._promptTokens,
             completionTokens: intent._completionTokens,
@@ -153,23 +220,12 @@ export async function agenticSearch({
                 searchQuery: intent.searchQuery,
                 secondarySearchQuery: intent.secondarySearchQuery || null,
                 verdict: intent.verdict,
+                specificity: intent.specificity,
             },
+            specificity: intent.specificity,
         });
         console.log(`  [Intent] searchQuery: "${intent.searchQuery}"`);
         if (intent.secondarySearchQuery) console.log(`  [Intent] secondarySearchQuery: "${intent.secondarySearchQuery}"`);
-
-        if (intent.verdict === 'ASK_USER') {
-            // Pause pipeline — return clarification question to user
-            return {
-                type: 'clarification',
-                question: intent.clarificationQuestion || 'Could you provide more details about what you\'re looking for?',
-                reply: intent.clarificationQuestion || 'Could you provide more details about what you\'re looking for?',
-                searchMethod: 'agentic',
-                iterations: i,
-                iterationLog,
-                ...buildPromptTelemetry(iterationLog),
-            };
-        }
 
         // --- RAG Search ---
         log(i, 'rag-search', { status: 'running', query: intent.searchQuery.slice(0, 80) });
@@ -338,12 +394,16 @@ export async function agenticSearch({
             filters: {
                 repo: intent.repo || undefined,
                 author: intent.author || undefined,
-                dateFrom: context.dateOverrides?.dateFrom || intent.dateFrom || undefined,
-                dateTo: context.dateOverrides?.dateTo || intent.dateTo || undefined,
+                // Only model-extracted user/work-item constraints count as explicit.
+                // Automatic default windows and evaluator retry expansions never do.
+                dateFrom: intent.dateFrom || undefined,
+                dateTo: intent.dateTo || undefined,
                 riskLevel: intent.riskLevel || undefined,
                 changeType: intent.changeType || undefined,
             },
             directMatchCount,
+            specificity: intent.specificity,
+            specificityFallback: intent._specificityFallback,
         });
         log(i, 'evidence-gate', {
             status: 'done',
@@ -351,10 +411,11 @@ export async function agenticSearch({
             evidenceScore: evidenceGate.evidenceScore,
             reason: evidenceGate.reason,
             features: evidenceGate.features,
+            specificity: intent.specificity,
         });
 
         if (evidenceGate.verdict === 'ASK_USER') {
-            const clarification = 'Could you share the affected feature or component, the symptom or error, and roughly when it started?';
+            const clarification = selectClarification(intent, query);
             return {
                 type: 'clarification',
                 question: clarification,

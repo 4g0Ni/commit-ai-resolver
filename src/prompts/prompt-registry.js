@@ -1,8 +1,8 @@
 const PROMPT_REGISTRY = Object.freeze({
     'intent-extractor': Object.freeze({
-        stable: Object.freeze({ version: 'intent-v3', appendix: '' }),
+        stable: Object.freeze({ version: 'intent-v4', appendix: '' }),
         candidate: Object.freeze({
-            version: 'intent-v3-candidate1',
+            version: 'intent-v4-candidate1',
             appendix: 'Experiment rule: preserve concrete code identifiers and UI feature names before generic semantic terms.',
         }),
     }),

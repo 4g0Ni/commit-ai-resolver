@@ -25,6 +25,12 @@ for (const item of cases) {
     assert(typeof item.query === 'string' && item.query.length > 0, `${item.id}: has a query`);
     assert(/^\d{4}-\d{2}-\d{2}$/.test(item.today), `${item.id}: pins the reference date`);
     assert(['GOOD', 'ASK_USER'].includes(item.expected?.verdict), `${item.id}: has a supported verdict`);
+    if (item.expected.specificityVerdict) {
+        assert(['SUFFICIENT', 'AMBIGUOUS'].includes(item.expected.specificityVerdict), `${item.id}: has a supported specificity verdict`);
+    }
+    for (const field of item.expected.specificitySignals || []) {
+        assert(['component', 'symptom', 'time', 'errorCode', 'fileOrSymbol'].includes(field), `${item.id}: has a supported specificity signal`);
+    }
     for (const key of ['dateFrom', 'dateTo']) {
         if (item.expected[key]) assert(/^\d{4}-\d{2}-\d{2}$/.test(item.expected[key]), `${item.id}: ${key} is ISO date`);
     }

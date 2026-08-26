@@ -42,6 +42,19 @@ function evaluate(actual, expected) {
         if (searchText.includes(term.toLowerCase())) failures.push(`retained forbidden term ${term}`);
     }
     if (expected.secondarySearchRequired && !actual.secondarySearchQuery) failures.push('secondarySearchQuery is required');
+    if (expected.specificityVerdict && actual.specificity?.verdict !== expected.specificityVerdict) {
+        failures.push(`specificity.verdict: expected ${expected.specificityVerdict}, got ${actual.specificity?.verdict}`);
+    }
+    for (const field of expected.specificitySignals || []) {
+        if (!actual.specificity?.signals?.[field]) failures.push(`missing specificity signal ${field}`);
+    }
+    if (expected.missingFieldsRequired && !actual.specificity?.missingFields?.length) {
+        failures.push('specificity.missingFields is required');
+    }
+    if (expected.clarificationLanguage === 'zh'
+        && !/\p{Script=Han}/u.test(actual.specificity?.clarificationQuestion || '')) {
+        failures.push('specificity clarification must be Chinese');
+    }
     return failures;
 }
 
