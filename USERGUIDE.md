@@ -152,6 +152,39 @@ node src/scripts/import-public-commits.js --input "<本机真实存在的 JSONL 
 
 The importer keeps repo/author/date as metadata and creates deterministic risk/change-type fields for the demo. It never needs ADO credentials. After import, generate embeddings with the same local model used for query embeddings.
 
+The Hugging Face Parquet stores only a changed-file count and GitHub pointers; it does not contain changed paths or diffs. Enrich an imported React corpus from a local Git object store before building the higher-quality index:
+
+```powershell
+# One-time, credential-free Git source. Blob contents stay lazy until an operation needs them.
+git clone --bare --filter=blob:none https://github.com/react/react.git .\data\public\react.git
+
+# Deterministic 200-commit date-spread coverage spike. Source data/daily is never modified.
+node src/scripts/enrich-public-commits.js `
+  --git-dir .\data\public\react.git `
+  --output .\data\enriched\public-react-v3-spike `
+  --sample-size 200
+
+# Full corpus after reviewing the spike manifest; choose a new empty output directory.
+node src/scripts/enrich-public-commits.js `
+  --git-dir .\data\public\react.git `
+  --output .\data\enriched\public-react-v3 `
+  --fetch-missing
+```
+
+The output is another `DATA_DIR`-compatible tree with `daily/` plus `enrichment-manifest.json`. Git metadata is cached in `data/public/react-git-metadata.jsonl`, so interrupted or expanded runs reuse previous work. React-aware path rules populate `affectedAreas`; merge commits use a first-parent diff, root commits use an empty-tree diff, and unavailable SHAs remain explicit in the manifest instead of silently receiving guessed paths.
+
+Build a separate vector index from that enriched corpus without replacing the current `data/vectors.db`:
+
+```powershell
+$env:DATA_DIR = (Resolve-Path .\data\enriched\public-react-v3).Path
+$env:LOCAL_EMBEDDING_MODEL_PATH = (Resolve-Path .\data\models\Qwen3-Embedding-0.6B).Path
+conda run -n hello-agents --no-capture-output python src\scripts\generate-embedding.py --rebuild --device cuda
+```
+
+To build real-problem RCA eval candidates from GitHub Issues and their explicit closing PRs, run `npm run mine:github-rca` from `src`. These are review candidates only. Complete the generated four-part human review rubric before `npm run build:rca-dataset`; the builder will not accept pending rows or unverified Issue/PR/merge-commit relationships. See `docs/github-grounded-rca-eval-plan-2026-08-27.md` for the full P0–P3 workflow.
+
+To exercise all 461 provenance-valid candidates before human review, run `npm run build:rca-pilot` and evaluate `src/eval/datasets/public-react-rca-pilot-v1`. This set is explicitly marked “模型预审、非 gold、不可用于 release gate”; `run-eval.js --gate` rejects it. Use `npm run analyze:rca-pilot` only for retrieval diagnosis and review prioritization. Human-approved RCA cases remain a separate dataset built with `npm run build:rca-dataset`.
+
 ### 2. Generate Embeddings
 
 Embeds all commit summaries into the local SQLite vector store. Required for the chat RAG pipeline.

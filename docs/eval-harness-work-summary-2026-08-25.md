@@ -2,6 +2,8 @@
 
 > **2026-08-26 增量更新：** 当前活跃数据集已升级为 `public-react-v2`，完整导入 `facebook/react` 的 27,646 条 Commit、3,803 个 daily JSON 文件，日期覆盖 2013-05-28 至 2026-08-09。Corpus SHA-256 为 `9fbdfdaa438d1a9389c147e5d8adb4e0d79b0b6be2b0bb5d5777ef88f5675deb`；metadata、FTS5 和 Qwen 1024 维向量均为 27,646 行且无 missing、stale 或 duplicate。新的检索基线为 `src/eval/baselines/public-react-qwen06b-v2.json`；原 `public-react-v1` 内容保留为本总结所记录工作的历史快照。
 
+> **2026-08-27 增量更新：** 当前 enriched 工程基线为 `public-react-v3`。27,646 条 Commit 均已补齐完整 message、changed files 和 React affected areas，并生成独立 Qwen 索引；Corpus SHA-256 为 `4c11acc1307f9c3f074f60b537323b3fe8da7ea751c2e17a9cd4e6c6772f6844`。同时新增 GitHub Issue → closing PR → corpus fix commit 的候选采集、人工 review rubric、frozen RCA dataset builder 和 provenance hard gate。详情见 `docs/github-grounded-rca-eval-plan-2026-08-27.md`。
+
 ## 总览
 
 本轮工作将 Commit AI Resolver 从依赖原公司内部 Commit 和人工 badcase 的评测方式，升级为一套基于公开语料、可复现、可分层诊断、可做 baseline 回归的 Eval Harness。
@@ -391,3 +393,9 @@ Eval 测试入口当前包含：
 10. 通过 Eval 真实发现并修复 Full SHA、默认日期过滤、stale retry 和最大迭代次数问题。
 
 从代码量计算，本次共完成 3,859 行变更；从能力拆分计算，完成了公开数据集、六层 Eval、Evidence Gate、Answer Scorer、Agent Runner、Baseline/CI 以及产品缺陷修复等主要工作，使离线 Demo 具备了可持续回归和进一步扩展为真实 RCA 评测的基础。
+
+## 2026-08-28 update: 461-case RCA pilot
+
+The 461 machine-verifiable Issue → closing PR → corpus commit candidates now have a separate model-prescreened pilot dataset. Every row is non-gold and release-gate-ineligible, and `run-eval.js` rejects `--gate` for its manifest. The pilot is retained for retrieval diagnostics and human-review prioritization only.
+
+The completed Qwen run reports Recall@10 of 0.3850 lexical, 0.6941 dense, and 0.6584 hybrid. Equal-weight RRF loses more dense hits than lexical rescues (27 vs 9), so fusion weights/candidate depth need tuning on a future human-reviewed dev split. The reproducible slice report is `src/eval/reports/public-react-rca-pilot-v1/pilot-analysis.md`.

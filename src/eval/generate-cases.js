@@ -1,15 +1,46 @@
 import { createHash } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { groupBy, loadDailyCorpus, mulberry32, sampleStable } from './lib/corpus.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(here, '..', '..');
-const dailyDir = process.env.DATA_DIR ? join(resolve(process.env.DATA_DIR), 'daily') : join(projectRoot, 'data', 'daily');
-const datasetName = 'public-react-v2';
-const datasetDir = resolve(here, 'datasets', datasetName);
-const seed = 20260820;
+
+function parseArgs(argv) {
+    const options = {
+        dataRoot: process.env.DATA_DIR ? resolve(process.env.DATA_DIR) : join(projectRoot, 'data'),
+        datasetName: 'public-react-v2',
+        datasetDir: null,
+        seed: 20260820,
+    };
+    for (let index = 0; index < argv.length; index++) {
+        const key = argv[index];
+        if (key === '--data-dir') options.dataRoot = resolve(argv[++index]);
+        else if (key === '--dataset-name') options.datasetName = argv[++index];
+        else if (key === '--output') options.datasetDir = resolve(argv[++index]);
+        else if (key === '--seed') options.seed = Number.parseInt(argv[++index], 10);
+        else if (key === '--help') {
+            console.log('node eval/generate-cases.js [--data-dir data-root] [--dataset-name public-react-v3] [--output dataset-dir] [--seed N]');
+            process.exit(0);
+        } else {
+            throw new Error(`Unknown argument: ${key}`);
+        }
+    }
+    if (!/^[a-z0-9][a-z0-9._-]*$/i.test(options.datasetName)) throw new Error('--dataset-name must be filesystem-safe');
+    if (!Number.isInteger(options.seed)) throw new Error('--seed must be an integer');
+    options.datasetDir ||= resolve(here, 'datasets', options.datasetName);
+    return options;
+}
+
+function displayPath(path) {
+    const result = relative(projectRoot, path);
+    return result.startsWith('..') ? path : result.replace(/\\/g, '/');
+}
+
+const args = parseArgs(process.argv.slice(2));
+const dailyDir = join(args.dataRoot, 'daily');
+const { datasetName, datasetDir, seed } = args;
 const random = mulberry32(seed);
 
 function gold(commits, relevance = 3) {
@@ -170,7 +201,7 @@ const manifest = {
     generator: 'src/eval/generate-cases.js',
     seed,
     corpus: {
-        path: 'data/daily',
+        path: displayPath(dailyDir),
         sha256: corpus.corpusHash,
         files: corpus.files.length,
         commits: corpus.commits.length,

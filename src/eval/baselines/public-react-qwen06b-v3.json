@@ -1,0 +1,822 @@
+{
+  "runId": "eval-2026-08-27T10-22-23-219Z",
+  "startedAt": "2026-08-27T10:22:23.219Z",
+  "finishedAt": "2026-08-27T10:22:40.739Z",
+  "mode": "all",
+  "dataset": {
+    "name": "public-react-v3",
+    "cases": 75,
+    "caseHash": "8c7e3ff302cba15c743428e62e034839c4f70f4eac30149db95eef7a2430fe61",
+    "corpusHash": "4c11acc1307f9c3f074f60b537323b3fe8da7ea751c2e17a9cd4e6c6772f6844",
+    "corpusCommits": 27646,
+    "validation": {
+      "passed": true,
+      "issueRcaCases": 0,
+      "invalidIssueRcaCases": 0,
+      "errors": []
+    }
+  },
+  "index": {
+    "passed": true,
+    "checks": {
+      "corpusHashMatchesManifest": true,
+      "corpusCountMatchesManifest": true,
+      "metadataCountMatchesCorpus": true,
+      "ftsCountMatchesMetadata": true,
+      "vectorCountMatchesMetadata": true,
+      "noDuplicateMetadataKeys": true,
+      "noMissingRows": true,
+      "noStaleRows": true,
+      "vectorDimensionsMatchContract": true,
+      "datasetProvenanceValid": true
+    },
+    "counts": {
+      "corpus": 27646,
+      "metadata": 27646,
+      "fts": 27646,
+      "vectors": 27646,
+      "duplicates": 0,
+      "missing": 0,
+      "stale": 0
+    },
+    "contract": {
+      "model": "Qwen/Qwen3-Embedding-0.6B",
+      "dimensions": 1024,
+      "documentTemplateVersion": "2",
+      "lastUpdated": "2026-08-27T09:36:09.925021Z"
+    }
+  },
+  "embedding": {
+    "model": "Qwen/Qwen3-Embedding-0.6B",
+    "dimensions": 1024,
+    "device": "cuda",
+    "batchMs": 11567.409599999999,
+    "amortizedMsPerQuery": 154.232128
+  },
+  "retrieval": {
+    "direct": {
+      "cases": 12,
+      "positiveCases": 12,
+      "recallAt10": 1,
+      "requiredRecallAt10": 1,
+      "precisionAt10": 1,
+      "mrrAt10": 1,
+      "ndcgAt10": 1,
+      "hitRateAt10": 1,
+      "noResultAccuracy": null,
+      "latencyMs": {
+        "mean": 0,
+        "p95": 0
+      },
+      "byCategory": {
+        "exact_sha": {
+          "cases": 12,
+          "positiveCases": 12,
+          "recallAt10": 1,
+          "requiredRecallAt10": 1,
+          "precisionAt10": 1,
+          "mrrAt10": 1,
+          "ndcgAt10": 1,
+          "hitRateAt10": 1,
+          "noResultAccuracy": null,
+          "latencyMs": {
+            "mean": 0,
+            "p95": 0
+          }
+        }
+      },
+      "bySplit": {
+        "dev": {
+          "cases": 9,
+          "positiveCases": 9,
+          "recallAt10": 1,
+          "requiredRecallAt10": 1,
+          "precisionAt10": 1,
+          "mrrAt10": 1,
+          "ndcgAt10": 1,
+          "hitRateAt10": 1,
+          "noResultAccuracy": null,
+          "latencyMs": {
+            "mean": 0,
+            "p95": 0
+          }
+        },
+        "test": {
+          "cases": 3,
+          "positiveCases": 3,
+          "recallAt10": 1,
+          "requiredRecallAt10": 1,
+          "precisionAt10": 1,
+          "mrrAt10": 1,
+          "ndcgAt10": 1,
+          "hitRateAt10": 1,
+          "noResultAccuracy": null,
+          "latencyMs": {
+            "mean": 0,
+            "p95": 0
+          }
+        }
+      }
+    },
+    "lexical": {
+      "cases": 75,
+      "positiveCases": 55,
+      "recallAt10": 0.5116883116883116,
+      "requiredRecallAt10": 0.5116883116883116,
+      "precisionAt10": 0.2963636363636364,
+      "mrrAt10": 0.5136363636363637,
+      "ndcgAt10": 0.4657258260990077,
+      "hitRateAt10": 0.6,
+      "noResultAccuracy": 0.3333333333333333,
+      "latencyMs": {
+        "mean": 22.77034400000004,
+        "p95": 56.316100000000006
+      },
+      "byCategory": {
+        "ambiguous": {
+          "cases": 5,
+          "positiveCases": 0,
+          "recallAt10": null,
+          "requiredRecallAt10": null,
+          "precisionAt10": null,
+          "mrrAt10": null,
+          "ndcgAt10": null,
+          "hitRateAt10": null,
+          "noResultAccuracy": null,
+          "latencyMs": {
+            "mean": 25.615179999999963,
+            "p95": 35.35489999999845
+          }
+        },
+        "author_date": {
+          "cases": 10,
+          "positiveCases": 10,
+          "recallAt10": 0.26666666666666666,
+          "requiredRecallAt10": 0.26666666666666666,
+          "precisionAt10": 0.35,
+          "mrrAt10": 0.33333333333333337,
+          "ndcgAt10": 0.2509199171000833,
+          "hitRateAt10": 0.4,
+          "noResultAccuracy": null,
+          "latencyMs": {
+            "mean": 0.7712299999995593,
+            "p95": 1.40230000000156
+          }
+        },
+        "exact_sha": {
+          "cases": 12,
+          "positiveCases": 12,
+          "recallAt10": 0,
+          "requiredRecallAt10": 0,
+          "precisionAt10": 0,
+          "mrrAt10": 0,
+          "ndcgAt10": 0,
+          "hitRateAt10": 0,
+          "noResultAccuracy": null,
+          "latencyMs": {
+            "mean": 14.942850000000211,
+            "p95": 17.01759999999922
+          }
+        },
+        "negative": {
+          "cases": 5,
+          "positiveCases": 0,
+          "recallAt10": null,
+          "requiredRecallAt10": null,
+          "precisionAt10": null,
+          "mrrAt10": null,
+          "ndcgAt10": null,
+          "hitRateAt10": null,
+          "noResultAccuracy": 1,
+          "latencyMs": {
+            "mean": 0.1847200000011071,
+            "p95": 0.24390000000130385
+          }
+        },
+        "negative_natural": {
+          "cases": 10,
+          "positiveCases": 0,
+          "recallAt10": null,
+          "requiredRecallAt10": null,
+          "precisionAt10": null,
+          "mrrAt10": null,
+          "ndcgAt10": null,
+          "hitRateAt10": null,
+          "noResultAccuracy": 0,
+          "latencyMs": {
+            "mean": 34.56139000000003,
+            "p95": 45.098299999997835
+          }
+        },
+        "repo_date": {
+          "cases": 5,
+          "positiveCases": 5,
+          "recallAt10": 1,
+          "requiredRecallAt10": 1,
+          "precisionAt10": 1,
+          "mrrAt10": 1,
+          "ndcgAt10": 1,
+          "hitRateAt10": 1,
+          "noResultAccuracy": null,
+          "latencyMs": {
+            "mean": 14.428360000000248,
+            "p95": 22.14429999999993
+          }
+        },
+        "risk_date": {
+          "cases": 10,
+          "positiveCases": 10,
+          "recallAt10": 0.24761904761904757,
+          "requiredRecallAt10": 0.24761904761904757,
+          "precisionAt10": 0.6,
+          "mrrAt10": 0.6,
+          "ndcgAt10": 0.32007708250122374,
+          "hitRateAt10": 0.6,
+          "noResultAccuracy": null,
+          "latencyMs": {
+            "mean": 0.9673499999997148,
+            "p95": 2.0811000000030617
+          }
+        },
+        "semantic_title": {
+          "cases": 18,
+          "positiveCases": 18,
+          "recallAt10": 1,
+          "requiredRecallAt10": 1,
+          "precisionAt10": 0.10000000000000003,
+          "mrrAt10": 0.7731481481481481,
+          "ndcgAt10": 0.8280528021906862,
+          "hitRateAt10": 1,
+          "noResultAccuracy": null,
+          "latencyMs": {
+            "mean": 53.573366666666715,
+            "p95": 71.47290000000066
+          }
+        }
+      },
+      "bySplit": {
+        "dev": {
+          "cases": 52,
+          "positiveCases": 39,
+          "recallAt10": 0.49511599511599513,
+          "requiredRecallAt10": 0.49511599511599513,
+          "precisionAt10": 0.27692307692307694,
+          "mrrAt10": 0.514957264957265,
+          "ndcgAt10": 0.45874083529330495,
+          "hitRateAt10": 0.5897435897435898,
+          "noResultAccuracy": 0.3,
+          "latencyMs": {
+            "mean": 23.087205769230877,
+            "p95": 56.316100000000006
+          }
+        },
+        "test": {
+          "cases": 23,
+          "positiveCases": 16,
+          "recallAt10": 0.5520833333333333,
+          "requiredRecallAt10": 0.5520833333333333,
+          "precisionAt10": 0.34375,
+          "mrrAt10": 0.5104166666666667,
+          "ndcgAt10": 0.48275174118790787,
+          "hitRateAt10": 0.625,
+          "noResultAccuracy": 0.4,
+          "latencyMs": {
+            "mean": 22.053960869565106,
+            "p95": 56.23459999999977
+          }
+        }
+      }
+    },
+    "dense": {
+      "cases": 75,
+      "positiveCases": 55,
+      "recallAt10": 0.7636363636363637,
+      "requiredRecallAt10": 0.7636363636363637,
+      "precisionAt10": 0.4763636363636364,
+      "mrrAt10": 0.6866666666666666,
+      "ndcgAt10": 0.7056869789200675,
+      "hitRateAt10": 0.7636363636363637,
+      "noResultAccuracy": 0,
+      "latencyMs": {
+        "mean": 204.11451599999972,
+        "p95": 234.35122799999988
+      },
+      "byCategory": {
+        "ambiguous": {
+          "cases": 5,
+          "positiveCases": 0,
+          "recallAt10": null,
+          "requiredRecallAt10": null,
+          "precisionAt10": null,
+          "mrrAt10": null,
+          "ndcgAt10": null,
+          "hitRateAt10": null,
+          "noResultAccuracy": null,
+          "latencyMs": {
+            "mean": 230.77272799999955,
+            "p95": 236.78012799999885
+          }
+        },
+        "author_date": {
+          "cases": 10,
+          "positiveCases": 10,
+          "recallAt10": 1,
+          "requiredRecallAt10": 1,
+          "precisionAt10": 0.95,
+          "mrrAt10": 1,
+          "ndcgAt10": 1,
+          "hitRateAt10": 1,
+          "noResultAccuracy": null,
+          "latencyMs": {
+            "mean": 155.27852800000073,
+            "p95": 156.15052799999864
+          }
+        },
+        "exact_sha": {
+          "cases": 12,
+          "positiveCases": 12,
+          "recallAt10": 0,
+          "requiredRecallAt10": 0,
+          "precisionAt10": 0,
+          "mrrAt10": 0,
+          "ndcgAt10": 0,
+          "hitRateAt10": 0,
+          "noResultAccuracy": null,
+          "latencyMs": {
+            "mean": 229.60227799999996,
+            "p95": 234.33862799999986
+          }
+        },
+        "negative": {
+          "cases": 5,
+          "positiveCases": 0,
+          "recallAt10": null,
+          "requiredRecallAt10": null,
+          "precisionAt10": null,
+          "mrrAt10": null,
+          "ndcgAt10": null,
+          "hitRateAt10": null,
+          "noResultAccuracy": 0,
+          "latencyMs": {
+            "mean": 226.87362799999937,
+            "p95": 230.52232799999945
+          }
+        },
+        "negative_natural": {
+          "cases": 10,
+          "positiveCases": 0,
+          "recallAt10": null,
+          "requiredRecallAt10": null,
+          "precisionAt10": null,
+          "mrrAt10": null,
+          "ndcgAt10": null,
+          "hitRateAt10": null,
+          "noResultAccuracy": 0,
+          "latencyMs": {
+            "mean": 226.8195880000007,
+            "p95": 235.0376280000022
+          }
+        },
+        "repo_date": {
+          "cases": 5,
+          "positiveCases": 5,
+          "recallAt10": 1,
+          "requiredRecallAt10": 1,
+          "precisionAt10": 1,
+          "mrrAt10": 1,
+          "ndcgAt10": 1,
+          "hitRateAt10": 1,
+          "noResultAccuracy": null,
+          "latencyMs": {
+            "mean": 156.362207999999,
+            "p95": 157.82392799999832
+          }
+        },
+        "risk_date": {
+          "cases": 10,
+          "positiveCases": 10,
+          "recallAt10": 1,
+          "requiredRecallAt10": 1,
+          "precisionAt10": 1,
+          "mrrAt10": 1,
+          "ndcgAt10": 1,
+          "hitRateAt10": 1,
+          "noResultAccuracy": null,
+          "latencyMs": {
+            "mean": 155.96714799999972,
+            "p95": 156.80282799999657
+          }
+        },
+        "semantic_title": {
+          "cases": 18,
+          "positiveCases": 18,
+          "recallAt10": 0.9444444444444444,
+          "requiredRecallAt10": 0.9444444444444444,
+          "precisionAt10": 0.09444444444444447,
+          "mrrAt10": 0.7092592592592593,
+          "ndcgAt10": 0.7673768800335399,
+          "hitRateAt10": 0.9444444444444444,
+          "noResultAccuracy": null,
+          "latencyMs": {
+            "mean": 227.92588355555552,
+            "p95": 234.65002800000036
+          }
+        }
+      },
+      "bySplit": {
+        "dev": {
+          "cases": 52,
+          "positiveCases": 39,
+          "recallAt10": 0.7692307692307693,
+          "requiredRecallAt10": 0.7692307692307693,
+          "precisionAt10": 0.45641025641025645,
+          "mrrAt10": 0.6905982905982906,
+          "ndcgAt10": 0.7097911304367246,
+          "hitRateAt10": 0.7692307692307693,
+          "noResultAccuracy": 0,
+          "latencyMs": {
+            "mean": 204.66457799999992,
+            "p95": 234.65002800000036
+          }
+        },
+        "test": {
+          "cases": 23,
+          "positiveCases": 16,
+          "recallAt10": 0.75,
+          "requiredRecallAt10": 0.75,
+          "precisionAt10": 0.525,
+          "mrrAt10": 0.6770833333333334,
+          "ndcgAt10": 0.6956831095982161,
+          "hitRateAt10": 0.75,
+          "noResultAccuracy": 0,
+          "latencyMs": {
+            "mean": 202.870897565217,
+            "p95": 230.35022799999967
+          }
+        }
+      }
+    },
+    "hybrid": {
+      "cases": 75,
+      "positiveCases": 55,
+      "recallAt10": 1,
+      "requiredRecallAt10": 1,
+      "precisionAt10": 0.5,
+      "mrrAt10": 0.9295454545454546,
+      "ndcgAt10": 0.9454008213286695,
+      "hitRateAt10": 1,
+      "noResultAccuracy": 0,
+      "latencyMs": {
+        "mean": 226.92785866666625,
+        "p95": 290.1728279999992
+      },
+      "byCategory": {
+        "ambiguous": {
+          "cases": 5,
+          "positiveCases": 0,
+          "recallAt10": null,
+          "requiredRecallAt10": null,
+          "precisionAt10": null,
+          "mrrAt10": null,
+          "ndcgAt10": null,
+          "hitRateAt10": null,
+          "noResultAccuracy": null,
+          "latencyMs": {
+            "mean": 256.43354799999906,
+            "p95": 268.5158279999963
+          }
+        },
+        "author_date": {
+          "cases": 10,
+          "positiveCases": 10,
+          "recallAt10": 1,
+          "requiredRecallAt10": 1,
+          "precisionAt10": 0.95,
+          "mrrAt10": 1,
+          "ndcgAt10": 0.9919720789148186,
+          "hitRateAt10": 1,
+          "noResultAccuracy": null,
+          "latencyMs": {
+            "mean": 156.0582779999997,
+            "p95": 157.13122800000235
+          }
+        },
+        "exact_sha": {
+          "cases": 12,
+          "positiveCases": 12,
+          "recallAt10": 1,
+          "requiredRecallAt10": 1,
+          "precisionAt10": 0.09999999999999999,
+          "mrrAt10": 1,
+          "ndcgAt10": 1,
+          "hitRateAt10": 1,
+          "noResultAccuracy": null,
+          "latencyMs": {
+            "mean": 244.6383030000006,
+            "p95": 249.02322800000036
+          }
+        },
+        "negative": {
+          "cases": 5,
+          "positiveCases": 0,
+          "recallAt10": null,
+          "requiredRecallAt10": null,
+          "precisionAt10": null,
+          "mrrAt10": null,
+          "ndcgAt10": null,
+          "hitRateAt10": null,
+          "noResultAccuracy": 0,
+          "latencyMs": {
+            "mean": 227.0872879999999,
+            "p95": 230.7387280000006
+          }
+        },
+        "negative_natural": {
+          "cases": 10,
+          "positiveCases": 0,
+          "recallAt10": null,
+          "requiredRecallAt10": null,
+          "precisionAt10": null,
+          "mrrAt10": null,
+          "ndcgAt10": null,
+          "hitRateAt10": null,
+          "noResultAccuracy": 0,
+          "latencyMs": {
+            "mean": 261.4395680000006,
+            "p95": 280.1793279999987
+          }
+        },
+        "repo_date": {
+          "cases": 5,
+          "positiveCases": 5,
+          "recallAt10": 1,
+          "requiredRecallAt10": 1,
+          "precisionAt10": 1,
+          "mrrAt10": 1,
+          "ndcgAt10": 1,
+          "hitRateAt10": 1,
+          "noResultAccuracy": null,
+          "latencyMs": {
+            "mean": 170.80970800000028,
+            "p95": 179.99882800000012
+          }
+        },
+        "risk_date": {
+          "cases": 10,
+          "positiveCases": 10,
+          "recallAt10": 1,
+          "requiredRecallAt10": 1,
+          "precisionAt10": 1,
+          "mrrAt10": 1,
+          "ndcgAt10": 1,
+          "hitRateAt10": 1,
+          "noResultAccuracy": null,
+          "latencyMs": {
+            "mean": 156.9447679999983,
+            "p95": 157.95812799999874
+          }
+        },
+        "semantic_title": {
+          "cases": 18,
+          "positiveCases": 18,
+          "recallAt10": 1,
+          "requiredRecallAt10": 1,
+          "precisionAt10": 0.10000000000000003,
+          "mrrAt10": 0.7847222222222222,
+          "ndcgAt10": 0.8376291324404802,
+          "hitRateAt10": 1,
+          "noResultAccuracy": null,
+          "latencyMs": {
+            "mean": 281.54727244444433,
+            "p95": 301.7258280000009
+          }
+        }
+      },
+      "bySplit": {
+        "dev": {
+          "cases": 52,
+          "positiveCases": 39,
+          "recallAt10": 1,
+          "requiredRecallAt10": 1,
+          "precisionAt10": 0.47948717948717956,
+          "mrrAt10": 0.9529914529914532,
+          "ndcgAt10": 0.9628371934030678,
+          "hitRateAt10": 1,
+          "noResultAccuracy": 0,
+          "latencyMs": {
+            "mean": 227.78994723076883,
+            "p95": 290.1728279999992
+          }
+        },
+        "test": {
+          "cases": 23,
+          "positiveCases": 16,
+          "recallAt10": 1,
+          "requiredRecallAt10": 1,
+          "precisionAt10": 0.55,
+          "mrrAt10": 0.8723958333333333,
+          "ndcgAt10": 0.9028996643973242,
+          "hitRateAt10": 1,
+          "noResultAccuracy": 0,
+          "latencyMs": {
+            "mean": 224.97878886956502,
+            "p95": 284.13732800000105
+          }
+        }
+      }
+    }
+  },
+  "evidenceGate": {
+    "cases": 75,
+    "accuracy": 1,
+    "verdicts": {
+      "SEARCH": 55,
+      "ABSTAIN": 15,
+      "ASK_USER": 5
+    },
+    "byExpectedBehavior": {
+      "SEARCH": {
+        "cases": 55,
+        "accuracy": 1,
+        "verdicts": {
+          "SEARCH": 55,
+          "ABSTAIN": 0,
+          "ASK_USER": 0
+        }
+      },
+      "ABSTAIN": {
+        "cases": 15,
+        "accuracy": 1,
+        "verdicts": {
+          "SEARCH": 0,
+          "ABSTAIN": 15,
+          "ASK_USER": 0
+        }
+      },
+      "ASK_USER": {
+        "cases": 5,
+        "accuracy": 1,
+        "verdicts": {
+          "SEARCH": 0,
+          "ABSTAIN": 0,
+          "ASK_USER": 5
+        }
+      }
+    },
+    "byCategory": {
+      "ambiguous": {
+        "cases": 5,
+        "accuracy": 1,
+        "verdicts": {
+          "SEARCH": 0,
+          "ABSTAIN": 0,
+          "ASK_USER": 5
+        }
+      },
+      "author_date": {
+        "cases": 10,
+        "accuracy": 1,
+        "verdicts": {
+          "SEARCH": 10,
+          "ABSTAIN": 0,
+          "ASK_USER": 0
+        }
+      },
+      "exact_sha": {
+        "cases": 12,
+        "accuracy": 1,
+        "verdicts": {
+          "SEARCH": 12,
+          "ABSTAIN": 0,
+          "ASK_USER": 0
+        }
+      },
+      "negative": {
+        "cases": 5,
+        "accuracy": 1,
+        "verdicts": {
+          "SEARCH": 0,
+          "ABSTAIN": 5,
+          "ASK_USER": 0
+        }
+      },
+      "negative_natural": {
+        "cases": 10,
+        "accuracy": 1,
+        "verdicts": {
+          "SEARCH": 0,
+          "ABSTAIN": 10,
+          "ASK_USER": 0
+        }
+      },
+      "repo_date": {
+        "cases": 5,
+        "accuracy": 1,
+        "verdicts": {
+          "SEARCH": 5,
+          "ABSTAIN": 0,
+          "ASK_USER": 0
+        }
+      },
+      "risk_date": {
+        "cases": 10,
+        "accuracy": 1,
+        "verdicts": {
+          "SEARCH": 10,
+          "ABSTAIN": 0,
+          "ASK_USER": 0
+        }
+      },
+      "semantic_title": {
+        "cases": 18,
+        "accuracy": 1,
+        "verdicts": {
+          "SEARCH": 18,
+          "ABSTAIN": 0,
+          "ASK_USER": 0
+        }
+      }
+    },
+    "bySplit": {
+      "dev": {
+        "cases": 52,
+        "accuracy": 1,
+        "verdicts": {
+          "SEARCH": 39,
+          "ABSTAIN": 10,
+          "ASK_USER": 3
+        },
+        "byExpectedBehavior": {
+          "SEARCH": {
+            "cases": 39,
+            "accuracy": 1,
+            "verdicts": {
+              "SEARCH": 39,
+              "ABSTAIN": 0,
+              "ASK_USER": 0
+            }
+          },
+          "ABSTAIN": {
+            "cases": 10,
+            "accuracy": 1,
+            "verdicts": {
+              "SEARCH": 0,
+              "ABSTAIN": 10,
+              "ASK_USER": 0
+            }
+          },
+          "ASK_USER": {
+            "cases": 3,
+            "accuracy": 1,
+            "verdicts": {
+              "SEARCH": 0,
+              "ABSTAIN": 0,
+              "ASK_USER": 3
+            }
+          }
+        }
+      },
+      "test": {
+        "cases": 23,
+        "accuracy": 1,
+        "verdicts": {
+          "SEARCH": 16,
+          "ABSTAIN": 5,
+          "ASK_USER": 2
+        },
+        "byExpectedBehavior": {
+          "SEARCH": {
+            "cases": 16,
+            "accuracy": 1,
+            "verdicts": {
+              "SEARCH": 16,
+              "ABSTAIN": 0,
+              "ASK_USER": 0
+            }
+          },
+          "ABSTAIN": {
+            "cases": 5,
+            "accuracy": 1,
+            "verdicts": {
+              "SEARCH": 0,
+              "ABSTAIN": 5,
+              "ASK_USER": 0
+            }
+          },
+          "ASK_USER": {
+            "cases": 2,
+            "accuracy": 1,
+            "verdicts": {
+              "SEARCH": 0,
+              "ABSTAIN": 0,
+              "ASK_USER": 2
+            }
+          }
+        }
+      }
+    }
+  },
+  "answers": null,
+  "intents": null,
+  "gateFailures": []
+}

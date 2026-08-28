@@ -9,6 +9,12 @@
     "fetch-commits": "node index.js",
     "generate-data": "node scripts/generate-sample-data.js",
     "import-public": "node scripts/import-public-commits.js",
+    "enrich-public": "node scripts/enrich-public-commits.js",
+    "mine:github-rca": "node scripts/mine-github-rca.js",
+    "build:rca-dataset": "node scripts/build-grounded-rca-dataset.js",
+    "build:rca-pilot": "node scripts/build-rca-pilot-dataset.js",
+    "analyze:rca-pilot": "node scripts/analyze-rca-pilot.js",
+    "analyze:eval-delta": "node scripts/analyze-versioned-eval-delta.js",
     "embedding:serve": "conda run -n hello-agents --no-capture-output python scripts/serve-embedding.py --device cuda",
     "refresh": "node scripts/scheduled-refresh.js",
     "refresh:loop": "node scripts/scheduled-refresh.js --loop 60",
@@ -17,7 +23,9 @@
     "eval:lexical": "node eval/run-eval.js --mode lexical",
     "eval:full": "node eval/run-eval.js --mode all",
     "eval:agent": "node eval/run-agent-eval.js",
-    "test:eval": "node tests/test-eval-metrics.js && node tests/test-intent-extractor-specificity.js && node tests/test-evidence-gate.js && node tests/test-evidence-gate-orchestrator.js && node tests/test-agent-eval-runner.js"
+    "test:eval": "node tests/test-eval-metrics.js && node tests/test-eval-dataset-validation.js && node tests/test-intent-extractor-specificity.js && node tests/test-evidence-gate.js && node tests/test-evidence-gate-orchestrator.js && node tests/test-agent-eval-runner.js",
+    "test:public-enrichment": "node tests/test-public-commit-enrichment.js",
+    "test:github-rca": "node tests/test-github-rca-grounding.js && node tests/test-grounded-rca-review.js"
   },
   "dependencies": {
     "apache-arrow": "^18.1.0",

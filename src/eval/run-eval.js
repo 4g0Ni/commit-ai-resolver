@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { loadDailyCorpus } from './lib/corpus.js';
+import { assertDatasetGateEligibility, inspectEvalDataset } from './lib/dataset-validation.js';
 import { aggregateCaseMetrics, compareSummaries, expectedCalibrationError, identity, scoreRanking } from './lib/metrics.js';
 import { evaluateEvidence } from '../services/evidence-gate.js';
 
@@ -50,7 +51,7 @@ async function readJsonl(path) {
     return (await readFile(path, 'utf8')).split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
 }
 
-function inspectIndex(dbPath, corpus, manifest) {
+function inspectIndex(dbPath, corpus, manifest, datasetValidation) {
     const db = new Database(dbPath, { readonly: true });
     sqliteVec.load(db);
     const scalar = sql => db.prepare(sql).get();
@@ -77,6 +78,7 @@ function inspectIndex(dbPath, corpus, manifest) {
         noMissingRows: missingRows === 0,
         noStaleRows: staleRows === 0,
         vectorDimensionsMatchContract: String(vectorDimensions) === contract.embeddingDimensions,
+        datasetProvenanceValid: datasetValidation.passed,
     };
     return {
         passed: Object.values(checks).every(Boolean),
@@ -425,13 +427,15 @@ function evaluateGates(summary, comparison) {
 
 const args = parseArgs(process.argv.slice(2));
 const manifest = JSON.parse(await readFile(join(args.dataset, 'manifest.json'), 'utf8'));
+assertDatasetGateEligibility(manifest, args.gate);
 const casesRaw = await readFile(join(args.dataset, 'cases.jsonl'), 'utf8');
 const caseHash = createHash('sha256').update(casesRaw).digest('hex');
 if (caseHash !== manifest.cases.sha256) throw new Error('Dataset cases hash does not match manifest; regenerate or review the dataset.');
 const cases = casesRaw.split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
+const datasetValidation = inspectEvalDataset(cases);
 const dataRoot = process.env.DATA_DIR ? resolve(process.env.DATA_DIR) : join(projectRoot, 'data');
 const corpus = await loadDailyCorpus(join(dataRoot, 'daily'));
-const index = inspectIndex(process.env.VECTORS_DB || join(dataRoot, 'vectors.db'), corpus, manifest);
+const index = inspectIndex(process.env.VECTORS_DB || join(dataRoot, 'vectors.db'), corpus, manifest, datasetValidation);
 const startedAt = new Date().toISOString();
 const retrievalRun = args.mode === 'index' ? { caseResults: [], embedding: null } : await runRetrieval(cases, index, args);
 const caseResults = retrievalRun.caseResults;
@@ -447,7 +451,7 @@ const summary = {
     startedAt,
     finishedAt: new Date().toISOString(),
     mode: args.mode,
-    dataset: { name: manifest.dataset, cases: cases.length, caseHash, corpusHash: corpus.corpusHash, corpusCommits: corpus.commits.length },
+    dataset: { name: manifest.dataset, cases: cases.length, caseHash, corpusHash: corpus.corpusHash, corpusCommits: corpus.commits.length, evaluationPolicy: manifest.evaluationPolicy || null, validation: datasetValidation },
     index,
     embedding: retrievalRun.embedding,
     retrieval,

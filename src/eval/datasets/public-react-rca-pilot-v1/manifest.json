@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 1,
+  "dataset": "public-react-rca-pilot-v1",
+  "generatedAt": "2026-08-27T16:09:11.767Z",
+  "generator": "src/scripts/build-rca-pilot-dataset.js",
+  "corpus": {
+    "path": "data/enriched/public-react-v3-20260827/daily",
+    "sha256": "4c11acc1307f9c3f074f60b537323b3fe8da7ea751c2e17a9cd4e6c6772f6844",
+    "files": 3803,
+    "commits": 27646,
+    "repos": [
+      "facebook/react"
+    ],
+    "dateRange": {
+      "from": "2013-05-28",
+      "to": "2026-08-09"
+    }
+  },
+  "cases": {
+    "count": 461,
+    "sha256": "7ee785c74835ab93446ddcf682eadf4175d3a8a7b39f673bbea9d8f50a232d3a",
+    "byCategory": {
+      "issue_rca_pilot": 461
+    },
+    "bySplit": {
+      "pilot": 461
+    }
+  },
+  "candidates": {
+    "source": "data/eval/grounded-react-rca-all/candidates.jsonl",
+    "sha256": "913585e24f6c85fbeb7f32e6bed49a98b651005655772be9b60d5160fe25920e",
+    "qualityScores": {
+      "1": 11,
+      "2": 12,
+      "3": 15,
+      "4": 49,
+      "5": 6,
+      "6": 65,
+      "7": 16,
+      "8": 96,
+      "9": 48,
+      "10": 6,
+      "11": 137
+    },
+    "selectionAreas": {
+      "Build / Tooling": 12,
+      "Documentation": 5,
+      "Fiber / Reconciler": 79,
+      "Fixtures": 1,
+      "Generated / Build Output": 1,
+      "Historical / Other": 6,
+      "React ART": 1,
+      "React Compiler": 26,
+      "React Core": 26,
+      "React DevTools": 143,
+      "React DOM": 99,
+      "React Hooks ESLint": 31,
+      "React Native Renderer": 1,
+      "React Server Components / Flight": 7,
+      "Scheduler": 6,
+      "Shared React Infrastructure": 13,
+      "Test Renderers": 4
+    }
+  },
+  "evaluationPolicy": {
+    "displayLabel": "模型预审、非 gold、不可用于 release gate",
+    "labelStatus": "model-prescreened",
+    "gold": false,
+    "releaseGateEligible": false,
+    "intendedUse": [
+      "pipeline shakeout",
+      "retrieval diagnostics",
+      "failure analysis",
+      "human-review prioritization"
+    ],
+    "prohibitedUse": [
+      "release gate",
+      "production quality claim",
+      "baseline promotion without human review"
+    ]
+  },
+  "labelPolicy": "Issue-to-closing-PR-to-corpus-commit provenance is machine-verifiable, but problem fidelity, fix completeness, and query usability have not received human approval. Every case is model-prescreened and non-gold."
+}
