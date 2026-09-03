@@ -1,5 +1,5 @@
 import { strict as assert } from 'node:assert';
-import { buildModelPrescreenedRcaCase, buildReviewedRcaCase, reviewDecisionCounts, stableSplit, validateGroundedRcaReview } from '../services/grounded-rca-review.js';
+import { assignGroupedCaseSplits, buildModelPrescreenedRcaCase, buildReviewedRcaCase, reviewDecisionCounts, stableSplit, validateGroundedRcaReview } from '../services/grounded-rca-review.js';
 
 const commitId = 'b'.repeat(40);
 const candidate = {
@@ -38,6 +38,17 @@ assert.equal(pilotCase.releaseGateEligible, false);
 assert.equal(pilotCase.split, 'pilot');
 assert.equal(pilotCase.pilot.qualityScore, null);
 assert.deepEqual(reviewDecisionCounts([{ decision: 'approve' }, { decision: 'reject' }, {}]), { approve: 1, reject: 1, missing: 1 });
+
+const secondCommitId = 'c'.repeat(40);
+const grouped = assignGroupedCaseSplits([
+    { id: 'one', relevantCommits: [{ repo: 'facebook/react', commitId }] },
+    { id: 'two', relevantCommits: [{ repo: 'facebook/react', commitId }, { repo: 'facebook/react', commitId: secondCommitId }] },
+    { id: 'three', relevantCommits: [{ repo: 'facebook/react', commitId: secondCommitId }] },
+    { id: 'independent', relevantCommits: [{ repo: 'facebook/react', commitId: 'd'.repeat(40) }] },
+]);
+assert.equal(grouped[0].split, grouped[1].split);
+assert.equal(grouped[1].split, grouped[2].split);
+assert.deepEqual(grouped, assignGroupedCaseSplits(grouped));
 
 assert.throws(() => validateGroundedRcaReview(candidate, { ...review, problemFaithful: false }, corpus), /problemFaithful/);
 assert.throws(() => validateGroundedRcaReview(candidate, { ...review, reviewer: '' }, corpus), /reviewer/);

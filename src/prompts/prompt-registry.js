@@ -20,6 +20,13 @@ const PROMPT_REGISTRY = Object.freeze({
             appendix: 'Experiment rule: treat unsupported commit references and non-canonical citations as blocking quality issues.',
         }),
     }),
+    'commit-reranker': Object.freeze({
+        stable: Object.freeze({ version: 'commit-reranker-v1', appendix: '' }),
+        candidate: Object.freeze({
+            version: 'commit-reranker-v1-candidate1',
+            appendix: 'Experiment rule: prioritize a concrete symptom-to-change mechanism over broad component similarity.',
+        }),
+    }),
     'diff-investigator': Object.freeze({
         stable: Object.freeze({ version: 'diff-investigator-v3', appendix: '' }),
         candidate: Object.freeze({

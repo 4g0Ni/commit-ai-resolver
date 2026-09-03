@@ -46,6 +46,8 @@ function summarize(rows) {
         channels[channel] = {
             cases: values.length,
             recallAt10: mean(values.map(item => item.metrics.recallAtK)),
+            recallAt20: mean(values.map(item => item.candidateMetrics?.[20]?.recallAtK).filter(Number.isFinite)),
+            recallAt50: mean(values.map(item => item.candidateMetrics?.[50]?.recallAtK).filter(Number.isFinite)),
             requiredRecallAt10: mean(values.map(item => item.metrics.requiredRecallAtK)),
             mrrAt10: mean(values.map(item => item.metrics.mrr)),
             ndcgAt10: mean(values.map(item => item.metrics.ndcg)),
@@ -110,12 +112,16 @@ function markdown(analysis) {
         '> 模型预审、非 gold、不可用于 release gate。指标仅用于 pipeline shakeout、检索诊断和人工复审排序。', '',
         `- Cases: ${analysis.cases}`,
         `- Label: ${analysis.evaluationPolicy.displayLabel}`, '',
-        '| Channel | Recall@10 | MRR@10 | nDCG@10 | Hit@10 | Rank-1 |',
-        '|---|---:|---:|---:|---:|---:|',
+        '| Channel | Recall@10 | Recall@20 | Recall@50 | MRR@10 | nDCG@10 | Hit@10 | Rank-1 |',
+        '|---|---:|---:|---:|---:|---:|---:|---:|',
         ...['lexical', 'dense', 'hybrid'].map(channel => {
             const metrics = overall[channel];
-            return `| ${channel} | ${format(metrics.recallAt10)} | ${format(metrics.mrrAt10)} | ${format(metrics.ndcgAt10)} | ${format(metrics.hitRateAt10)} | ${format(metrics.rank1Rate)} |`;
+            return `| ${channel} | ${format(metrics.recallAt10)} | ${format(metrics.recallAt20)} | ${format(metrics.recallAt50)} | ${format(metrics.mrrAt10)} | ${format(metrics.ndcgAt10)} | ${format(metrics.hitRateAt10)} | ${format(metrics.rank1Rate)} |`;
         }), '',
+        '## Stable grouped split', '',
+        '| Split | N | Lexical R@10 | Dense R@10 | Hybrid R@10 | Hybrid MRR | Hybrid nDCG | Hybrid R@50 |',
+        '|---|---:|---:|---:|---:|---:|---:|---:|',
+        ...Object.entries(analysis.slices.split).map(([split, metrics]) => `| ${split} | ${metrics.cases} | ${format(metrics.channels.lexical.recallAt10)} | ${format(metrics.channels.dense.recallAt10)} | ${format(metrics.channels.hybrid.recallAt10)} | ${format(metrics.channels.hybrid.mrrAt10)} | ${format(metrics.channels.hybrid.ndcgAt10)} | ${format(metrics.channels.hybrid.recallAt50)} |`), '',
         '## Fusion effects', '',
         `- Hybrid improves over dense: ${analysis.fusion.hybridImprovesDense}`,
         `- Hybrid unchanged from dense: ${analysis.fusion.hybridEqualsDense}`,
@@ -171,6 +177,7 @@ async function main() {
             denseHitsLostByHybrid: denseHitsLost.length,
         },
         slices: {
+            split: group(rows, row => row.case.split || 'unspecified'),
             quality: group(rows, row => row.case.pilot.qualityScore >= 10 ? 'high (10-11)' : row.case.pilot.qualityScore >= 8 ? 'medium (8-9)' : 'low (1-7)'),
             queryLength: group(rows, row => row.case.pilot.queryLength <= 500 ? 'short (<=500)' : row.case.pilot.queryLength <= 1200 ? 'medium (501-1200)' : 'long (>1200)'),
             changedFiles: group(rows, row => row.case.pilot.changedFileCount <= 1 ? 'focused (0-1)' : row.case.pilot.changedFileCount <= 5 ? 'small (2-5)' : 'broad (6+)'),

@@ -183,7 +183,7 @@ conda run -n hello-agents --no-capture-output python src\scripts\generate-embedd
 
 To build real-problem RCA eval candidates from GitHub Issues and their explicit closing PRs, run `npm run mine:github-rca` from `src`. These are review candidates only. Complete the generated four-part human review rubric before `npm run build:rca-dataset`; the builder will not accept pending rows or unverified Issue/PR/merge-commit relationships. See `docs/github-grounded-rca-eval-plan-2026-08-27.md` for the full P0–P3 workflow.
 
-To exercise all 461 provenance-valid candidates before human review, run `npm run build:rca-pilot` and evaluate `src/eval/datasets/public-react-rca-pilot-v1`. This set is explicitly marked “模型预审、非 gold、不可用于 release gate”; `run-eval.js --gate` rejects it. Use `npm run analyze:rca-pilot` only for retrieval diagnosis and review prioritization. Human-approved RCA cases remain a separate dataset built with `npm run build:rca-dataset`.
+To exercise all 461 provenance-valid candidates before human review, run `npm run build:rca-pilot` and evaluate `src/eval/datasets/public-react-rca-pilot-v1`. This set is explicitly marked “模型预审、非 gold、不可用于 release gate”; `run-eval.js --gate` rejects it. Shared gold-commit groups are assigned together to the stable dev/test split. Use the pilot only for retrieval diagnosis and review prioritization. Human-approved RCA cases remain a separate dataset built with `npm run build:rca-dataset`. The optional final LLM reranker is disabled by default; enable it only after configuring a chat provider with `ENABLE_LLM_RERANKER=1` and keep its candidate window bounded with `LLM_RERANK_CANDIDATES`.
 
 ### 2. Generate Embeddings
 

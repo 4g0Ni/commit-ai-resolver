@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { loadDailyCorpus } from '../eval/lib/corpus.js';
 import { inspectEvalDataset } from '../eval/lib/dataset-validation.js';
 import { groundedRcaSelectionArea } from '../services/github-rca-grounding.js';
-import { buildModelPrescreenedRcaCase } from '../services/grounded-rca-review.js';
+import { assignGroupedCaseSplits, buildModelPrescreenedRcaCase } from '../services/grounded-rca-review.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(here, '..', '..');
@@ -61,16 +61,17 @@ async function main() {
     if (!candidates.length) throw new Error('Candidate file is empty');
     if (new Set(candidates.map(item => item.id)).size !== candidates.length) throw new Error('Candidate IDs must be unique');
 
-    const cases = candidates.map(candidate => {
+    const cases = assignGroupedCaseSplits(candidates.map(candidate => {
         const evalCase = buildModelPrescreenedRcaCase(candidate, corpusByCommitId);
         evalCase.pilot.primaryArea = groundedRcaSelectionArea(candidate);
         return evalCase;
-    });
+    }));
     const validation = inspectEvalDataset(cases);
     if (!validation.passed) throw new Error(`Generated pilot provenance validation failed: ${JSON.stringify(validation.errors)}`);
     const jsonl = `${cases.map(item => JSON.stringify(item)).join('\n')}\n`;
     const qualityScores = countBy(cases.map(item => String(item.pilot.qualityScore ?? 'missing')));
     const selectionAreas = countBy(cases.map(item => item.pilot.primaryArea));
+    const bySplit = countBy(cases.map(item => item.split));
     const evaluationPolicy = {
         displayLabel: '模型预审、非 gold、不可用于 release gate',
         labelStatus: 'model-prescreened',
@@ -96,7 +97,12 @@ async function main() {
             count: cases.length,
             sha256: createHash('sha256').update(jsonl).digest('hex'),
             byCategory: { issue_rca_pilot: cases.length },
-            bySplit: { pilot: cases.length },
+            bySplit,
+            splitPolicy: {
+                algorithm: 'sha256-modulo-4',
+                grouping: 'connected components of shared relevant commit IDs',
+                testRemainder: 0,
+            },
         },
         candidates: {
             source: displayPath(options.candidates),

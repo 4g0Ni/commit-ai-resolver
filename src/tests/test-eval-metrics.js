@@ -1,5 +1,5 @@
 import { strict as assert } from 'node:assert';
-import { compareSummaries, expectedCalibrationError, scoreRanking } from '../eval/lib/metrics.js';
+import { aggregateCaseMetrics, compareSummaries, expectedCalibrationError, scoreRanking } from '../eval/lib/metrics.js';
 
 const gold = [
     { repo: 'demo', id: 'a', relevance: 3, required: true },
@@ -21,6 +21,19 @@ const delta = compareSummaries(
 );
 assert.ok(Math.abs(delta.hybrid.recallAt10 - 0.2) < 1e-9);
 assert.equal(delta.hybrid.p95LatencyMs, 2);
+const candidates = aggregateCaseMetrics([{
+    channels: {
+        dense: {
+            category: 'demo', split: 'test', expectedBehavior: 'answer', elapsedMs: 1,
+            metrics: perfect,
+            candidateMetrics: { 20: perfect, 50: perfect, 100: perfect, 200: perfect },
+        },
+    },
+}], 'dense');
+assert.equal(candidates.recallAt20, 1);
+assert.equal(candidates.hitRateAt50, 1);
+assert.equal(candidates.recallAt100, 1);
+assert.equal(candidates.requiredRecallAt200, 1);
 assert.ok(Math.abs(expectedCalibrationError([
     { confidence: 0.8, correct: true },
     { confidence: 0.2, correct: false },

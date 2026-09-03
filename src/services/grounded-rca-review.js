@@ -5,6 +5,60 @@ function stableSplit(id) {
     return value % 4 === 0 ? 'test' : 'dev';
 }
 
+function caseCommitKeys(evalCase) {
+    return [...new Set((evalCase.relevantCommits || []).map(commit => {
+        const commitId = String(commit.commitId || commit.id || '').toLowerCase();
+        return commitId ? `${commit.repo || ''}:${commitId}` : null;
+    }).filter(Boolean))].sort();
+}
+
+/**
+ * Assign stable dev/test splits while keeping every connected gold-commit group together.
+ * A multi-commit case joins all cases that share any one of its commits, preventing a
+ * duplicate fix from leaking across the tuning and held-out sets.
+ */
+export function assignGroupedCaseSplits(cases) {
+    const parents = cases.map((_, index) => index);
+    const find = index => {
+        while (parents[index] !== index) {
+            parents[index] = parents[parents[index]];
+            index = parents[index];
+        }
+        return index;
+    };
+    const union = (left, right) => {
+        const leftRoot = find(left);
+        const rightRoot = find(right);
+        if (leftRoot !== rightRoot) parents[rightRoot] = leftRoot;
+    };
+    const firstCaseByCommit = new Map();
+
+    cases.forEach((evalCase, index) => {
+        for (const key of caseCommitKeys(evalCase)) {
+            if (firstCaseByCommit.has(key)) union(index, firstCaseByCommit.get(key));
+            else firstCaseByCommit.set(key, index);
+        }
+    });
+
+    const components = new Map();
+    cases.forEach((evalCase, index) => {
+        const root = find(index);
+        if (!components.has(root)) components.set(root, []);
+        components.get(root).push(index);
+    });
+
+    const splitByIndex = new Map();
+    for (const indexes of components.values()) {
+        const commitKeys = [...new Set(indexes.flatMap(index => caseCommitKeys(cases[index])))].sort();
+        const fallbackIds = indexes.map(index => String(cases[index].id || '')).sort();
+        const groupKey = (commitKeys.length ? commitKeys : fallbackIds).join('\n');
+        const split = stableSplit(groupKey);
+        for (const index of indexes) splitByIndex.set(index, split);
+    }
+
+    return cases.map((evalCase, index) => ({ ...evalCase, split: splitByIndex.get(index) }));
+}
+
 function assertHttpUrl(value, label) {
     let parsed;
     try {

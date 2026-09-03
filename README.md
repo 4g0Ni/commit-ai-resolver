@@ -924,9 +924,13 @@ node scripts/reset-and-refresh.js --rebuild-embeddings
 | `OPENAI_EMBEDDING_DIMENSIONS` | 推断值/默认值 3072 | 实际向量维度；更改后需要重建索引 |
 | `EMBEDDING_QUERY_INSTRUCTION` | 感知模型 | 可选的非对称查询指令；Qwen3 使用默认的提交检索指令 |
 | `VECTOR_MIN_SCORE` | `0` | 可选的按模型校准的稠密检索截断值；默认检索依赖排名和 RRF |
-| `RRF_K` | `20` | 用于短候选列表的排名融合平滑常量 |
+| `RRF_K` | `5` | 用于短候选列表的排名融合平滑常量；在 461-case RCA dev 上调优 |
+| `RRF_DENSE_WEIGHT` | `1` | Dense 主通道的融合权重 |
+| `RRF_LEXICAL_WEIGHT` | `0.33` | FTS5 补充通道权重；避免词法噪声挤出 Dense 命中 |
 | `RRF_SECONDARY_WEIGHT` | `0.7` | 次要语义查询权重 |
 | `RRF_BUG_TITLE_WEIGHT` | `1.5` | 工作项标题权重 |
+| `ENABLE_LLM_RERANKER` | `0` | 设为 `1` 时，仅在 evidence gate 允许搜索后启用最终 commit reranker |
+| `LLM_RERANK_CANDIDATES` | `20` | 交给最终 LLM reranker 的候选窗口，范围 2–50 |
 | `PROMPT_EXPERIMENTS` | `{}` | Prompt candidate 流量 JSON，例如 `{"answer-synthesizer":10}` 表示 10% 稳定分桶 |
 | `PROMPT_EXPERIMENT_KILL_SWITCH` | `0` | 设为 `1` 时立即强制所有 Agent 使用 stable Prompt |
 | `PROMPT_AUTO_ROLLBACK_FAILURES` | `3` | Candidate 连续模型/解析失败或负反馈达到该次数后自动回滚 |

@@ -9,11 +9,14 @@ import { loadDailyCorpus } from './lib/corpus.js';
 import { assertDatasetGateEligibility, inspectEvalDataset } from './lib/dataset-validation.js';
 import { aggregateCaseMetrics, compareSummaries, expectedCalibrationError, identity, scoreRanking } from './lib/metrics.js';
 import { evaluateEvidence } from '../services/evidence-gate.js';
+import { getRankFusionConfig } from '../services/retrieval-config.js';
+import { buildRetrievalQueryViews } from '../services/retrieval-query.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(here, '..', '..');
 
 function parseArgs(argv) {
+    const fusion = getRankFusionConfig();
     const args = {
         dataset: join(here, 'datasets', 'public-react-v2'),
         mode: 'all',
@@ -25,6 +28,11 @@ function parseArgs(argv) {
         baseline: null,
         writeBaseline: null,
         gate: false,
+        candidateK: 50,
+        queryMode: process.env.EVAL_QUERY_MODE || 'raw',
+        rrfK: fusion.k,
+        denseWeight: fusion.denseWeight,
+        lexicalWeight: fusion.lexicalWeight,
     };
     for (let index = 0; index < argv.length; index++) {
         const key = argv[index];
@@ -37,13 +45,23 @@ function parseArgs(argv) {
         else if (key === '--intents') args.intents = resolve(argv[++index]);
         else if (key === '--baseline') args.baseline = resolve(argv[++index]);
         else if (key === '--write-baseline') args.writeBaseline = resolve(argv[++index]);
+        else if (key === '--candidate-k') args.candidateK = Number.parseInt(argv[++index], 10);
+        else if (key === '--query-mode') args.queryMode = argv[++index];
+        else if (key === '--rrf-k') args.rrfK = Number.parseInt(argv[++index], 10);
+        else if (key === '--dense-weight') args.denseWeight = Number.parseFloat(argv[++index]);
+        else if (key === '--lexical-weight') args.lexicalWeight = Number.parseFloat(argv[++index]);
         else if (key === '--gate') args.gate = true;
         else if (key === '--help') {
-            console.log('node eval/run-eval.js [--mode index|lexical|dense|hybrid|all] [--device cuda|cpu] [--intents file.jsonl] [--responses file.jsonl] [--baseline summary.json] [--write-baseline path] [--gate]');
+            console.log('node eval/run-eval.js [--mode index|lexical|dense|hybrid|all] [--device cuda|cpu] [--query-mode raw|compact|multi] [--candidate-k 50] [--rrf-k 5] [--dense-weight 1] [--lexical-weight 0.5] [--gate]');
             process.exit(0);
         }
     }
     if (!['index', 'lexical', 'dense', 'hybrid', 'all'].includes(args.mode)) throw new Error(`Unsupported mode: ${args.mode}`);
+    if (!['raw', 'compact', 'multi'].includes(args.queryMode)) throw new Error(`Unsupported query mode: ${args.queryMode}`);
+    if (!Number.isInteger(args.candidateK) || args.candidateK < 10 || args.candidateK > 500) throw new Error('--candidate-k must be between 10 and 500');
+    if (!Number.isInteger(args.rrfK) || args.rrfK < 1) throw new Error('--rrf-k must be a positive integer');
+    if (!Number.isFinite(args.denseWeight) || args.denseWeight < 0) throw new Error('--dense-weight must be non-negative');
+    if (!Number.isFinite(args.lexicalWeight) || args.lexicalWeight < 0) throw new Error('--lexical-weight must be non-negative');
     return args;
 }
 
@@ -131,8 +149,13 @@ async function runRetrieval(cases, index, args) {
     const vectorStore = await import(pathToFileURL(join(projectRoot, 'src', 'services', 'vector-store.js')).href);
     const { fuseRankedResults } = await import(pathToFileURL(join(projectRoot, 'src', 'services', 'rank-fusion.js')).href);
     const needsDense = ['dense', 'hybrid', 'all'].includes(args.mode);
-    const encoded = needsDense ? encodeQueries(cases.map(item => item.query), args) : null;
-    const embeddingMsPerQuery = encoded ? encoded.elapsedMs / cases.length : 0;
+    const queryPlans = cases.map(item => buildRetrievalQueryViews(item.query, args.queryMode));
+    const denseRequests = [];
+    queryPlans.forEach((plan, caseIndex) => {
+        for (const view of plan.dense) denseRequests.push({ caseIndex, embeddingIndex: denseRequests.length, ...view });
+    });
+    const encoded = needsDense ? encodeQueries(denseRequests.map(item => item.query), args) : null;
+    const embeddingMsPerQuery = encoded ? encoded.elapsedMs / denseRequests.length : 0;
     if (encoded && (encoded.model !== index.contract.model || encoded.dimensions !== index.contract.dimensions)) {
         throw new Error(`Query embedding contract mismatch: ${encoded.model}/${encoded.dimensions}, index=${index.contract.model}/${index.contract.dimensions}`);
     }
@@ -140,6 +163,7 @@ async function runRetrieval(cases, index, args) {
     const caseResults = [];
     for (let caseIndex = 0; caseIndex < cases.length; caseIndex++) {
         const evalCase = cases[caseIndex];
+        const queryPlan = queryPlans[caseIndex];
         const channels = {};
         let direct = [];
         if (evalCase.commitIds?.length) direct = await vectorStore.lookupByCommitIds(evalCase.commitIds);
@@ -147,30 +171,38 @@ async function runRetrieval(cases, index, args) {
         let lexical = [];
         if (['lexical', 'hybrid', 'all'].includes(args.mode)) {
             const started = performance.now();
-            lexical = await vectorStore.searchLexical(evalCase.query, { ...evalCase.filters, topK: 20 });
+            lexical = await vectorStore.searchLexical(queryPlan.lexical, { ...evalCase.filters, topK: args.candidateK });
             channels.lexical = channelResult(evalCase, lexical, performance.now() - started);
         }
 
         let dense = [];
         if (needsDense) {
             const started = performance.now();
-            dense = await vectorStore.searchVectors(encoded.embeddings[caseIndex], { ...evalCase.filters, topK: 20, minScore: 0 });
-            channels.dense = channelResult(evalCase, dense, performance.now() - started + embeddingMsPerQuery);
+            const requests = denseRequests.filter(item => item.caseIndex === caseIndex);
+            const denseLists = [];
+            for (const request of requests) {
+                const results = await vectorStore.searchVectors(encoded.embeddings[request.embeddingIndex], { ...evalCase.filters, topK: args.candidateK, minScore: 0 });
+                denseLists.push({ results, weight: request.weight, channel: request.channel });
+            }
+            dense = denseLists.length > 1
+                ? fuseRankedResults(denseLists, { k: args.rrfK, limit: args.candidateK })
+                : denseLists[0]?.results || [];
+            channels.dense = channelResult(evalCase, dense, performance.now() - started + embeddingMsPerQuery * requests.length);
         }
 
         if (direct.length) channels.direct = channelResult(evalCase, direct, 0);
         if (['hybrid', 'all'].includes(args.mode)) {
             const lists = [
-                { results: dense, weight: 1, channel: 'dense-primary' },
-                ...(lexical.length ? [{ results: lexical, weight: 1, channel: 'lexical-fts5' }] : []),
+                { results: dense, weight: args.denseWeight, channel: 'dense-primary' },
+                ...(lexical.length && args.lexicalWeight > 0 ? [{ results: lexical, weight: args.lexicalWeight, channel: 'lexical-fts5' }] : []),
             ];
             const started = performance.now();
-            let hybrid = fuseRankedResults(lists, { k: 20, limit: 20 });
+            let hybrid = fuseRankedResults(lists, { k: args.rrfK, limit: args.candidateK });
             if (direct.length) {
                 const directKeys = new Set(direct.map(identity));
-                hybrid = [...direct, ...hybrid.filter(item => !directKeys.has(identity(item)))].slice(0, 20);
+                hybrid = [...direct, ...hybrid.filter(item => !directKeys.has(identity(item)))].slice(0, args.candidateK);
             }
-            const contributions = rrfContributions(lists);
+            const contributions = rrfContributions(lists, args.rrfK);
             const fusionMs = performance.now() - started;
             channels.hybrid = channelResult(
                 evalCase,
@@ -192,7 +224,18 @@ async function runRetrieval(cases, index, args) {
                 correct: gate.verdict === expectedGateVerdict(evalCase.expectedBehavior),
             };
         }
-        caseResults.push({ id: evalCase.id, category: evalCase.category, split: evalCase.split || 'unspecified', query: evalCase.query, channels });
+        caseResults.push({
+            id: evalCase.id,
+            category: evalCase.category,
+            split: evalCase.split || 'unspecified',
+            query: evalCase.query,
+            retrievalQuery: {
+                mode: args.queryMode,
+                dense: queryPlan.dense.map(view => ({ channel: view.channel, weight: view.weight, chars: view.query.length })),
+                lexicalChars: queryPlan.lexical.length,
+            },
+            channels,
+        });
         process.stdout.write(`\rRetrieval ${caseIndex + 1}/${cases.length}`);
     }
     process.stdout.write('\n');
@@ -251,7 +294,17 @@ function channelResult(evalCase, results, elapsedMs, contributions = null) {
         resultCount: results.length,
         elapsedMs,
         metrics: scoreRanking(results, evalCase.relevantCommits, 10),
-        topResults: results.slice(0, 20).map((item, rank) => ({
+        candidateMetrics: {
+            20: scoreRanking(results, evalCase.relevantCommits, 20),
+            50: scoreRanking(results, evalCase.relevantCommits, 50),
+            100: scoreRanking(results, evalCase.relevantCommits, 100),
+            200: scoreRanking(results, evalCase.relevantCommits, 200),
+        },
+        // Persist the complete evaluated candidate window (candidateK is capped at
+        // 200).  Truncating this to 50 made deeper retrieval runs impossible to
+        // analyse or rerank offline even though their @100/@200 candidates had
+        // already been computed.
+        topResults: results.map((item, rank) => ({
             rank: rank + 1,
             repo: item.repo,
             id: item.id,
@@ -364,12 +417,12 @@ function markdownReport(summary, comparison) {
         `- Index contract: \`${summary.index.contract.model}\`, ${summary.index.contract.dimensions} dimensions, template v${summary.index.contract.documentTemplateVersion}`,
         `- Index integrity: ${summary.index.passed ? 'PASS' : 'FAIL'}`, '',
         '## Retrieval', '',
-        '| Channel | Recall@10 | Required Recall@10 | MRR@10 | nDCG@10 | Negative no-result | p95 ms |',
-        '|---|---:|---:|---:|---:|---:|---:|',
+        '| Channel | Recall@10 | Recall@20 | Recall@50 | MRR@10 | nDCG@10 | Negative no-result | p95 ms |',
+        '|---|---:|---:|---:|---:|---:|---:|---:|',
     ];
     const pct = value => value == null ? 'n/a' : `${(value * 100).toFixed(1)}%`;
     for (const [channel, metrics] of Object.entries(summary.retrieval || {})) {
-        lines.push(`| ${channel} | ${pct(metrics.recallAt10)} | ${pct(metrics.requiredRecallAt10)} | ${metrics.mrrAt10?.toFixed(3) ?? 'n/a'} | ${metrics.ndcgAt10?.toFixed(3) ?? 'n/a'} | ${pct(metrics.noResultAccuracy)} | ${metrics.latencyMs.p95?.toFixed(1) ?? 'n/a'} |`);
+        lines.push(`| ${channel} | ${pct(metrics.recallAt10)} | ${pct(metrics.recallAt20)} | ${pct(metrics.recallAt50)} | ${metrics.mrrAt10?.toFixed(3) ?? 'n/a'} | ${metrics.ndcgAt10?.toFixed(3) ?? 'n/a'} | ${pct(metrics.noResultAccuracy)} | ${metrics.latencyMs.p95?.toFixed(1) ?? 'n/a'} |`);
     }
     if (summary.answers) {
         lines.push('', '## Answers', '',
@@ -454,6 +507,13 @@ const summary = {
     dataset: { name: manifest.dataset, cases: cases.length, caseHash, corpusHash: corpus.corpusHash, corpusCommits: corpus.commits.length, evaluationPolicy: manifest.evaluationPolicy || null, validation: datasetValidation },
     index,
     embedding: retrievalRun.embedding,
+    retrievalConfig: {
+        queryMode: args.queryMode,
+        candidateK: args.candidateK,
+        rrfK: args.rrfK,
+        denseWeight: args.denseWeight,
+        lexicalWeight: args.lexicalWeight,
+    },
     retrieval,
     evidenceGate,
     answers: answers ? { ...answers, details: undefined } : null,

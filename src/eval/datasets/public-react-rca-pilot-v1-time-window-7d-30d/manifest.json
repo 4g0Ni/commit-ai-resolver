@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "dataset": "public-react-rca-pilot-v1",
-  "generatedAt": "2026-09-02T04:07:43.566Z",
-  "generator": "src/scripts/build-rca-pilot-dataset.js",
+  "dataset": "public-react-rca-pilot-v1-time-window-7d-30d",
+  "generatedAt": "2026-09-03T04:19:30.490Z",
+  "generator": "src/scripts/build-rca-time-window-dataset.js",
   "corpus": {
     "path": "data/enriched/public-react-v3-20260827/daily",
     "sha256": "4c11acc1307f9c3f074f60b537323b3fe8da7ea751c2e17a9cd4e6c6772f6844",
@@ -18,7 +18,7 @@
   },
   "cases": {
     "count": 461,
-    "sha256": "34affe15383ed0a560cd6aa193d51bc2aad9b24a4a8d7cfd5549747c632516e9",
+    "sha256": "e84a63da25a9500762151fb0027af5699120e02b917cd1e0fbd028a577d5f93e",
     "byCategory": {
       "issue_rca_pilot": 461
     },
@@ -85,5 +85,17 @@
       "baseline promotion without human review"
     ]
   },
-  "labelPolicy": "Issue-to-closing-PR-to-corpus-commit provenance is machine-verifiable, but problem fidelity, fix completeness, and query usability have not received human approval. Every case is model-prescreened and non-gold."
+  "labelPolicy": "Issue-to-closing-PR-to-corpus-commit provenance is machine-verifiable, but problem fidelity, fix completeness, and query usability have not received human approval. Every case is model-prescreened and non-gold.",
+  "derivedFrom": {
+    "dataset": "public-react-rca-pilot-v1",
+    "path": "src/eval/datasets/public-react-rca-pilot-v1",
+    "caseSha256": "34affe15383ed0a560cd6aa193d51bc2aad9b24a4a8d7cfd5549747c632516e9"
+  },
+  "retrievalExperiment": {
+    "selectedOn": "dev",
+    "source": "GitHub issue createdAt/closedAt; no PR or commit timestamps used",
+    "daysBeforeCreated": 7,
+    "daysAfterClosed": 30,
+    "rationale": "Smallest tested dev window with at least 0.98 relevant-commit coverage."
+  }
 }

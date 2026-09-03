@@ -35,7 +35,7 @@ export function aggregateCaseMetrics(caseResults, mode) {
     const summarize = items => {
         const positive = items.filter(item => item.metrics?.recallAtK !== null);
         const negative = items.filter(item => item.expectedBehavior === 'abstain');
-        return {
+        const summary = {
             cases: items.length,
             positiveCases: positive.length,
             recallAt10: mean(positive.map(item => item.metrics.recallAtK)),
@@ -50,6 +50,13 @@ export function aggregateCaseMetrics(caseResults, mode) {
                 p95: percentile(items.map(item => item.elapsedMs), 0.95),
             },
         };
+        for (const k of [20, 50, 100, 200]) {
+            const candidates = positive.filter(item => item.candidateMetrics?.[k]?.recallAtK != null);
+            summary[`recallAt${k}`] = mean(candidates.map(item => item.candidateMetrics[k].recallAtK));
+            summary[`requiredRecallAt${k}`] = mean(candidates.map(item => item.candidateMetrics[k].requiredRecallAtK));
+            summary[`hitRateAt${k}`] = mean(candidates.map(item => item.candidateMetrics[k].hitAtK ? 1 : 0));
+        }
+        return summary;
     };
     const summary = summarize(scored);
     summary.byCategory = Object.fromEntries(
@@ -84,7 +91,12 @@ export function expectedCalibrationError(items, bins = 10) {
 }
 
 export function compareSummaries(baseline, candidate) {
-    const higherIsBetter = ['recallAt10', 'requiredRecallAt10', 'precisionAt10', 'mrrAt10', 'ndcgAt10', 'hitRateAt10', 'noResultAccuracy'];
+    const higherIsBetter = [
+        'recallAt10', 'requiredRecallAt10', 'precisionAt10', 'mrrAt10', 'ndcgAt10', 'hitRateAt10',
+        'recallAt20', 'requiredRecallAt20', 'hitRateAt20', 'recallAt50', 'requiredRecallAt50', 'hitRateAt50',
+        'recallAt100', 'requiredRecallAt100', 'hitRateAt100', 'recallAt200', 'requiredRecallAt200', 'hitRateAt200',
+        'noResultAccuracy',
+    ];
     const comparison = {};
     for (const [channel, current] of Object.entries(candidate.retrieval || {})) {
         const previous = baseline.retrieval?.[channel];

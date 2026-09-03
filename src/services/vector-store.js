@@ -17,6 +17,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { mkdirSync } from 'fs';
 import { getEmbeddingConfig } from './embedding-config.js';
+import { selectLexicalTerms } from './retrieval-query.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_ROOT = process.env.DATA_DIR || join(__dirname, '..', '..', 'data');
@@ -312,15 +313,7 @@ async function searchVectors(queryEmbedding, opts = {}) {
 }
 
 function buildFtsQuery(query) {
-    const rawTerms = String(query || '').match(/[\p{L}\p{N}_./:-]{2,}/gu) || [];
-    const terms = [];
-    for (const raw of rawTerms) {
-        terms.push(raw);
-        const split = raw.replace(/([a-z0-9])([A-Z])/g, '$1 $2').split(/[\s./:_-]+/);
-        terms.push(...split.filter(part => part.length >= 2));
-    }
-    return [...new Set(terms)]
-        .slice(0, 16)
+    return selectLexicalTerms(query)
         .map(term => `"${term.replace(/"/g, '""')}"`)
         .join(' OR ');
 }

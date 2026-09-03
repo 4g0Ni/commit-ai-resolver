@@ -7,7 +7,9 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "eval:prompts": "node scripts/run-prompt-golden.js"
+    "eval:prompts": "node scripts/run-prompt-golden.js",
+    "eval:commit-reranker": "node scripts/run-commit-reranker-eval.js",
+    "eval:query-expansion": "node scripts/run-query-expansion-eval.js"
   },
   "dependencies": {
     "@cfworker/json-schema": "^4.1.1",

@@ -158,8 +158,13 @@ node eval\run-eval.js `
   --dataset eval\datasets\public-react-rca-pilot-v1 `
   --mode all `
   --device cuda `
-  --output eval\reports\public-react-rca-pilot-v1
-npm run analyze:rca-pilot
+  --query-mode raw `
+  --candidate-k 50 `
+  --rrf-k 5 `
+  --dense-weight 1 `
+  --lexical-weight 0.33 `
+  --output eval\reports\public-react-rca-pilot-v1-final
+node scripts\analyze-rca-pilot.js --report eval\reports\public-react-rca-pilot-v1-final
 ```
 
 case 与 manifest 同时保存：
@@ -171,13 +176,19 @@ case 与 manifest 同时保存：
 
 runner 在读取 manifest 后立即拒绝 pilot 与 `--gate` 联用。完整运行结果：
 
-| Channel | Recall@10 | MRR@10 | nDCG@10 |
-|---|---:|---:|---:|
-| Lexical | 0.3850 | 0.2683 | 0.2955 |
-| Dense | 0.6941 | 0.4841 | 0.5338 |
-| Hybrid | 0.6584 | 0.4309 | 0.4842 |
+| Channel | Recall@10 | Recall@20 | Recall@50 | MRR@10 | nDCG@10 |
+|---|---:|---:|---:|---:|---:|
+| Lexical | 0.3959 | 0.4826 | 0.5781 | 0.2600 | 0.2912 |
+| Dense | 0.6941 | 0.7462 | 0.8102 | 0.4841 | 0.5338 |
+| Hybrid | 0.7093 | 0.7495 | 0.8189 | 0.4894 | 0.5408 |
 
-当前等权 RRF 在 pilot 上有明显负作用：63 条优于 Dense、266 条不变、132 条变差；Lexical 救回 9 条 Dense top-10 miss，但把 27 条 Dense top-10 hit 挤出 Hybrid top 10。长 query（>1200 字符）的 Dense Recall@10 为 0.6534，低于 501–1200 字符组的 0.7279。
+461 条按共享 gold commit 连通组稳定切成 327 dev / 134 test，避免同一修复跨 split。Dense-primary RRF（Dense 1、Lexical 0.33、k=5）在 pilot 上 46 条优于 Dense、384 条不变、31 条变差；Lexical 救回 6 条 Dense top-10 miss，并且没有再把 Dense top-10 hit 挤出 Hybrid top 10。held-out test 的 Hybrid Recall/MRR/nDCG 为 0.6866/0.4633/0.5177。Top-50 Recall 为全量 0.8189、test 0.7761，是当前 reranker 的候选上限；因此 LLM 适合最终 Top-20 排序，但不能替代候选生成。
+
+### 2026-09-03 Issue 时间窗与本地 LTR 增量
+
+后续先把候选可用率作为硬上限单独评测：原 raw/compact Dense/Lexical Top-100 pool 在 test 上只有 0.8582，继续只调 reranker 无法达到 0.90 Recall@20。针对本来就带生命周期 metadata 的 Issue 查询，使用只在 dev 上选择的 `createdAt - 7d → closedAt + 30d` 时间窗做 SQL 预过滤，再合并四路 Top-100 候选，并用 dev-trained 35-feature 本地 LTR 重排。grouped 134-case test 的 candidate availability 为 0.9776，Recall@10/20/50 为 0.9254/0.9478/0.9701，MRR@10/nDCG@10 为 0.6887/0.7462。
+
+该结果不使用 LLM reranker，只适用于拥有 Issue 时间信息的离线检索；pilot 的 `model-prescreened, non-gold, release-gate-ineligible` policy 不变，默认产品检索也未切换。完整决策记录见 `docs/issue-time-window-local-ltr-design-2026-09-03.md`。
 
 ## v2 → v3 同 case 指标变化解释
 

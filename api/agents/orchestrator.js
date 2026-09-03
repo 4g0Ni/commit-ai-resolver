@@ -10,14 +10,19 @@
 import { extractIntent } from './intent-extractor.js';
 import { synthesizeAnswer, synthesizeAnswerStream } from './answer-synthesizer.js';
 import { evaluateAnswer } from './answer-evaluator.js';
+import { rerankCommits } from './commit-reranker.js';
 import { FALLBACK_SYSTEM_PROMPT } from './synthesis-prompt.js';
 import { fuseRankedResults } from '../../src/services/rank-fusion.js';
 import { evaluateEvidence } from '../../src/services/evidence-gate.js';
+import { getRankFusionConfig } from '../../src/services/retrieval-config.js';
 
-const RRF_K = Number.parseInt(process.env.RRF_K || '20', 10);
-const SECONDARY_QUERY_WEIGHT = Number.parseFloat(process.env.RRF_SECONDARY_WEIGHT || '0.7');
-const BUG_TITLE_WEIGHT = Number.parseFloat(process.env.RRF_BUG_TITLE_WEIGHT || '1.5');
+const FUSION = getRankFusionConfig();
+const RRF_K = FUSION.k;
+const SECONDARY_QUERY_WEIGHT = FUSION.secondaryWeight;
+const BUG_TITLE_WEIGHT = FUSION.bugTitleWeight;
 const VECTOR_MIN_SCORE = Number.parseFloat(process.env.VECTOR_MIN_SCORE || '0');
+const ENABLE_LLM_RERANKER = process.env.ENABLE_LLM_RERANKER === '1';
+const LLM_RERANK_CANDIDATES = Math.max(2, Math.min(50, Number.parseInt(process.env.LLM_RERANK_CANDIDATES || '20', 10) || 20));
 const SPECIFICITY_FIELDS = ['component', 'symptom', 'time', 'errorCode', 'fileOrSymbol'];
 
 const GENERIC_CLARIFICATION = {
@@ -294,9 +299,9 @@ export async function agenticSearch({
         // Collect all result lists for multi-query fusion
         // Each entry: { results, weight } — title search gets higher weight
         // because it's deterministic and directly matches bug symptoms
-        const allResultLists = [{ results: primaryResults, weight: 1, channel: 'dense-primary' }];
-        if (lexicalResults.length > 0) {
-            allResultLists.push({ results: lexicalResults, weight: 1, channel: 'lexical-fts5' });
+        const allResultLists = [{ results: primaryResults, weight: FUSION.denseWeight, channel: 'dense-primary' }];
+        if (lexicalResults.length > 0 && FUSION.lexicalWeight > 0) {
+            allResultLists.push({ results: lexicalResults, weight: FUSION.lexicalWeight, channel: 'lexical-fts5' });
             log(i, 'rag-search-lexical', {
                 status: 'done',
                 resultCount: lexicalResults.length,
@@ -443,6 +448,29 @@ export async function agenticSearch({
                 iterationLog,
                 ...buildPromptTelemetry(iterationLog),
             };
+        }
+
+        if (ENABLE_LLM_RERANKER && directMatchCount === 0 && results.length > 1) {
+            log(i, 'commit-reranker', { status: 'running', candidateCount: Math.min(results.length, LLM_RERANK_CANDIDATES) });
+            const reranking = await rerankCommits(llmFast || llm, query, results, {
+                limit: LLM_RERANK_CANDIDATES,
+                correlationId,
+            });
+            results = reranking.results;
+            log(i, 'commit-reranker', {
+                status: reranking.applied ? 'done' : 'fallback',
+                applied: reranking.applied,
+                candidateCount: reranking.candidateCount,
+                reason: reranking.reason,
+                elapsed: reranking._elapsed,
+                promptVersion: reranking._promptVersion,
+                promptVariant: reranking._promptVariant,
+                structuredOutput: reranking._structuredOutput,
+                structuredFallback: reranking._structuredFallback,
+                promptTokens: reranking._promptTokens,
+                completionTokens: reranking._completionTokens,
+                totalTokens: reranking._tokens,
+            });
         }
 
         // --- Agent 3: Answer Synthesizer ---

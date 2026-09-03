@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { logQuery } from './db.js';
 import { fuseRankedResults } from '../src/services/rank-fusion.js';
+import { getRankFusionConfig } from '../src/services/retrieval-config.js';
 
 /** Display name → internal repo name mapping (case-insensitive lookup built at runtime). */
 const REPO_ALIASES = {
@@ -32,6 +33,7 @@ const REPO_ALIASES = {
 };
 
 const VALID_REPOS = ['AdsAppsCampaignUI', 'AdsAppsMT', 'AdsAppUI', 'AnB', 'AdsAppsDB'];
+const FUSION = getRankFusionConfig();
 
 /** Resolve a repo input (name or alias) to the canonical repo name. */
 function resolveRepo(input) {
@@ -161,11 +163,11 @@ export function createMcpServer(deps) {
                     deps.searchVectors(embedding, searchOptions),
                     deps.searchLexical ? deps.searchLexical(query, searchOptions) : Promise.resolve([]),
                 ]);
-                const results = lexicalResults.length
+                const results = lexicalResults.length && FUSION.lexicalWeight > 0
                     ? fuseRankedResults([
-                        { results: denseResults, weight: 1, channel: 'dense-primary' },
-                        { results: lexicalResults, weight: 1, channel: 'lexical-fts5' },
-                    ], { k: 20, limit: k })
+                        { results: denseResults, weight: FUSION.denseWeight, channel: 'dense-primary' },
+                        { results: lexicalResults, weight: FUSION.lexicalWeight, channel: 'lexical-fts5' },
+                    ], { k: FUSION.k, limit: k })
                     : denseResults.slice(0, k);
 
                 if (results.length === 0) {
