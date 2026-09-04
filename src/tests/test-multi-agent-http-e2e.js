@@ -73,16 +73,19 @@ try {
     assert.equal(json.orchestrationMode, 'multi_agent');
     assert(json.suspects.length > 0);
     assert(json.iterationLog.some(event => event.stage === 'delegate_commit_retrieval'));
+    assert(json.agentTrace);
+    assert(json.promptMetrics);
 
     const sseResponse = await fetch(`${apiBase}/api/chat`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
+        headers: { 'content-type': 'application/json', accept: 'text/event-stream', 'x-eval-harness': '1' },
         body,
     });
     const sse = await sseResponse.text();
     const events = [...sse.matchAll(/^event: (.+)$/gm)].map(match => match[1]);
     assert.equal(sseResponse.status, 200);
     assert(events.includes('status'));
+    assert(events.includes('trace'));
     assert(events.includes('token'));
     assert(events.includes('complete'));
 
@@ -91,4 +94,3 @@ try {
     stop(api);
     stop(mock);
 }
-

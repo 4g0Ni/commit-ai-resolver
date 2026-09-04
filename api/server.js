@@ -53,6 +53,7 @@ const AGENT_MAX_ITERATIONS = Number.parseInt(process.env.AGENT_MAX_ITERATIONS ||
 const AGENT_SUPERVISOR_MAX_TURNS = Number.parseInt(process.env.AGENT_SUPERVISOR_MAX_TURNS || '8', 10);
 const AGENT_ORCHESTRATION_MODE = process.env.AGENT_ORCHESTRATION_MODE || 'workflow';
 const AGENT_LEGACY_FALLBACK = process.env.AGENT_LEGACY_FALLBACK !== '0';
+const AGENT_STRUCTURED_OUTPUT_MODE = process.env.AGENT_STRUCTURED_OUTPUT_MODE || 'auto';
 const AI_CONFIGURED = Boolean(process.env.OPENAI_API_KEY || OPENAI_BASE_URL);
 const ADO_CONFIGURED = Boolean(process.env.ADO_PAT || process.env.ADO_BEARER_TOKEN);
 
@@ -180,6 +181,7 @@ const commitDiffService = createCommitDiffService({
     fetchCommitDiff,
     repositories: REPOSITORIES,
     available: ADO_CONFIGURED,
+    allowPublicGitHub: true,
 });
 const multiAgentRuntime = AI_CONFIGURED
     ? createMultiAgentRuntime({
@@ -189,6 +191,7 @@ const multiAgentRuntime = AI_CONFIGURED
         fastModel: OPENAI_FAST_MODEL,
         commitSearchService,
         commitDiffService,
+        structuredOutputMode: AGENT_STRUCTURED_OUTPUT_MODE,
         runTimeoutMs: Number.parseInt(process.env.AGENT_RUN_TIMEOUT_MS || '75000', 10),
         budgets: {
             maxAgentCalls: Number.parseInt(process.env.AGENT_MAX_CALLS || '6', 10),
@@ -400,6 +403,9 @@ app.post('/api/chat', async (req, res) => {
                         };
                         const msg = stageMessages[stage];
                         if (msg) sendEvent('status', { stage, iteration, message: msg });
+                        if (wantsEvalTrace) {
+                            sendEvent('trace', { stage, iteration, ...details });
+                        }
                     },
                     onToken: (token) => {
                         sendEvent('token', { token });
@@ -440,6 +446,12 @@ app.post('/api/chat', async (req, res) => {
                 orchestrationMode: result.orchestrationMode,
                 orchestrationFallback: result.orchestrationFallback,
                 ...(result.type === 'clarification' ? { question: result.question } : {}),
+                ...(wantsEvalTrace ? {
+                    iterationLog: result.iterationLog || [],
+                    evidenceGate: result.evidenceGate || null,
+                    agentTrace: result.agentTrace || null,
+                    promptMetrics: result.promptMetrics || null,
+                } : {}),
             });
             res.end();
 
@@ -511,6 +523,7 @@ app.post('/api/chat', async (req, res) => {
                     iterationLog: result.iterationLog || [],
                     evidenceGate: result.evidenceGate || null,
                     agentTrace: result.agentTrace || null,
+                    promptMetrics: result.promptMetrics || null,
                     evalMetadata: {
                         chatModel: OPENAI_MODEL,
                         fastModel: OPENAI_FAST_MODEL,
@@ -569,6 +582,11 @@ app.post('/api/chat', async (req, res) => {
         }
     } catch (err) {
         console.error('Chat error:', err);
+        if (res.headersSent && !res.writableEnded) {
+            res.write(`event: error\ndata: ${JSON.stringify({ error: err.message })}\n\n`);
+            res.end();
+            return;
+        }
         res.status(500).json({ error: err.message });
     }
 });

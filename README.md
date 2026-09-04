@@ -952,6 +952,7 @@ node scripts/reset-and-refresh.js --rebuild-embeddings
 | `OPENAI_API_KEY` | （可选） | 启用聊天、摘要和嵌入 |
 | `OPENAI_BASE_URL` | （可选） | OpenAI 兼容/自托管端点 |
 | `AGENT_ORCHESTRATION_MODE` | `workflow` | `workflow` 固定基线、`multi_agent` LLM Supervisor、`auto` 仅为 incident/RCA 启用 multi-agent |
+| `AGENT_STRUCTURED_OUTPUT_MODE` | `auto` | `json_schema` 使用原生 Structured Outputs；`json_object` 用于 DeepSeek 等兼容 provider，并由本地 Zod 校验；`auto` 按 endpoint 选择 |
 | `AGENT_LEGACY_FALLBACK` | `1` | multi-agent runtime 失败时回退已验证的 legacy workflow；设为 `0` 可在严格测试中暴露错误 |
 | `AGENT_SUPERVISOR_MAX_TURNS` | `8` | Agents SDK 顶层 manager 最大 turn 数 |
 | `AGENT_MAX_CALLS` / `AGENT_MAX_TOOL_CALLS` | `6` / `14` | 每请求的 Agent 与工具调用预算 |

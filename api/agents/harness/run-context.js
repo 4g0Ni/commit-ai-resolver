@@ -151,6 +151,7 @@ export function createAgentRunContext({
         candidates: new CandidateLedger(),
         hypotheses: [],
         critiques: [],
+        structuredFallbacks: 0,
         toolCache: new Map(),
         signal,
         startedAt: Date.now(),

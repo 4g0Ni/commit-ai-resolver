@@ -9,6 +9,7 @@ process.env.OPENAI_EMBEDDING_BASE_URL = `http://127.0.0.1:${mockPort}/v1`;
 process.env.OPENAI_EMBEDDING_MODEL = 'Qwen/Qwen3-Embedding-0.6B';
 process.env.OPENAI_EMBEDDING_DIMENSIONS = '1024';
 process.env.AGENT_ORCHESTRATION_MODE = 'multi_agent';
+process.env.AGENT_STRUCTURED_OUTPUT_MODE = 'json_object';
 process.env.AGENT_LEGACY_FALLBACK = '0';
 process.env.OPENAI_AGENTS_DISABLE_TRACING = '1';
 

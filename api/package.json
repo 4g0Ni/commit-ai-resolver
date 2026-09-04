@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "test:multi-agent": "node ../src/tests/test-commit-search-service.js && node ../src/tests/test-agent-harness.js && node ../src/tests/test-multi-agent-runtime.js",
+    "test:multi-agent": "node ../src/tests/test-commit-search-service.js && node ../src/tests/test-commit-diff-service.js && node ../src/tests/test-agent-harness.js && node ../src/tests/test-multi-agent-runtime.js",
     "test:multi-agent:e2e": "node ../src/tests/test-multi-agent-http-e2e.js",
     "eval:prompts": "node scripts/run-prompt-golden.js",
     "eval:commit-reranker": "node scripts/run-commit-reranker-eval.js",

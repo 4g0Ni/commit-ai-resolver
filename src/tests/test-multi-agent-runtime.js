@@ -3,6 +3,14 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { createMultiAgentRuntime } from '../../api/agents/multi-agent-runtime.js';
 import { orchestrateSearch, selectOrchestrationMode } from '../../api/agents/multi-agent-orchestrator.js';
+import {
+    createRequiredToolModelSettings,
+    createStructuredOutputContract,
+    resolveStructuredOutputMode,
+    validateStructuredAgentOutput,
+} from '../../api/agents/structured-output.js';
+import { RETRIEVAL_AGENT_OUTPUT } from '../../api/agents/agent-schemas.js';
+import { SEARCH_PARAMETERS } from '../../api/agents/tools/commit-tools.js';
 
 const apiRequire = createRequire(new URL('../../api/package.json', import.meta.url));
 const testing = await import(pathToFileURL(apiRequire.resolve('@openai/agents/testing')).href);
@@ -138,6 +146,8 @@ assert.deepEqual(result.agentTrace.agentCalls, [
     'delegate_evidence_critique',
 ]);
 assert.equal(result.agentTrace.budgets.used.diffFetches, 1);
+assert.equal(result.agentTrace.critic.verdict, 'PASS');
+assert.equal(result.agentTrace.critic.qualityScore, 0.85);
 assert.equal(result.promptMetrics.validationRejections, 1);
 fastModel.assertComplete();
 qualityModel.assertComplete();
@@ -145,6 +155,63 @@ await runtime.close();
 
 assert.equal(selectOrchestrationMode('auto', 'What changed yesterday?'), 'workflow');
 assert.equal(selectOrchestrationMode('auto', 'Why did login crash?'), 'multi_agent');
+assert.equal(resolveStructuredOutputMode('auto', 'https://api.openai.com/v1'), 'json_schema');
+assert.equal(resolveStructuredOutputMode('auto', 'https://api.deepseek.com'), 'json_object');
+assert.equal(resolveStructuredOutputMode('json_schema', 'https://example.test/v1'), 'json_schema');
+assert.deepEqual(createRequiredToolModelSettings('https://api.deepseek.com', 'json_object'), {
+    toolChoice: 'required',
+    providerData: {
+        response_format: { type: 'json_object' },
+        thinking: { type: 'disabled' },
+    },
+});
+assert.deepEqual(createRequiredToolModelSettings('https://api.openai.com/v1'), {
+    toolChoice: 'required',
+});
+const compatibleOutput = createStructuredOutputContract(
+    RETRIEVAL_AGENT_OUTPUT,
+    'retrieval_agent_output',
+    'json_object',
+);
+assert.equal(compatibleOutput.outputType, 'text');
+assert.match(compatibleOutput.instructions, /valid JSON object/u);
+assert.deepEqual(
+    validateStructuredAgentOutput(JSON.stringify(retrievalOutput), RETRIEVAL_AGENT_OUTPUT, 'Retrieval agent'),
+    retrievalOutput,
+);
+assert.deepEqual(
+    validateStructuredAgentOutput(
+        `\`\`\`json\n${JSON.stringify(retrievalOutput)}\n\`\`\``,
+        RETRIEVAL_AGENT_OUTPUT,
+        'Retrieval agent',
+    ),
+    retrievalOutput,
+);
+assert.throws(
+    () => validateStructuredAgentOutput('{}', RETRIEVAL_AGENT_OUTPUT, 'Retrieval agent'),
+    error => error.code === 'invalid_agent_output',
+);
+assert.deepEqual(SEARCH_PARAMETERS.parse({
+    semanticQuery: 'hydrate recovery',
+    secondaryQuery: 'null',
+    repo: 'facebook/react',
+    author: 'null',
+    dateFrom: '2026-06-25',
+    dateTo: '2026-07-02',
+    riskLevel: 'null',
+    changeType: 'none',
+    topK: '20',
+}), {
+    semanticQuery: 'hydrate recovery',
+    secondaryQuery: null,
+    repo: 'facebook/react',
+    author: null,
+    dateFrom: '2026-06-25',
+    dateTo: '2026-07-02',
+    riskLevel: null,
+    changeType: null,
+    topK: 20,
+});
 const fallback = await orchestrateSearch({
     configuredMode: 'multi_agent',
     multiAgentRuntime: { run: async () => { throw Object.assign(new Error('boom'), { code: 'test_failure' }); } },
@@ -156,4 +223,3 @@ assert.equal(fallback.orchestrationFallback.used, true);
 assert.equal(fallback.orchestrationFallback.reason, 'test_failure');
 
 console.log('multi-agent runtime: PASS');
-

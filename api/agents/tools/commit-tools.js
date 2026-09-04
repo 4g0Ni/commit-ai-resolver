@@ -1,19 +1,35 @@
 import { tool } from '@openai/agents';
 import { z } from 'zod';
 
-const nullableText = (max = 300) => z.string().max(max).nullable();
-const nullableDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable();
+function normalizeProviderNull(value) {
+    return typeof value === 'string' && /^(?:null|none|n\/a)?$/iu.test(value.trim())
+        ? null
+        : value;
+}
 
-const SEARCH_PARAMETERS = z.object({
+const nullableText = (max = 300) => z.preprocess(
+    normalizeProviderNull,
+    z.string().max(max).nullable(),
+);
+const nullableDate = z.preprocess(
+    normalizeProviderNull,
+    z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
+);
+const nullableEnum = values => z.preprocess(
+    normalizeProviderNull,
+    z.enum(values).nullable(),
+);
+
+export const SEARCH_PARAMETERS = z.object({
     semanticQuery: z.string().min(1).max(500),
     secondaryQuery: nullableText(500),
     repo: nullableText(100),
     author: nullableText(200),
     dateFrom: nullableDate,
     dateTo: nullableDate,
-    riskLevel: z.enum(['HIGH', 'MEDIUM', 'LOW']).nullable(),
-    changeType: z.enum(['config', 'code', 'mixed']).nullable(),
-    topK: z.number().int().min(1).max(20),
+    riskLevel: nullableEnum(['HIGH', 'MEDIUM', 'LOW']),
+    changeType: nullableEnum(['config', 'code', 'mixed']),
+    topK: z.coerce.number().int().min(1).max(20),
 });
 
 function getState(runContext) {
@@ -42,10 +58,26 @@ function presentCandidate(candidate) {
 
 async function executeSearch(input, runContext, source) {
     const state = getState(runContext);
+    const inherited = source === 'evidence-critic' ? state.primaryRetrievalFilters : null;
+    const effectiveInput = inherited ? {
+        ...input,
+        repo: inherited.repo ?? input.repo,
+        author: inherited.author ?? input.author,
+        dateFrom: inherited.dateFrom ?? input.dateFrom,
+        dateTo: inherited.dateTo ?? input.dateTo,
+    } : input;
     const result = await state.services.commitSearch.search({
         query: state.query,
-        ...input,
+        ...effectiveInput,
     });
+    if (source === 'retrieval-agent' && !state.primaryRetrievalFilters) {
+        state.primaryRetrievalFilters = {
+            repo: result.filters.repo || null,
+            author: result.filters.author || null,
+            dateFrom: result.filters.effectiveDateFrom || result.filters.dateFrom || null,
+            dateTo: result.filters.effectiveDateTo || result.filters.dateTo || null,
+        };
+    }
     state.candidates.addAll(result.results, source, { evidenceVerdict: result.evidenceGate.verdict });
     state.lastEvidenceGate = result.evidenceGate;
     state.evidenceGates = [
@@ -56,7 +88,7 @@ async function executeSearch(input, runContext, source) {
         ...(state.searchAttempts || []),
         {
             source,
-            semanticQuery: input.semanticQuery,
+            semanticQuery: effectiveInput.semanticQuery,
             candidateKeys: result.results.map(candidate => `${candidate.repo}:${candidate.id || candidate.commitId}`),
             evidenceGate: result.evidenceGate,
         },

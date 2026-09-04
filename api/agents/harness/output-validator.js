@@ -1,9 +1,10 @@
 import { SUPERVISOR_OUTPUT } from '../agent-schemas.js';
+import { parseModelJson } from '../structured-output.js';
 
 function parseOutput(output) {
     if (typeof output !== 'string') return output;
     try {
-        return JSON.parse(output);
+        return parseModelJson(output);
     } catch {
         return null;
     }

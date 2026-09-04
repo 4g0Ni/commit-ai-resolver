@@ -67,8 +67,12 @@ Commit AI Resolver 当前已经包含多个由 LLM 驱动的处理阶段，但�
 - 已抽取共享 `commit-search-service.js` 与 `commit-diff-service.js`，新旧路径可共享数据面。
 - `/api/chat` 的 JSON 与 SSE 均支持 feature flag 路由，默认仍为 `workflow`。
 - 已有 deterministic SDK scripted tests，以及使用本地 OpenAI-compatible mock provider 的真实 HTTP/tool-call E2E。
+- 已完成一次真实 DeepSeek + 本地 Qwen3 Embedding + GitHub public diff 的 gold RCA：Supervisor 自主调用 Retrieval、Diff Investigator 和 Evidence Critic，命中目标 commit，并由 Critic 将“精确修复机制、但未找到引入提交”的结论约束为 `PARTIAL`。
+- 已增加 compatible-provider structured-output adapter：原生 OpenAI 使用 `json_schema`；DeepSeek 等端点使用 `json_object`、本地 JSON 解析和 Zod 二次校验。DeepSeek 的 required tool call 同时显式关闭 thinking mode。
+- `commit-diff-service` 在 ADO 之外支持只读 GitHub REST commit diff；固定 API 域名、严格校验 repo/SHA、限制响应大小，并支持可选的服务端 `GITHUB_TOKEN`。
+- eval/debug 响应公开 bounded trajectory、prompt metrics 和结构化 critic verdict；SSE 在 `x-eval-harness: 1` 时额外发送 `trace` 事件，默认客户端协议保持不变。
 
-尚未完成的后续工作主要是 trajectory eval 数据集、shadow/A-B 报告、MCP 共享 service 迁移、multi-agent 真正的逐 token 流式输出和生产 provider 校准。
+尚未完成的后续工作主要是 trajectory eval 数据集、shadow/A-B 报告、MCP 共享 service 迁移、multi-agent 真正的逐 token 流式输出，以及更多生产 provider 的系统化校准。
 
 ---
 
@@ -274,6 +278,13 @@ LLM 可以决定：
 4. 设置 useResponses: false，继续走 Chat Completions。
 5. 对目标 OpenAI-compatible provider 单独运行 tool calling、structured output 和 streaming contract test。
 6. 等 multi-agent 行为稳定后，再单独评估 openai SDK 主版本升级。
+
+实际兼容层按 endpoint 能力选择结构化输出模式：
+
+- `json_schema`：用于支持原生 Structured Outputs 的 provider，由 SDK 直接执行 schema 约束。
+- `json_object`：用于 DeepSeek 等只支持 JSON Object 的 provider；prompt 注入完整 JSON schema，返回后在本地执行容错 JSON 提取和 Zod 校验，因此 provider 能力降级不会降低应用侧数据契约。
+- `AGENT_STRUCTURED_OUTPUT_MODE=auto|json_schema|json_object` 可显式覆盖自动判断，便于 provider contract test 和故障排查。
+- DeepSeek thinking mode 不接受 `tool_choice=required`，因此 required specialist delegation 会携带 `thinking: { type: "disabled" }`。
 
 这样可以把“Agent 架构改造”和“底层 OpenAI SDK 升级”拆成两个可归因变更。
 
