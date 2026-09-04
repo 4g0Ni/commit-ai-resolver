@@ -22,6 +22,7 @@
 | C2C Cosmos DB 试点跟踪器 | 🚫 已移除（ROI 较低） | DB 级试点渐进发布跟踪 — 已取消范围 |
 | 可查询存储 | ✅ 已完成 | 每日 JSON 文件 + SQLite 向量存储（按作者/仓库/日期进行 SQL 筛选） |
 | RAG Eval Harness | ✅ 已完成 | 75 条公开验证集、dev/test 切分、分层检索指标、Evidence Gate、Agent batch runner 与 CI gate |
+| Multi-Agent + Agent Harness | ✅ 首个闭环 | OpenAI Agents SDK Manager、Retrieval / Diff Investigator / Evidence Critic、权限/预算/超时/去重/ledger/本地轨迹、legacy fallback |
 
 ### 当前离线评测
 
@@ -757,7 +758,7 @@ User: "the campaign editor page is crashing since yesterday"
 
 ### 11.6 消息队列 / Agent 协调
 
-这些 Agent **并非**传统的消息队列系统。它们实现为**单个请求处理程序中的顺序 LLM 调用**，由编排器函数进行协调。这使架构保持简单，并避免了分布式消息代理的复杂性。
+系统仍然不依赖传统消息队列；一次调查在单个 HTTP 请求范围内完成。`workflow` 模式保留下面的固定顺序基线，`multi_agent` 模式则由 LLM Supervisor 通过真实 tool call 动态委派专家 Agent，`auto` 模式仅把 incident/RCA 查询送入 multi-agent。三种模式共享同一检索与 diff 数据面，便于成对评测和一键回滚。
 
 ```javascript
 // Pseudocode for the orchestrator
@@ -864,6 +865,38 @@ async function agenticSearch(userQuery, history, workItemContext, maxIterations 
 | 迭代进度 UI | 在聊天界面中显示迭代次数 | ✅ 已完成 — UI 在响应元数据中显示“搜索已优化 N 次” |
 | 流式传输支持 | 将最终回答流式传输到 UI，以改善感知延迟 | ✅ 已完成 — SSE (`event: status` / `token` / `complete`) 端到端支持 |
 
+### 11.9 Multi-Agent 与 Agent Harness
+
+新路径采用 OpenAI Agents SDK 的 manager/agents-as-tools 模式：Incident Commander 保持用户会话所有权，并自行决定调用 Retrieval、Diff Investigator、Evidence Critic 的顺序与次数。模型负责策略选择，确定性 Harness 负责安全执行。
+
+```text
+Incident Commander
+  ├─ delegate_commit_retrieval  → Retrieval Agent → hybrid search / Evidence Gate
+  ├─ delegate_diff_investigation → Diff Investigator → grounded commit diffs
+  └─ delegate_evidence_critique → Evidence Critic → pass / retry / partial
+
+每个 tool call：schema → permission → budget → dedupe → candidate ledger
+              → timeout → execute → sanitize → local trajectory
+```
+
+Harness 位于 `api/agents/harness/`，包含 request-local context、candidate/hypothesis ledger、least-privilege tool registry、调用预算、截止时间、输出校验和 legacy fallback。Agents SDK 的远程 tracing 默认关闭；可审计轨迹沿用本地 `iterationLog` 和 SQLite query metrics。
+
+首版 multi-agent 为了先保证结构化输出与 citation validation，会在 Supervisor 完成后把最终文本分块发送为现有 SSE `token` 事件；协议兼容，但还不是模型生成过程中的逐 token 流式输出。
+
+启用方式：
+
+```powershell
+$env:AGENT_ORCHESTRATION_MODE = 'multi_agent' # 或 auto
+node api/server.js
+```
+
+离线测试（包含真实 SDK tool loop，不请求外部模型）：
+
+```powershell
+npm run test:multi-agent --prefix api
+npm run test:multi-agent:e2e --prefix api
+```
+
 ---
 
 ## 12. 部署
@@ -918,6 +951,13 @@ node scripts/reset-and-refresh.js --rebuild-embeddings
 | `HOST` | `127.0.0.1` | 绑定地址；除非添加外部身份验证层，否则保持为本地地址 |
 | `OPENAI_API_KEY` | （可选） | 启用聊天、摘要和嵌入 |
 | `OPENAI_BASE_URL` | （可选） | OpenAI 兼容/自托管端点 |
+| `AGENT_ORCHESTRATION_MODE` | `workflow` | `workflow` 固定基线、`multi_agent` LLM Supervisor、`auto` 仅为 incident/RCA 启用 multi-agent |
+| `AGENT_LEGACY_FALLBACK` | `1` | multi-agent runtime 失败时回退已验证的 legacy workflow；设为 `0` 可在严格测试中暴露错误 |
+| `AGENT_SUPERVISOR_MAX_TURNS` | `8` | Agents SDK 顶层 manager 最大 turn 数 |
+| `AGENT_MAX_CALLS` / `AGENT_MAX_TOOL_CALLS` | `6` / `14` | 每请求的 Agent 与工具调用预算 |
+| `AGENT_MAX_DIFF_FETCHES` | `3` | 每请求最多拉取的 grounded commit diff 数 |
+| `AGENT_RUN_TIMEOUT_MS` | `75000` | multi-agent 请求的 wall-clock deadline |
+| `OPENAI_AGENTS_DISABLE_TRACING` | `1` | 禁止 SDK 远程 tracing；本项目仅保留本地 trajectory |
 | `OPENAI_EMBEDDING_BASE_URL` | 回退到 `OPENAI_BASE_URL` | 独立的 OpenAI-compatible embedding 端点 |
 | `OPENAI_EMBEDDING_API_KEY` | 回退到 `OPENAI_API_KEY` | 独立 embedding 端点的凭据；本地服务可设为 `local` |
 | `OPENAI_EMBEDDING_MODEL` | `text-embedding-3-large` | 托管或本地嵌入模型名称 |

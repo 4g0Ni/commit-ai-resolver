@@ -56,6 +56,20 @@ Commit AI Resolver 当前已经包含多个由 LLM 驱动的处理阶段，但�
 4. 现有最终答案质量和检索指标不退化。
 5. Agent 路由质量、恢复能力、成本和延迟可以独立评测。
 
+### 1.1 当前实施状态（2026-09-04）
+
+第一条可运行 vertical slice 已完成：
+
+- 已接入 `@openai/agents` 0.17.0，使用 Chat Completions provider 兼容现有 endpoint。
+- 已实现 Incident Commander、Retrieval、Diff Investigator 和 Evidence Critic 四个真实 SDK Agent。
+- Specialist 以 agents-as-tools 暴露给 Supervisor，由模型通过 tool call 决定路径。
+- 已实现独立 Agent Harness：request-local context、工具白名单、agent/tool/diff/wall-clock budget、去重、超时、candidate ledger、输出校验、本地 trajectory 和 legacy fallback。
+- 已抽取共享 `commit-search-service.js` 与 `commit-diff-service.js`，新旧路径可共享数据面。
+- `/api/chat` 的 JSON 与 SSE 均支持 feature flag 路由，默认仍为 `workflow`。
+- 已有 deterministic SDK scripted tests，以及使用本地 OpenAI-compatible mock provider 的真实 HTTP/tool-call E2E。
+
+尚未完成的后续工作主要是 trajectory eval 数据集、shadow/A-B 报告、MCP 共享 service 迁移、multi-agent 真正的逐 token 流式输出和生产 provider 校准。
+
 ---
 
 ## 2. 背景与问题
@@ -401,6 +415,75 @@ Supervisor
        b. retry with a concrete new query
        c. abstain
 ~~~
+
+### 6.4 Agent Harness：SDK 外的运行时控制层
+
+Agents SDK 提供 agent loop、tool calling、agents-as-tools 和结构化输出，但 SDK 本身不等于本项目的 Harness。Harness 是包围 SDK 的应用运行时，负责模型不能自行决定的安全与可运维边界。
+
+~~~mermaid
+flowchart LR
+    LLM["LLM requests a tool"] --> Schema["SDK / Zod schema validation"]
+    Schema --> Permission["Harness permission check"]
+    Permission --> Budget["Agent / tool / diff / time budget"]
+    Budget --> Ledger["Candidate-ledger authorization"]
+    Ledger --> Dedupe["Duplicate-call cache"]
+    Dedupe --> Timeout["Per-call timeout"]
+    Timeout --> Execute["Execute shared service"]
+    Execute --> Sanitize["Bound and sanitize output"]
+    Sanitize --> Record["Local trajectory event"]
+    Record --> LLMResult["Return result to calling Agent"]
+~~~
+
+#### 6.4.1 Harness 与 Agents SDK 的职责边界
+
+| 能力 | Agents SDK | 项目 Harness |
+|---|---|---|
+| Agent loop / tool-call protocol | 提供 | 复用，不重写 |
+| Manager / agents-as-tools | 提供 | 配置专家和调用权限 |
+| Tool 参数 schema | 提供 Zod 校验 | 增加业务授权和 ledger 校验 |
+| 最大 model turns | 提供 | 与 agent/tool/diff/time budget 联合执行 |
+| Remote tracing | 默认可用 | 默认明确关闭 |
+| 本地 trajectory | 不负责项目 schema | 记录并映射到现有 iterationLog / SQLite |
+| Candidate grounding | 不理解业务 ID | 只有检索工具返回的候选才能读取 diff 或出现在引用中 |
+| Legacy fallback | 不负责 | primary 失败后切换现有 workflow |
+| Provider policy | 支持 provider | 强制 Chat Completions 兼容路径和本地配置 |
+
+#### 6.4.2 代码结构
+
+~~~text
+api/agents/harness/
+  agent-harness.js          # 顶层 run、deadline、Runner 边界
+  run-context.js            # request-local state、CandidateLedger
+  tool-registry.js          # least-privilege allowlist
+  tool-middleware.js        # permission/budget/dedupe/timeout/validation
+  budget-manager.js         # agent/tool/diff/wall-clock counters
+  trajectory-recorder.js    # bounded local events + SSE adapter
+  output-validator.js       # citation grounding、置信度上限、safe actions
+  fallback-controller.js    # multi-agent -> legacy workflow
+~~~
+
+#### 6.4.3 权限矩阵
+
+| Caller Agent | Allowed tools |
+|---|---|
+| `retrieval-agent` | `get_index_stats`, `search_commits`, `lookup_commits` |
+| `diff-investigator-agent` | `get_evidence_snapshot`, `get_commit_diff` |
+| `evidence-critic-agent` | `get_evidence_snapshot`, `search_counter_evidence` |
+| `incident-commander` | `delegate_commit_retrieval`, `delegate_diff_investigation`, `delegate_evidence_critique` |
+
+权限在注册表和每次执行时各检查一次。即使模型构造出合法 JSON，也不能让 Investigator 拉取 Candidate Ledger 之外的 commit diff。
+
+#### 6.4.4 默认预算
+
+| Budget | Default |
+|---|---:|
+| Supervisor max turns | 8 |
+| Agent calls | 6 |
+| Tool calls | 14 |
+| Diff fetches | 3 |
+| Wall-clock deadline | 75 秒 |
+
+相同 tool + 相同参数的只读调用可以命中 request-local dedupe cache，不再次消耗底层服务调用。预算或权限错误以安全、结构化的 tool result 返回给模型，使 Supervisor 可以选择 partial、ask-user 或停止；顶层运行时异常则由 Fallback Controller 处理。
 
 ---
 
@@ -1808,19 +1891,23 @@ src/tests/test-multi-agent-fallback.js
 - candidate ledger 和 citation 校验。
 - hypothesis validation。
 
-#### api/agents/agent-runtime.js
+#### api/agents/multi-agent-runtime.js
 
-- 创建 OpenAIProvider 和 Runner。
-- 设置 Chat Completions 模式。
-- 默认关闭远程 tracing。
-- 注册 lifecycle hooks。
-- 将 SDK events 转为本地 trajectory。
+- 创建 OpenAIProvider、Runner 和四个 Agent。
+- 设置 Chat Completions 模式并默认关闭远程 tracing。
+- 注册 Specialist agents-as-tools。
+- 将 SDK usage 和 Harness events 适配到现有 API response。
 
-#### api/agents/agent-context.js
+#### api/agents/harness/*
 
-- 创建 RunContext。
-- 管理 budget、cache、ledger、AbortSignal。
-- 提供 request-scoped helpers。
+- `agent-harness.js`：顶层 run 和 deadline。
+- `run-context.js`：request-local context、Candidate Ledger、Hypothesis Ledger。
+- `tool-registry.js`：least-privilege 工具注册。
+- `tool-middleware.js`：权限、预算、去重、超时、ledger validation 和输出裁剪。
+- `budget-manager.js`：agent/tool/diff/time budget。
+- `trajectory-recorder.js`：本地 trajectory 和 SSE progress adapter。
+- `output-validator.js`：最终 schema、citation grounding 和置信度约束。
+- `fallback-controller.js`：legacy workflow fallback。
 
 #### api/agents/agent-schemas.js
 
@@ -2316,27 +2403,27 @@ shadow 只用于离线 eval 或明确启用的本地测试。
 
 只有满足以下条件，multi-agent 改造才算完成：
 
-- [ ] 现有 workflow 仍可通过环境变量运行。
-- [ ] 搜索和 diff 逻辑被抽取为共享 services。
-- [ ] Supervisor 通过真实 model tool calls 调用 Specialist。
-- [ ] 至少有 Retrieval、Investigator、Critic 三个独立 Specialist。
-- [ ] 不同 query category 产生不同轨迹。
-- [ ] RCA 可以自动进入 diff investigation。
-- [ ] 所有 commit reference 通过 ledger validation。
-- [ ] Evidence Gate 不可绕过。
-- [ ] Agent/tool/diff/turn budgets 全部生效。
-- [ ] SSE 和非 streaming API 保持兼容。
-- [ ] MCP 工具保持兼容。
-- [ ] 客户端断开可以取消 run。
-- [ ] 远程 tracing 默认关闭。
-- [ ] trajectory 写入本地日志。
-- [ ] scripted runtime tests 通过。
-- [ ] API、MCP、SSE E2E 通过。
+- [x] 现有 workflow 仍可通过环境变量运行。
+- [x] 搜索和 diff 逻辑被抽取为共享 services。
+- [x] Supervisor 通过真实 model tool calls 调用 Specialist。
+- [x] 至少有 Retrieval、Investigator、Critic 三个独立 Specialist。
+- [x] 不同 query category 产生不同轨迹。
+- [x] RCA 可以自动进入 diff investigation。
+- [x] 所有 commit reference 通过 ledger validation。
+- [x] Evidence Gate 不可绕过。
+- [x] Agent/tool/diff/turn budgets 全部生效。
+- [x] SSE 和非 streaming API 保持兼容。
+- [x] MCP 工具保持兼容。
+- [x] 客户端断开可以取消 run。
+- [x] 远程 tracing 默认关闭。
+- [x] trajectory 写入本地日志。
+- [x] scripted runtime tests 通过。
+- [x] API、MCP、SSE E2E 通过（本地 mock provider；ADO-only case 在公开 corpus 中跳过）。
 - [ ] frozen outcome eval 通过 non-inferiority gate。
 - [ ] trajectory eval 达到 release gate。
 - [ ] failure injection case 全部安全终止。
-- [ ] 有明确的默认开关和一键回滚方式。
-- [ ] README/OVERVIEW/USERGUIDE 更新真实架构，不夸大能力。
+- [x] 有明确的默认开关和一键回滚方式。
+- [x] README 更新真实架构，不夸大能力。
 
 ---
 

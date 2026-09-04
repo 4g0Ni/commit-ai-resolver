@@ -16,6 +16,7 @@
     "analyze:rca-pilot": "node scripts/analyze-rca-pilot.js --report eval/reports/public-react-rca-pilot-v1-final",
     "analyze:eval-delta": "node scripts/analyze-versioned-eval-delta.js",
     "catalog:eval-cases": "node scripts/generate-eval-case-catalog.js",
+    "eval:issue-rca-gate": "node eval/run-issue-rca-evidence-gate.js",
     "embedding:serve": "conda run -n hello-agents --no-capture-output python scripts/serve-embedding.py --device cuda",
     "refresh": "node scripts/scheduled-refresh.js",
     "refresh:loop": "node scripts/scheduled-refresh.js --loop 60",
@@ -24,7 +25,7 @@
     "eval:lexical": "node eval/run-eval.js --mode lexical",
     "eval:full": "node eval/run-eval.js --mode all",
     "eval:agent": "node eval/run-agent-eval.js",
-    "test:eval": "node tests/test-eval-metrics.js && node tests/test-eval-dataset-validation.js && node tests/test-retrieval-query.js && node tests/test-retrieval-query-expander.js && node tests/test-commit-reranker.js && node tests/test-intent-extractor-specificity.js && node tests/test-evidence-gate.js && node tests/test-evidence-gate-orchestrator.js && node tests/test-agent-eval-runner.js",
+    "test:eval": "node tests/test-eval-metrics.js && node tests/test-eval-dataset-validation.js && node tests/test-retrieval-query.js && node tests/test-retrieval-query-expander.js && node tests/test-commit-reranker.js && node tests/test-intent-extractor-specificity.js && node tests/test-evidence-gate.js && node tests/test-issue-rca-evidence-gate.js && node tests/test-issue-rca-relationship-verifier.js && node tests/test-evidence-gate-orchestrator.js && node tests/test-agent-eval-runner.js",
     "test:public-enrichment": "node tests/test-public-commit-enrichment.js",
     "test:github-rca": "node tests/test-github-rca-grounding.js && node tests/test-grounded-rca-review.js"
   },

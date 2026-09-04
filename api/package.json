@@ -3,10 +3,15 @@
   "version": "1.0.0",
   "description": "Backend API for Commit AI Resolver dashboard",
   "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
+    "test:multi-agent": "node ../src/tests/test-commit-search-service.js && node ../src/tests/test-agent-harness.js && node ../src/tests/test-multi-agent-runtime.js",
+    "test:multi-agent:e2e": "node ../src/tests/test-multi-agent-http-e2e.js",
     "eval:prompts": "node scripts/run-prompt-golden.js",
     "eval:commit-reranker": "node scripts/run-commit-reranker-eval.js",
     "eval:query-expansion": "node scripts/run-query-expansion-eval.js"
@@ -15,6 +20,7 @@
     "@cfworker/json-schema": "^4.1.1",
     "@modelcontextprotocol/node": "^2.0.0-alpha.2",
     "@modelcontextprotocol/server": "^2.0.0-alpha.2",
+    "@openai/agents": "^0.17.0",
     "apache-arrow": "^18.1.0",
     "better-sqlite3": "^12.9.0",
     "cors": "^2.8.5",

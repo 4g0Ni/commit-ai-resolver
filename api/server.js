@@ -26,7 +26,11 @@ import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node';
 import { isInitializeRequest } from '@modelcontextprotocol/server';
 import { createMcpServer } from './mcp.js';
 import { FALLBACK_SYSTEM_PROMPT } from './agents/synthesis-prompt.js';
+import { createMultiAgentRuntime } from './agents/multi-agent-runtime.js';
+import { orchestrateSearch } from './agents/multi-agent-orchestrator.js';
 import { getPromptRegistrySnapshot } from '../src/prompts/prompt-registry.js';
+import { createCommitSearchService } from '../src/services/commit-search-service.js';
+import { createCommitDiffService } from '../src/services/commit-diff-service.js';
 import {
     buildEmbeddingRequest,
     getEmbeddingConfig,
@@ -46,6 +50,9 @@ const OPENAI_FAST_MODEL = process.env.OPENAI_FAST_MODEL || 'gpt-4.1-mini';
 const EMBEDDING_CONFIG = getEmbeddingConfig();
 const EMBEDDING_PROVIDER = getEmbeddingProviderConfig();
 const AGENT_MAX_ITERATIONS = Number.parseInt(process.env.AGENT_MAX_ITERATIONS || '3', 10);
+const AGENT_SUPERVISOR_MAX_TURNS = Number.parseInt(process.env.AGENT_SUPERVISOR_MAX_TURNS || '8', 10);
+const AGENT_ORCHESTRATION_MODE = process.env.AGENT_ORCHESTRATION_MODE || 'workflow';
+const AGENT_LEGACY_FALLBACK = process.env.AGENT_LEGACY_FALLBACK !== '0';
 const AI_CONFIGURED = Boolean(process.env.OPENAI_API_KEY || OPENAI_BASE_URL);
 const ADO_CONFIGURED = Boolean(process.env.ADO_PAT || process.env.ADO_BEARER_TOKEN);
 
@@ -161,6 +168,36 @@ async function isVectorStoreAvailable() {
     }
     return _vectorStoreAvailable;
 }
+
+const commitSearchService = createCommitSearchService({
+    embedQuery,
+    searchVectors,
+    searchLexical,
+    lookupByCommitIds,
+    getVectorStats,
+});
+const commitDiffService = createCommitDiffService({
+    fetchCommitDiff,
+    repositories: REPOSITORIES,
+    available: ADO_CONFIGURED,
+});
+const multiAgentRuntime = AI_CONFIGURED
+    ? createMultiAgentRuntime({
+        apiKey: process.env.OPENAI_API_KEY || 'local',
+        baseURL: OPENAI_BASE_URL,
+        qualityModel: OPENAI_MODEL,
+        fastModel: OPENAI_FAST_MODEL,
+        commitSearchService,
+        commitDiffService,
+        runTimeoutMs: Number.parseInt(process.env.AGENT_RUN_TIMEOUT_MS || '75000', 10),
+        budgets: {
+            maxAgentCalls: Number.parseInt(process.env.AGENT_MAX_CALLS || '6', 10),
+            maxToolCalls: Number.parseInt(process.env.AGENT_MAX_TOOL_CALLS || '14', 10),
+            maxDiffFetches: Number.parseInt(process.env.AGENT_MAX_DIFF_FETCHES || '3', 10),
+            maxElapsedMs: Number.parseInt(process.env.AGENT_RUN_TIMEOUT_MS || '75000', 10),
+        },
+    })
+    : null;
 
 // --- Helper: load daily JSON files ---
 
@@ -287,6 +324,15 @@ app.post('/api/chat', async (req, res) => {
         const wantsStream = req.headers.accept?.includes('text/event-stream');
         const wantsEvalTrace = req.headers['x-eval-harness'] === '1';
         const clientSource = req.headers['x-client'] === 'ui' ? 'ui' : 'api';
+        const requestAbortController = new AbortController();
+        const abortDisconnectedRequest = () => {
+            if (res.writableEnded || requestAbortController.signal.aborted) return;
+            const error = new Error('Client disconnected before the agent run completed.');
+            error.name = 'AbortError';
+            requestAbortController.abort(error);
+        };
+        req.once('aborted', abortDisconnectedRequest);
+        res.once('close', abortDisconnectedRequest);
 
         if (useVectors && wantsStream) {
             // --- SSE streaming agentic pipeline ---
@@ -303,40 +349,61 @@ app.post('/api/chat', async (req, res) => {
             sendEvent('status', { stage: 'starting', message: 'Analyzing your question...' });
 
             const t0 = Date.now();
-            const result = await agenticSearch({
-                llm: openaiClient,
-                llmFast: openaiMiniClient,
-                embedQuery,
-                searchVectors,
-                searchLexical,
-                lookupByCommitIds,
-                getVectorStats,
-                buildFullContext,
-                query: message,
-                history,
-                maxIterations: AGENT_MAX_ITERATIONS,
-                workItemContext,
-                correlationId: queryId,
-                onProgress: (iteration, stage, details) => {
-                    const stageMessages = {
-                        'intent-extractor': 'Extracting intent...',
-                        'rag-search': details.status === 'done'
-                            ? `Found ${details.resultCount} results`
-                            : 'Searching commits...',
-                        'rag-search-secondary': 'Running secondary search...',
-                        'rag-search-title': 'Searching by title...',
-                        'rag-search-lexical': 'Matching identifiers and file paths...',
-                        'answer-synthesizer': details.status === 'running'
-                            ? 'Generating answer...'
-                            : undefined,
-                        'answer-evaluator': 'Evaluating answer quality...',
-                        'retry': `Refining search (attempt ${iteration})...`,
-                    };
-                    const msg = stageMessages[stage];
-                    if (msg) sendEvent('status', { stage, iteration, message: msg });
-                },
-                onToken: (token) => {
-                    sendEvent('token', { token });
+            const result = await orchestrateSearch({
+                configuredMode: AGENT_ORCHESTRATION_MODE,
+                multiAgentRuntime,
+                legacySearch: agenticSearch,
+                enableLegacyFallback: AGENT_LEGACY_FALLBACK,
+                params: {
+                    llm: openaiClient,
+                    llmFast: openaiMiniClient,
+                    embedQuery,
+                    searchVectors,
+                    searchLexical,
+                    lookupByCommitIds,
+                    getVectorStats,
+                    buildFullContext,
+                    query: message,
+                    history,
+                    maxIterations: AGENT_MAX_ITERATIONS,
+                    maxTurns: AGENT_SUPERVISOR_MAX_TURNS,
+                    workItemContext,
+                    correlationId: queryId,
+                    signal: requestAbortController.signal,
+                    onProgress: (iteration, stage, details) => {
+                        const stageMessages = {
+                            'intent-extractor': 'Extracting intent...',
+                            'rag-search': details.status === 'done'
+                                ? `Found ${details.resultCount} results`
+                                : 'Searching commits...',
+                            'rag-search-secondary': 'Running secondary search...',
+                            'rag-search-title': 'Searching by title...',
+                            'rag-search-lexical': 'Matching identifiers and file paths...',
+                            'answer-synthesizer': details.status === 'running'
+                                ? 'Generating answer...'
+                                : undefined,
+                            'answer-evaluator': 'Evaluating answer quality...',
+                            'retry': `Refining search (attempt ${iteration})...`,
+                            'multi-agent-run': details.status === 'running'
+                                ? 'Planning an evidence investigation...'
+                                : undefined,
+                            'delegate_commit_retrieval': details.status === 'running'
+                                ? 'Delegating commit retrieval...'
+                                : undefined,
+                            'delegate_diff_investigation': details.status === 'running'
+                                ? 'Inspecting candidate diffs...'
+                                : undefined,
+                            'delegate_evidence_critique': details.status === 'running'
+                                ? 'Challenging the evidence...'
+                                : undefined,
+                            'multi-agent-fallback': 'Falling back to the baseline workflow...',
+                        };
+                        const msg = stageMessages[stage];
+                        if (msg) sendEvent('status', { stage, iteration, message: msg });
+                    },
+                    onToken: (token) => {
+                        sendEvent('token', { token });
+                    },
                 },
             });
             const totalMs = Date.now() - t0;
@@ -370,6 +437,8 @@ app.post('/api/chat', async (req, res) => {
                 resultCount: result.resultCount,
                 suspects: result.suspects || [],
                 workItem: result.workItem || undefined,
+                orchestrationMode: result.orchestrationMode,
+                orchestrationFallback: result.orchestrationFallback,
                 ...(result.type === 'clarification' ? { question: result.question } : {}),
             });
             res.end();
@@ -377,22 +446,30 @@ app.post('/api/chat', async (req, res) => {
         } else if (useVectors) {
             // --- Agentic pipeline ---
             const t0 = Date.now();
-            const result = await agenticSearch({
-                llm: openaiClient,
-                llmFast: openaiMiniClient,
-                embedQuery,
-                searchVectors,
-                searchLexical,
-                lookupByCommitIds,
-                getVectorStats,
-                buildFullContext,
-                query: message,
-                history,
-                maxIterations: AGENT_MAX_ITERATIONS,
-                workItemContext,
-                correlationId: queryId,
-                onProgress: (iteration, stage, details) => {
-                    // Log progress server-side
+            const result = await orchestrateSearch({
+                configuredMode: AGENT_ORCHESTRATION_MODE,
+                multiAgentRuntime,
+                legacySearch: agenticSearch,
+                enableLegacyFallback: AGENT_LEGACY_FALLBACK,
+                params: {
+                    llm: openaiClient,
+                    llmFast: openaiMiniClient,
+                    embedQuery,
+                    searchVectors,
+                    searchLexical,
+                    lookupByCommitIds,
+                    getVectorStats,
+                    buildFullContext,
+                    query: message,
+                    history,
+                    maxIterations: AGENT_MAX_ITERATIONS,
+                    maxTurns: AGENT_SUPERVISOR_MAX_TURNS,
+                    workItemContext,
+                    correlationId: queryId,
+                    signal: requestAbortController.signal,
+                    onProgress: () => {
+                        // Progress is recorded by the harness and agents.
+                    },
                 },
             });
             const totalMs = Date.now() - t0;
@@ -427,16 +504,21 @@ app.post('/api/chat', async (req, res) => {
                 resultCount: result.resultCount,
                 suspects: result.suspects || [],
                 workItem: result.workItem || undefined,
+                orchestrationMode: result.orchestrationMode,
+                orchestrationFallback: result.orchestrationFallback,
                 ...(result.type === 'clarification' ? { question: result.question } : {}),
                 ...(wantsEvalTrace ? {
                     iterationLog: result.iterationLog || [],
                     evidenceGate: result.evidenceGate || null,
+                    agentTrace: result.agentTrace || null,
                     evalMetadata: {
                         chatModel: OPENAI_MODEL,
                         fastModel: OPENAI_FAST_MODEL,
                         embeddingModel: EMBEDDING_CONFIG.model,
                         embeddingDimensions: EMBEDDING_CONFIG.dimensions,
                         maxIterations: AGENT_MAX_ITERATIONS,
+                        supervisorMaxTurns: AGENT_SUPERVISOR_MAX_TURNS,
+                        orchestrationMode: result.orchestrationMode,
                     },
                 } : {}),
             });

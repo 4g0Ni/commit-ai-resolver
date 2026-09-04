@@ -344,6 +344,17 @@ conda run -n hello-agents --no-capture-output python eval\learning-to-rank-pool-
   --vectors-db ..\data\enriched\public-react-v3-20260827\vectors.db `
   --output eval\reports\public-react-rca-pilot-v1-stage1-time-window-ltr-k100 `
   --candidate-depth 100
+
+npm run eval:issue-rca-gate -- `
+  --dataset eval\datasets\public-react-rca-pilot-v1-time-window-7d-30d `
+  --ltr-report eval\reports\public-react-rca-pilot-v1-stage1-time-window-ltr-k100 `
+  --output eval\reports\public-react-rca-pilot-v1-stage1-time-window-evidence-gate-v2-shadow
+
+npm run eval:issue-rca-gate -- `
+  --dataset eval\datasets\public-react-rca-pilot-v1-time-window-7d-30d `
+  --ltr-report eval\reports\public-react-rca-pilot-v1-stage1-time-window-ltr-k100 `
+  --verification-mode closing-pr-provenance `
+  --output eval\reports\public-react-rca-pilot-v1-stage1-time-window-evidence-gate-v2-provenance
 ```
 
 主要产物：
@@ -361,3 +372,83 @@ conda run -n hello-agents --no-capture-output python eval\learning-to-rank-pool-
 3. 为开放 Issue 单独设计 `createdAt - 7d → now`、最大跨度和分段检索实验；
 4. 在完整 git object 数据准备好以后，再测试 diff/symbol candidate channel；
 5. 如果 candidate ceiling 仍足够高但 MRR/nDCG 不够，再在 Top 20–50 上比较本地 cross-encoder 与 LLM reranker 的质量、成本和延迟。
+
+## 11. Evidence Gate v2 适配（2026-09-04）
+
+### 11.1 为什么没有直接修改旧 Gate 的阈值
+
+旧 `src/services/evidence-gate.js` 仍服务于 text-only 线上链路，依据 primary Dense score、Dense/Lexical Top-10 overlap、显式 metadata filter 和 query specificity 输出 `SEARCH / ABSTAIN / ASK_USER`。它的 Dense 0.64、多路 0.60 阈值来自旧 query、旧候选范围和旧二路检索，不能迁移到 Issue 时间窗 + 四路 Top-100 + LTR。
+
+尤其不能把 `issue-lifecycle` 时间窗当作旧 Gate 的显式 date constraint：生命周期只说明“去哪里搜索”，不能证明“哪个 commit 修复了问题”。否则只要窗内有 commit，旧的 `structured-candidate-slice` 分支就可能直接放行。
+
+因此新增独立的 `src/services/issue-rca-evidence-gate.js`，不改变 v1 默认行为。v2 会验证：
+
+- Issue 必须有合法的 `createdAt` 和 `closedAt`；开放 Issue 仍是未校准路径；
+- window provenance 必须是 `issue-lifecycle`；
+- 实际边界必须严格等于 `createdAt - 7d → closedAt + 30d`；
+- 记录四路 channel count、Dense/Lexical 双路共识、LTR Top-1/Top-2 和 margin；
+- 明确把 LTR score 标为未校准 ranking score，不解释成相关概率；
+- 在没有 diff/关系验证时，即使 LTR 高分且四路全部命中也只返回 `VERIFY`，不能返回 `SEARCH`；
+- 只有外部 verifier 返回 `SUPPORTED`、引用的 commit 确实在检索结果中且带 evidence type，才允许 `SEARCH`；`INSUFFICIENT`、`UNAVAILABLE`、伪造候选引用一律 `ABSTAIN`。
+
+新的状态流为：
+
+```mermaid
+flowchart LR
+    A["Issue query + lifecycle"] --> B["7d/30d 四路检索"]
+    B --> C["hist-depth3 LTR"]
+    C --> D["Evidence Gate v2 retrieval phase"]
+    D -->|"有候选；尚无因果证据"| E["VERIFY"]
+    E --> F["Diff / relationship verifier"]
+    F -->|"SUPPORTED + retrieved candidate + evidence type"| G["SEARCH / Synthesizer"]
+    F -->|"INSUFFICIENT / UNAVAILABLE"| H["ABSTAIN"]
+```
+
+### 11.2 461-case shadow eval
+
+新增 `src/eval/run-issue-rca-evidence-gate.js`，读取冻结的 LTR `case-results.jsonl`，只评估检索后路由。它**不会**把 gold label 伪装成 causal verification；这里的 supported proxy 仅表示标注 fix 是否出现在待验证 Top 20。
+
+| Split | Cases | `VERIFY` | fix 在 Top 20 | fix 不在 Top 20 | Verify precision proxy | 未验证直接 `SEARCH` |
+|---|---:|---:|---:|---:|---:|---:|
+| dev | 327 | 327 | 314 | 13 | 96.02% | 0 |
+| test | 134 | 134 | 127 | 7 | 94.78% | 0 |
+| all | 461 | 461 | 441 | 20 | 95.66% | 0 |
+
+全量进入 `VERIFY` 是刻意的安全语义：检索阶段保持100% supported-case verify recall，同时不把任何未做因果验证的候选送入生成；20条 retrieval failure 必须由后续 verifier 拒绝、扩检或转人工。
+
+### 11.3 为什么当前不能用 LTR score 做 Gate threshold
+
+Top-1 LTR score 对成功/失败没有足够区分力。test 的7条 Top-20 failure，Top-1 score 仍全部落在 0.9503–0.9762，且多条具有四路共识。固定阈值的 shadow 诊断为：
+
+| Top-1 LTR threshold | dev supported recall | dev failure pass rate | test supported recall | test failure pass rate |
+|---:|---:|---:|---:|---:|
+| 0.90 | 99.04% | 69.23% | 96.06% | 100.00% |
+| 0.95 | 94.59% | 46.15% | 89.76% | 100.00% |
+| 0.97 | 82.17% | 15.38% | 77.95% | 42.86% |
+| 0.975 | 64.65% | 15.38% | 66.14% | 28.57% |
+
+这说明把旧 Gate 的思路改成“LTR score ≥ X 即 SEARCH”会同时产生较高 failure pass 和明显的正确请求损失。当前不选择任何该类阈值，v2 状态保持 `shadow-only-not-calibrated`、`releaseGateEligible=false`。
+
+### 11.4 Closing-PR relationship verifier
+
+为闭环验证 v2 状态机，新增 `src/services/issue-rca-relationship-verifier.js`。它不看 gold 字段，而是读取运行时/数据 provenance 中的 GitHub `Issue.closedByPullRequestsReferences`，要求完整40位 `mergeCommitId` 与待验证 Top 20 中实际返回的 commit 精确匹配：
+
+- 命中时输出 `SUPPORTED + github-closing-pr-merge-commit`，v2 再校验 supporting commit 确实在检索结果中，最终允许 `SEARCH`；
+- Closing PR merge commit 不在 Top 20 时输出 `INSUFFICIENT`，最终 `ABSTAIN`；
+- 缺少该 relationship 或完整 merge SHA 时输出 `UNAVAILABLE`，最终 `ABSTAIN`。
+
+461-case provenance 模式结果为：
+
+| Split | `SEARCH` | `ABSTAIN` | supported search recall | unsupported abstain rate | 未验证直接 `SEARCH` |
+|---|---:|---:|---:|---:|---:|
+| dev | 314 | 13 | 100% | 100% | 0 |
+| test | 127 | 7 | 100% | 100% | 0 |
+| all | 441 | 20 | 100% | 100% | 0 |
+
+这个100%只能证明 wiring 和状态转换正确，**不是独立质量指标**：461条标签本来就是从同一个 Closing-PR relationship 挖掘出来的，因此 relationship verifier 与标签来源循环。代码和报告明确标记 `independentCausalValidation=false`、`releaseGateEligible=false`，不能把该结果用于发布门禁或对外宣称。
+
+### 11.5 仍未完成的部分
+
+v2 已完成版本化输入契约、窗口来源检查、四路/LTR telemetry、`VERIFY` 安全状态、causal-verification 输出校验、Closing-PR relationship verifier、单测和461条 shadow/provenance runner；它尚未接入默认 orchestrator，因为新四路 LTR 本身仍是离线链路。
+
+下一步必须实现独立的 diff/behavior verifier，并准备包含 hard negative、mismatched Issue、OOD 和 ambiguous query 的 grouped dev/test。只有在不复用标签来源的集合上校准 `SUPPORTED / INSUFFICIENT`，才可以把 v2 从 shadow mode 接到生产 Issue 路由；旧 text-only v1 在此之前保持不变。

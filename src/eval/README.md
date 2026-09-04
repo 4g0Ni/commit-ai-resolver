@@ -105,6 +105,23 @@ conda run -n hello-agents --no-capture-output python eval\learning-to-rank-pool-
 
 The full diagnosis, rejected experiments, leakage boundaries, flow diagrams, and failure analysis are documented in [`../../docs/issue-time-window-local-ltr-design-2026-09-03.md`](../../docs/issue-time-window-local-ltr-design-2026-09-03.md).
 
+### Issue RCA Evidence Gate v2 shadow path
+
+The legacy `evidence-gate.js` remains unchanged for the default text-only product path. Its Dense thresholds and two-channel overlap were calibrated on the older retriever and must not be applied to the lifecycle-window LTR output. The versioned `issue-rca-evidence-gate.js` validates 7d/30d window provenance, records four-channel/LTR diagnostics, and returns `VERIFY` after retrieval. It returns `SEARCH` only after a downstream verifier reports `SUPPORTED` evidence for a candidate that was actually retrieved; an LTR score is explicitly not treated as a calibrated probability.
+
+Run the retrieval-only shadow evaluation with:
+
+```powershell
+npm run eval:issue-rca-gate -- `
+  --dataset eval\datasets\public-react-rca-pilot-v1-time-window-7d-30d `
+  --ltr-report eval\reports\public-react-rca-pilot-v1-stage1-time-window-ltr-k100 `
+  --output eval\reports\public-react-rca-pilot-v1-stage1-time-window-evidence-gate-v2-shadow
+```
+
+All 461 cases route to `VERIFY`, with zero unverified `SEARCH` decisions. The labeled fix is present in the verification Top 20 for 441/461 overall and 127/134 test cases. This is only a retrieval-support proxy: the pilot lacks sufficient hard-negative/OOD/ambiguous cases for causal-gate calibration, so v2 remains shadow-only and release-gate-ineligible until a real diff/relationship verifier and its grouped calibration set exist.
+
+For a wiring-only end-to-end check, add `--verification-mode closing-pr-provenance`. The deterministic relationship verifier matches a full GitHub Closing-PR `mergeCommitId` against the retrieved Top 20, producing 441 `SEARCH` and 20 `ABSTAIN` decisions overall (127/7 on test), with zero unverified `SEARCH`. This diagnostic is label-circular because the pilot itself was mined from the same Closing-PR relationship. It is explicitly marked non-independent and must not be reported as causal-gate accuracy or used for release gating; independent diff/behavior evidence and real negative cases are still required.
+
 For the byte-identical 60-case v2/v3 comparison, run `npm run analyze:eval-delta`. Its report separates real rank movement from the 15 regenerated cases and records searchable-document length changes and per-category effects.
 
 ## Commands
