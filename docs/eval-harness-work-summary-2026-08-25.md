@@ -1,5 +1,7 @@
 # Eval Harness 工作总结（2026-08-25）
 
+> **2026-09-04 当前口径：** Eval portfolio 共有 536 个逻辑 case：75 条 `public-react-v3` 工程回归 case，以及 461 条 `public-react-rca-pilot-v1` Issue-grounded RCA pilot。后者具备机器可验证的 Issue → closing PR → corpus commit provenance，但仍是模型预审、非 gold、不可用于 release gate。时间窗口数据集是同一批 461 条的派生视图，不重复计数。完整逐条目录见 [`eval-case-catalog-2026-09-04.md`](./eval-case-catalog-2026-09-04.md)。下文保留各阶段历史记录，其中“当前 75-case”等措辞应按当时工程回归集的阶段口径理解。
+
 > **2026-08-26 增量更新：** 当前活跃数据集已升级为 `public-react-v2`，完整导入 `facebook/react` 的 27,646 条 Commit、3,803 个 daily JSON 文件，日期覆盖 2013-05-28 至 2026-08-09。Corpus SHA-256 为 `9fbdfdaa438d1a9389c147e5d8adb4e0d79b0b6be2b0bb5d5777ef88f5675deb`；metadata、FTS5 和 Qwen 1024 维向量均为 27,646 行且无 missing、stale 或 duplicate。新的检索基线为 `src/eval/baselines/public-react-qwen06b-v2.json`；原 `public-react-v1` 内容保留为本总结所记录工作的历史快照。
 
 > **2026-08-27 增量更新：** 当前 enriched 工程基线为 `public-react-v3`。27,646 条 Commit 均已补齐完整 message、changed files 和 React affected areas，并生成独立 Qwen 索引；Corpus SHA-256 为 `4c11acc1307f9c3f074f60b537323b3fe8da7ea751c2e17a9cd4e6c6772f6844`。同时新增 GitHub Issue → closing PR → corpus fix commit 的候选采集、人工 review rubric、frozen RCA dataset builder 和 provenance hard gate。详情见 `docs/github-grounded-rca-eval-plan-2026-08-27.md`。
@@ -44,9 +46,9 @@ Manifest 固定记录 generator、seed、corpus hash、case hash、文件数、C
 - `src/eval/lib/corpus.js`
 - `src/eval/generate-cases.js`
 
-### 2. 75-case 分层验证集
+### 2. 当时的 75-case 工程分层验证集
 
-当前验证集共 75 个 case：
+该阶段的工程回归验证集共 75 个 case；这里不包含后来加入的 461 条 RCA pilot：
 
 | Category | 数量 | 评测目标 |
 |---|---:|---|
@@ -369,7 +371,7 @@ Eval 测试入口当前包含：
 
 ## 下一阶段
 
-1. 从公开 issue、fix PR、revert 和 release 中建立 30–50 条人工 RCA holdout。
+1. 对现有 461 条 Issue-grounded RCA pilot 按 review rubric 分层抽样复核，并据此晋升一批独立的人工 gold holdout；未经复核的 pilot case 不进入 release gate。
 2. 增加 2–3 个公开仓库，覆盖跨仓库 feature 和同短 SHA 边界。
 3. 增加文件路径、symbol、错误码和配置文件 case。
 4. 接入真实 chat API，运行 frozen test 的 Agent 多次采样。

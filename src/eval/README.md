@@ -6,6 +6,7 @@ Full design rationale:
 
 - [中文设计文档](./eval-design.README.zh-CN.md)
 - [English design document](./eval-design.README.en.md)
+- [当前 536 个逻辑 case 的完整分类目录](../../docs/eval-case-catalog-2026-09-04.md)
 
 ## Dataset policy
 
@@ -13,7 +14,9 @@ Full design rationale:
 
 Cases are stratified into `dev` and frozen `test` splits. Thresholds are tuned on dev; release gates read the test split.
 
-The 75-case suite contains:
+The active eval portfolio contains **536 logical cases across two suites**: the following 75-case engineering regression suite plus a separate 461-case Issue-grounded RCA pilot. The lifecycle-window RCA dataset is a derived view of the same 461 cases and is not counted again.
+
+The 75-case engineering suite contains:
 
 - 12 exact SHA lookups
 - 18 paraphrased commit-title queries
@@ -24,7 +27,7 @@ The 75-case suite contains:
 - 10 human-authored, natural-language out-of-domain queries
 - 5 underspecified queries that should request clarification
 
-Generated semantic-title cases are useful regression evidence, but they are not a substitute for human-reviewed incident/RCA labels. Add reviewed cases as a new dataset version rather than editing an existing frozen dataset.
+Generated semantic-title cases are useful engineering regression evidence. Separately, the 461 RCA pilot provides machine-verifiable Issue → closing PR → corpus commit provenance, but it is model-prescreened rather than human-approved gold. Add reviewed cases as a new dataset version rather than editing an existing frozen dataset.
 
 ## GitHub-grounded RCA workflow
 

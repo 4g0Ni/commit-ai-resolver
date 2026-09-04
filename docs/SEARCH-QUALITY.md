@@ -1,6 +1,6 @@
 # Search Quality Requirements & Test Plan
 
-> **Legacy reference (private corpus, no longer runnable).** The repositories, dates, and manual scores below came from the original company-internal deployment and are retained only as historical design context. The active offline eval source of truth is [`src/eval/README.md`](../src/eval/README.md) plus the versioned `public-react-v2` manifest and baseline. Do not use the legacy scores below as current regression gates.
+> **Legacy reference (private corpus, no longer runnable).** The repositories, dates, and manual scores below came from the original company-internal deployment and are retained only as historical design context. The active offline eval source of truth is [`src/eval/README.md`](../src/eval/README.md), the 75-case `public-react-v3` engineering suite, and the separate 461-case `public-react-rca-pilot-v1`. The RCA pilot is model-prescreened, non-gold, and release-gate-ineligible. Do not use the legacy scores below as current regression gates.
 
 ## Overview
 

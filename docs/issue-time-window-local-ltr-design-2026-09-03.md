@@ -209,11 +209,70 @@ flowchart LR
 
 本地 LTR 的优势是便宜、确定、可复现、可以做 feature ablation；限制是它只会重排已有候选，无法救回 candidate miss，也可能学习到 dataset 特有模式，所以必须保留 grouped split 和人工 review。
 
-### 6.3 模型选择
+### 6.3 当前实现属于哪一种 LTR
 
-候选模型包括 Logistic Regression、HistGradientBoosting 和 ExtraTrees。模型选择在 dev 内部的 229/98 grouped split 上完成，最终选中 `hist-depth3`，再在全部 327 dev 上重新拟合，最后评估 134 test。
+当前实现是一个轻量的 **pointwise LTR**：把每个 `Issue × candidate commit` 当作一个二分类样本，gold commit 标为 1，其余候选标为 0；模型输出 `predict_proba(...)[1]` 作为 relevance score，再在每个 Issue 内按分数降序排列。它不是 pairwise RankNet，也不是直接优化整张列表的 LambdaMART/listwise ranker。
 
-没有把 test query 用于 TF-IDF vocabulary/IDF 拟合；无监督文本统计只用固定 commit corpus 和 dev queries，test 只做 transform。
+采用 pointwise 形式是有意控制实验复杂度：目前只有 327 条 dev case，正例远少于负例；先用依赖少、训练快、固定随机种子即可复现的模型，验证 35 个手工 feature 是否真的包含排序信号，再决定是否值得引入专门的 ranking library。
+
+为了避免“大候选池 Issue”和海量负例支配损失函数，训练时按 Issue 计算 sample weight：一个 Issue 的全部正例权重合计为 0.5，全部负例权重合计为 0.5，因此每个可训练 Issue 的总权重相同。候选池中没有 gold 的 case 无法提供正例，不进入拟合样本，但仍会在 validation/test 指标中作为 candidate miss 计入；LTR 不会借此隐藏召回失败。
+
+### 6.4 实际比较的模型族和配置
+
+实际共比较了 **3 个模型族、8 个配置**，不是只训练一次 `hist-depth3`：
+
+| 模型族 | 配置 | 想验证的问题 |
+|---|---|---|
+| Logistic Regression | `C = 0.05 / 0.2 / 1 / 5`，`liblinear`，最多 500 iterations | 35 个 feature 是否只需线性加权；不同正则强度能否抑制小数据过拟合 |
+| HistGradientBoosting | `hist-depth3`：160 iterations、learning rate 0.06、max depth 3、L2 1 | 浅层非线性是否能学习“多路共识 + 排名 + 文本 overlap”之间的阈值和交互 |
+| HistGradientBoosting | `hist-leaves15`：160 iterations、learning rate 0.06、max leaves 15、L2 2 | 用叶子数控制的更灵活 boosting 是否优于浅深度版本 |
+| ExtraTrees | `extra-depth8`：240 trees、max depth 8、min leaf 3、balanced class weight | 随机树集成能否稳健捕捉非线性组合 |
+| ExtraTrees | `extra-depth12`：240 trees、max depth 12、min leaf 2、balanced class weight | 更深、更细的树是否能找回长尾模式，还是会损害泛化 |
+
+所有带随机性的候选都固定 `random_state=42`。Logistic Regression 的 `C` 越小，正则越强；两组 HistGradientBoosting 和两组 ExtraTrees 则用受限深度/叶子大小避免在稀疏正例上生成过细规则。
+
+LLM reranker 和预训练 cross-encoder 是另外的 reranker 路线，不属于这张本地 35-feature LTR 选型表。它们使用不同输入、成本和候选池，不能把结果直接当作这 8 个配置的同条件超参数比较。当前也没有声称穷举了 LambdaMART、LightGBM/XGBoost ranker、RankNet 或 listwise 神经排序器；`hist-depth3` 的准确表述是“本轮已测试配置中的胜者”，不是理论上的全局最优模型。
+
+### 6.5 如何选择：先冻结规则，再看 internal validation
+
+外层 461 case 已按 shared relevant commit 分组为 327 dev / 134 test。LTR 选型时又在 **327 dev 内部**按相同原则做确定性 grouped split，得到 229 internal train / 98 internal validation；共享同一个 relevant commit 的 case 不会跨到 inner train 和 validation 两边。
+
+每个候选模型只在 229 internal train 上拟合，在同一组 98 internal validation 上按下面的预设目标函数排序：
+
+```text
+selection objective = Recall@20 + 0.15 × MRR@10 + 0.05 × nDCG@20
+```
+
+这个目标函数明确表达产品优先级：首先把正确 commit 放进用户会检查的 Top 20；同等或接近的 Recall@20 下，再奖励首个正确结果更靠前以及 Top 20 整体排序更好。它是模型选择分数，不是概率，所以大于 1 是正常的。没有用 test 指标修改公式、权重或候选超参数。
+
+加入最终 7d/30d 时间窗以后，8 个配置在 98 条 internal validation 上的完整结果如下：
+
+| 配置 | Recall@10 | Recall@20 | Recall@50 | MRR@10 | nDCG@10 | nDCG@20 | Objective |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| **hist-depth3** | 91.84% | **96.94%** | 97.96% | 0.8120 | 0.8332 | 0.8458 | **1.133476** |
+| logistic-c0.2 | 91.84% | 95.92% | 98.98% | **0.8226** | **0.8426** | **0.8533** | 1.125241 |
+| extra-depth8 | 88.78% | 96.43% | 98.98% | 0.7849 | 0.8037 | 0.8239 | 1.123215 |
+| logistic-c0.05 | **92.86%** | 95.92% | 98.98% | 0.8039 | 0.8319 | 0.8398 | 1.121752 |
+| hist-leaves15 | 92.35% | 94.90% | 97.96% | 0.8191 | 0.8391 | 0.8460 | 1.114149 |
+| logistic-c5 | 91.84% | 93.88% | **100.00%** | 0.8224 | 0.8423 | 0.8477 | 1.104518 |
+| logistic-c1 | 91.84% | 93.88% | 98.98% | 0.8203 | 0.8407 | 0.8461 | 1.104133 |
+| extra-depth12 | 88.78% | 94.39% | **100.00%** | 0.7759 | 0.7976 | 0.8128 | 1.100903 |
+
+### 6.6 为什么最终选 `hist-depth3`
+
+`hist-depth3` 的 Objective 最高，并且取得最高的 validation Recall@20（96.94%），所以严格按冻结的选择规则胜出。它不是每项指标都第一：`logistic-c0.2` 的 MRR@10、nDCG@10、nDCG@20 更高，`logistic-c0.05` 的 Recall@10 更高，若事后改成优化其他指标，胜者可能不同。这里没有这样做，因为本阶段预先确定的第一目标是 Recall@20。
+
+从模型行为看，结果也符合 feature 结构：线性 Logistic Regression 只能给每个 feature 一个加性权重；浅层 boosting 可以表达“两个 Dense 通道同时命中且 title overlap 超过阈值”一类条件交互。更灵活的 `hist-leaves15` 没有换来更高 Recall@20；ExtraTrees 尤其 `extra-depth12` 的 internal-validation Objective 更低，说明在当前数据规模和稀疏正例下，更复杂的树划分没有带来更好的 held-out 排序。后一点是基于验证结果的解释，不等同于已经用学习曲线证明了过拟合。
+
+这个选择还有一次独立的过程佐证：在尚未加入时间窗的第一版四路 Top-100 pool 上，同样的 8 配置和 inner split 也选中了 `hist-depth3`（validation Objective 0.968357，Recall@20 85.71%）。但该版本 test candidate availability 只有 85.82%，最终 test Recall@20 也只有 73.13%。这说明当时的问题主要是候选缺失，而不是需要换一个更复杂的 LTR。加入时间窗提高 candidate ceiling 后重新执行选型，`hist-depth3` 再次胜出。
+
+### 6.7 冻结模型后的最终评测
+
+选出 `hist-depth3` 后，用相同超参数在全部 327 dev 上重新拟合一次，再且仅再对 134 grouped test 做最终评估；没有根据 test 结果回头更换模型。最终 test Recall@10/20/50 为 92.54%/94.78%/97.01%，MRR@10 为 0.6887，nDCG@10 为 0.7462。
+
+validation 到 test 的 Recall@20 从 96.94% 降到 94.78%，仍保持目标水平；MRR@10 从 0.8120 降到 0.6887，说明“是否进 Top 20”的泛化比“具体排到第几名”更稳定。当前结论因此应是：`hist-depth3` 已显著改善 Top-20 排序，但头部名次仍有继续校准空间。
+
+没有把 test query 用于 TF-IDF vocabulary/IDF 拟合；无监督文本统计只用固定 commit corpus 和 dev queries，test 只做 transform。最终 test candidate availability 为 97.76%，所以无论选择哪一种只重排该候选池的 LTR，其理论 Recall 上限都不会超过 97.76%。
 
 ## 7. 最终结果如何解读
 

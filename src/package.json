@@ -15,6 +15,7 @@
     "build:rca-pilot": "node scripts/build-rca-pilot-dataset.js",
     "analyze:rca-pilot": "node scripts/analyze-rca-pilot.js --report eval/reports/public-react-rca-pilot-v1-final",
     "analyze:eval-delta": "node scripts/analyze-versioned-eval-delta.js",
+    "catalog:eval-cases": "node scripts/generate-eval-case-catalog.js",
     "embedding:serve": "conda run -n hello-agents --no-capture-output python scripts/serve-embedding.py --device cuda",
     "refresh": "node scripts/scheduled-refresh.js",
     "refresh:loop": "node scripts/scheduled-refresh.js --loop 60",

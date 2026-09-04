@@ -2,6 +2,8 @@
 
 > English version: [eval-design.README.en.md](./eval-design.README.en.md)
 
+> **2026-09-04 当前资产口径：** Eval portfolio 共有 **536 个逻辑 case**：`public-react-v3` 的 75 条工程回归 case，以及 `public-react-rca-pilot-v1` 的 461 条 Issue-grounded RCA pilot。`public-react-rca-pilot-v1-time-window-7d-30d` 是同一批 461 条的时间窗口派生视图，不重复计数。RCA pilot 已具备 Issue → closing PR → corpus commit 的机器可验证 provenance，但仍是模型预审、非 gold、不可用于 release gate。完整逐条目录见 [`docs/eval-case-catalog-2026-09-04.md`](../../docs/eval-case-catalog-2026-09-04.md)。
+
 ## 1. 背景与问题定义
 
 Commit AI Resolver 是一个面向代码变更检索和回归排查的 Agentic RAG 系统。当前链路不是单一向量搜索，而是：
@@ -76,13 +78,13 @@ Harness 将系统拆成六层：
 
 ### 5.1 当前公开语料
 
-`public-react-v2` 基于完整的本地公开 `facebook/react` commit corpus。此前的 `public-react-v1` 保持冻结，作为历史快照：
+当前工程集 `public-react-v3` 基于 enriched 的本地公开 `facebook/react` commit corpus。`public-react-v1` 和 `public-react-v2` 保持冻结，作为历史快照：
 
 - 27,646 commits
 - 3,803 个 daily JSON 文件
 - 时间范围：2013-05-28 至 2026-08-09
 - 单仓库：`facebook/react`
-- Corpus SHA-256：`9fbdfdaa438d1a9389c147e5d8adb4e0d79b0b6be2b0bb5d5777ef88f5675deb`
+- Corpus SHA-256：`4c11acc1307f9c3f074f60b537323b3fe8da7ea751c2e17a9cd4e6c6772f6844`
 
 Daily JSON 是 source of truth，SQLite metadata、FTS5 和 sqlite-vec 都是可重建派生物。
 
@@ -99,7 +101,7 @@ Daily JSON 是 source of truth，SQLite metadata、FTS5 和 sqlite-vec 都是可
 
 ### 5.3 Case 组成
 
-生成器使用固定 seed `20260820` 生成 60 条 case：
+工程集生成器使用固定 seed `20260820` 生成 75 条 case；另有独立的 461 条 RCA pilot：
 
 | Category | 数量 | 目的 |
 |---|---:|---|
@@ -109,6 +111,9 @@ Daily JSON 是 source of truth，SQLite metadata、FTS5 和 sqlite-vec 都是可
 | `risk_date` | 10 | 验证 risk/repo/date 结构化过滤 |
 | `repo_date` | 5 | 验证日期边界和 repo 过滤 |
 | `negative` | 5 | 验证不存在标识符的无结果行为 |
+| `negative_natural` | 10 | 验证自然语言 OOD 和 Evidence Gate 拒答 |
+| `ambiguous` | 5 | 验证 Intent/Evidence Gate 请求澄清 |
+| `issue_rca_pilot` | 461 | 验证 Issue-grounded RCA candidate generation、时间窗和 reranking；非 gold |
 
 `semantic_title` 使用有限的确定性词语替换，例如 `fix → resolve`、`add → introduce`。它能测试 query/document 间的轻度语义间隔，但仍可能保留较多原始词汇，因此不应被解释为真实用户分布或高难度 RCA 集。
 
@@ -156,7 +161,7 @@ Manifest 同时记录：
 
 Runner 在执行前重新计算 hash。只要 corpus 或 cases 被静默修改，就会停止，而不是在不同输入上继续比较分数。
 
-现有版本一旦成为 baseline，不应直接编辑。标签政策、语料或采样方式发生变化时，应创建 `public-react-v2` 等新版本。
+现有版本一旦成为 baseline，不应直接编辑。标签政策、语料或采样方式发生变化时，应创建新的 dataset 版本。工程集和 RCA pilot 必须通过 `--dataset` 分开运行，不能混成一个总分。
 
 ## 6. L0：数据和索引完整性
 
@@ -476,14 +481,14 @@ GitHub PR 不包含 `data/` 和本地模型，因此 workflow 只运行确定性
 
 ## 18. 当前基线及解释
 
-当前 `public-react-qwen06b-v2` 基线：
+当前 `public-react-qwen06b-v3` 工程回归基线：
 
 | Channel | Recall@10 | MRR@10 | nDCG@10 | Negative no-result | p95 |
 |---|---:|---:|---:|---:|---:|
 | Direct | 100.0% | 1.000 | 1.000 | n/a | 0 ms |
-| Lexical | 43.6% | 0.391 | 0.393 | 33.3% | 约 30 ms |
-| Dense | 78.2% | 0.710 | 0.726 | 0.0% | 约 318 ms |
-| Hybrid | 100.0% | 0.940 | 0.953 | 0.0% | 约 334 ms |
+| Lexical | 51.2% | 0.514 | 0.466 | 33.3% | 约 56 ms |
+| Dense | 76.4% | 0.687 | 0.706 | 0.0% | 约 234 ms |
+| Hybrid | 100.0% | 0.930 | 0.945 | 0.0% | 约 290 ms |
 
 解释时应注意：
 
@@ -509,18 +514,18 @@ GitHub PR 不包含 `data/` 和本地模型，因此 workflow 只运行确定性
 ### 当前限制
 
 - 只有一个公开 repo，无法充分评估跨 repo correlation 和 alias。
-- Changed files 在当前公开导入数据中较稀疏，路径/错误码类 case 不够。
+- 461 条 RCA 已覆盖真实 Issue 正文、closing PR 和 enriched changed files，但尚未逐条完成人工四项 rubric。
 - 自动 `semantic_title` 不是独立人工 query。
 - Negative case 数量较少且是合成标识符。
-- 尚无人工审核的 incident、multi-hop、causal 和 conversation case。
+- 尚无可用于 release gate 的人工审核 RCA gold；461 条是模型预审 pilot，不等于人工因果标注。
 - 产品 Intent/Answer 全链路需要配置实际 LLM 后输出预测文件，当前 baseline 主要覆盖 index/retrieval。
 
 ### 推荐路线
 
-1. 从公开 GitHub issue、fix PR、revert 和 release 构建 30–50 条人工 RCA case。
+1. 对现有 461 条 RCA pilot 完成人工四项 rubric，产出独立、可门禁的 reviewed RCA dataset。
 2. 增加至少 2–3 个 repo，覆盖跨 repo feature 和同短 SHA 边界。
 3. 增加文件路径、symbol、错误码和配置文件 case。
-4. 将 60 条当前数据拆为 dev/test，RRF 与 threshold 只在 dev 调参。
+4. 保持当前 75 条工程集的 52/23 split，以及 RCA 的 commit-grouped 327/134 split；RRF、时间窗和 threshold 只在 dev 调参。
 5. 校准 abstention，加入 negative release gate。
 6. 接入实际 Intent 和 Answer 预测，形成 nightly full-pipeline eval。
 7. 将人工审核后的 thumbs-down 转成新版本 badcase，而不是直接把用户反馈当 gold。
@@ -536,7 +541,8 @@ src/eval/
 ├── embed-queries.py                  # 本地 Qwen query embedding
 ├── lib/corpus.js                     # Corpus 加载、hash、稳定采样
 ├── lib/metrics.js                    # 排序、校准和 baseline 指标
-├── datasets/public-react-v2/         # 当前冻结 cases 与 manifest
+├── datasets/public-react-v3/         # 75 条工程回归 cases
+├── datasets/public-react-rca-pilot-v1/ # 461 条模型预审 RCA cases
 ├── baselines/                        # 审核后的 baseline
 ├── fixtures/                         # Intent/Answer 输入格式示例
 └── reports/                           # 生成报告，不作为 ground truth

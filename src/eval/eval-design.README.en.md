@@ -2,6 +2,8 @@
 
 > 中文版本：[eval-design.README.zh-CN.md](./eval-design.README.zh-CN.md)
 
+> **Current inventory as of 2026-09-04:** the eval portfolio contains **536 logical cases**: 75 engineering regression cases in `public-react-v3` and 461 Issue-grounded RCA pilot cases in `public-react-rca-pilot-v1`. `public-react-rca-pilot-v1-time-window-7d-30d` is a derived view of the same 461 cases and is not counted again. The RCA pilot has machine-verifiable Issue → closing PR → corpus commit provenance, but remains model-prescreened, non-gold, and release-gate-ineligible. See the [complete case catalog](../../docs/eval-case-catalog-2026-09-04.md).
+
 ## 1. Context and problem statement
 
 Commit AI Resolver is an agentic RAG system for code-change retrieval and regression investigation. Its runtime path is not a single vector search:
@@ -73,13 +75,13 @@ Full API E2E tests remain useful as the outermost layer. Core scorers call modul
 
 ### 5.1 Public corpus
 
-`public-react-v2` uses the complete local public `facebook/react` commit corpus. The earlier `public-react-v1` dataset remains frozen as a historical snapshot:
+The current engineering suite, `public-react-v3`, uses the enriched local public `facebook/react` commit corpus. `public-react-v1` and `public-react-v2` remain frozen historical snapshots:
 
 - 27,646 commits
 - 3,803 daily JSON files
 - Date range: 2013-05-28 through 2026-08-09
 - One repository: `facebook/react`
-- Corpus SHA-256: `9fbdfdaa438d1a9389c147e5d8adb4e0d79b0b6be2b0bb5d5777ef88f5675deb`
+- Corpus SHA-256: `4c11acc1307f9c3f074f60b537323b3fe8da7ea751c2e17a9cd4e6c6772f6844`
 
 Daily JSON is the source of truth. SQLite metadata, FTS5, and sqlite-vec are rebuildable derived artifacts.
 
@@ -96,7 +98,7 @@ These labels do not require an LLM to guess the answer, which makes them suitabl
 
 ### 5.3 Case mix
 
-The generator uses fixed seed `20260820` to create 60 cases:
+The engineering generator uses fixed seed `20260820` to create 75 cases; a separate suite contains 461 RCA pilot cases:
 
 | Category | Count | Purpose |
 |---|---:|---|
@@ -106,6 +108,9 @@ The generator uses fixed seed `20260820` to create 60 cases:
 | `risk_date` | 10 | Risk/repository/date filters |
 | `repo_date` | 5 | Date boundaries and repository filtering |
 | `negative` | 5 | No-result behavior for nonexistent identifiers |
+| `negative_natural` | 10 | Natural-language OOD and Evidence Gate abstention |
+| `ambiguous` | 5 | Intent/Evidence Gate clarification behavior |
+| `issue_rca_pilot` | 461 | Issue-grounded candidate generation, lifecycle windows, and reranking; non-gold |
 
 `semantic_title` applies a limited deterministic rewrite, such as `fix → resolve` and `add → introduce`. It introduces a small semantic gap but may retain substantial source wording. It must not be interpreted as a representative user distribution or a hard RCA benchmark.
 
@@ -153,7 +158,7 @@ The manifest records:
 
 The runner recomputes hashes before evaluation. A silent change to either corpus or cases stops the run instead of comparing scores from different inputs.
 
-Once a dataset has a baseline, it should not be edited in place. A change in corpus, sampling, or label policy creates a new version such as `public-react-v2`.
+Once a dataset has a baseline, it should not be edited in place. A change in corpus, sampling, or label policy creates a new dataset version. The engineering suite and RCA pilot are selected separately with `--dataset` and must not be collapsed into one score.
 
 ## 6. L0: corpus and index integrity
 
@@ -473,14 +478,14 @@ GitHub pull requests do not contain `data/` or the local model, so the workflow 
 
 ## 18. Current baseline and interpretation
 
-Current `public-react-qwen06b-v2` baseline:
+Current `public-react-qwen06b-v3` engineering regression baseline:
 
 | Channel | Recall@10 | MRR@10 | nDCG@10 | Negative no-result | p95 |
 |---|---:|---:|---:|---:|---:|
 | Direct | 100.0% | 1.000 | 1.000 | n/a | 0 ms |
-| Lexical | 43.6% | 0.391 | 0.393 | 33.3% | about 30 ms |
-| Dense | 78.2% | 0.710 | 0.726 | 0.0% | about 318 ms |
-| Hybrid | 100.0% | 0.940 | 0.953 | 0.0% | about 334 ms |
+| Lexical | 51.2% | 0.514 | 0.466 | 33.3% | about 56 ms |
+| Dense | 76.4% | 0.687 | 0.706 | 0.0% | about 234 ms |
+| Hybrid | 100.0% | 0.930 | 0.945 | 0.0% | about 290 ms |
 
 Interpretation caveats:
 
@@ -506,18 +511,18 @@ This is the main value of a layered harness: it finds deterministic product bugs
 ### Current limitations
 
 - Only one public repository, limiting cross-repository and alias evaluation.
-- Sparse changed-file data in the imported corpus, limiting path and error-code cases.
+- The 461 RCA cases include real Issue text, closing PRs, and enriched changed files, but have not completed the four-field human-review rubric.
 - Automatically rewritten titles are not independent human queries.
 - Only five synthetic negative cases.
-- No reviewed incident, multi-hop, causal, or conversational cases yet.
+- No human-approved RCA gold is release-gate eligible yet; the 461 cases are a model-prescreened pilot, not human causal annotations.
 - Full product Intent/Answer evaluation requires model-produced prediction files; the current baseline is primarily index and retrieval.
 
 ### Recommended roadmap
 
-1. Build 30–50 reviewed RCA cases from public issues, fix PRs, reverts, and releases.
+1. Complete the four-field human rubric for the existing 461-case pilot and publish a separate reviewed, gate-eligible RCA dataset.
 2. Add two or three repositories for cross-repository features and short-SHA boundaries.
 3. Add file-path, symbol, error-code, and configuration cases.
-4. Split the present suite into development and test; tune RRF and thresholds only on development.
+4. Preserve the engineering 52/23 split and commit-grouped RCA 327/134 split; tune RRF, lifecycle windows, and thresholds only on development.
 5. Calibrate abstention and add a negative release gate.
 6. Produce real Intent and Answer predictions in a nightly full-pipeline run.
 7. Convert reviewed thumbs-down feedback into a new dataset version rather than treating raw feedback as gold.
@@ -533,7 +538,8 @@ src/eval/
 ├── embed-queries.py                  # Local Qwen query embeddings
 ├── lib/corpus.js                     # Corpus loading, hashing, stable sampling
 ├── lib/metrics.js                    # Ranking, calibration, baseline metrics
-├── datasets/public-react-v2/         # Active frozen cases and manifest
+├── datasets/public-react-v3/         # 75 engineering regression cases
+├── datasets/public-react-rca-pilot-v1/ # 461 model-prescreened RCA cases
 ├── baselines/                        # Reviewed baselines
 ├── fixtures/                         # Intent/Answer format examples
 └── reports/                           # Generated output, never ground truth
