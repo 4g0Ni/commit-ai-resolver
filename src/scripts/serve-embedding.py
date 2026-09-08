@@ -51,7 +51,7 @@ def load_model(device: str) -> SentenceTransformer:
         raise RuntimeError("CUDA was requested but PyTorch cannot see a GPU.")
     model_kwargs = {"dtype": torch.float16} if device == "cuda" else {}
     model = SentenceTransformer(str(MODEL_PATH), device=device, model_kwargs=model_kwargs)
-    dimensions = model.get_embedding_dimension()
+    dimensions = model.get_sentence_embedding_dimension()
     if dimensions != EMBEDDING_DIMENSIONS:
         raise RuntimeError(
             f"Model outputs {dimensions} dimensions; expected {EMBEDDING_DIMENSIONS}."
