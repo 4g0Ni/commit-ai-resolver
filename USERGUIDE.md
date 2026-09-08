@@ -173,6 +173,60 @@ node src/scripts/enrich-public-commits.js `
 
 The output is another `DATA_DIR`-compatible tree with `daily/` plus `enrichment-manifest.json`. Git metadata is cached in `data/public/react-git-metadata.jsonl`, so interrupted or expanded runs reuse previous work. React-aware path rules populate `affectedAreas`; merge commits use a first-parent diff, root commits use an empty-tree diff, and unavailable SHAs remain explicit in the manifest instead of silently receiving guessed paths.
 
+#### Frozen RCA corpus on Intel macOS
+
+The public dataset's `main` branch is mutable. To reproduce the frozen RCA
+corpus, use revision `322ca65c9a910246627661f7fd5c04881a8a1e05`, not the latest
+Parquet. The raw corpus must contain 27,646 commits across 3,803 daily files,
+ending on 2026-08-09. Its SHA-256 is
+`9fbdfdaa438d1a9389c147e5d8adb4e0d79b0b6be2b0bb5d5777ef88f5675deb`;
+the enriched corpus must match the RCA manifest's
+`4c11acc1307f9c3f074f60b537323b3fe8da7ea751c2e17a9cd4e6c6772f6844`.
+Do not regenerate frozen case manifests to bypass a corpus mismatch.
+
+Use Git 2.51.2 for extraction: Apple Git 2.39.2 produces different file-change
+metadata for four commits and therefore a different enriched hash. Keep its
+metadata cache separate from a cache produced by the verified Git version.
+
+From the project root, after activating the Node 22 / Python 3.11 environment:
+
+```bash
+conda activate commit-ai-resolver
+conda create -y -n commit-resolver-git -c conda-forge git=2.51.2
+python -m pip install -r requirements-embedding-macos-intel.txt
+mkdir -p data/public
+curl --fail --location \
+  'https://huggingface.co/datasets/AdhyanshVerma/open-github-major-repos/resolve/322ca65c9a910246627661f7fd5c04881a8a1e05/facebook_react_max100000_min20_batch500.parquet?download=true' \
+  --output data/public/facebook_react-322ca65.parquet
+DATA_DIR="$PWD/data/raw/public-react-v2-20260810" \
+  node src/scripts/import-public-commits.js \
+  --input data/public/facebook_react-322ca65.parquet --limit 27646
+conda run --no-capture-output -n commit-resolver-git "$(command -v node)" \
+  src/scripts/enrich-public-commits.js \
+  --input data/raw/public-react-v2-20260810/daily \
+  --git-dir data/public/react.git \
+  --cache data/public/react-git251-metadata.jsonl \
+  --output data/enriched/public-react-v3-20260827 --fetch-missing
+
+export DATA_DIR="$PWD/data/enriched/public-react-v3-20260827"
+export VECTORS_DB="$DATA_DIR/vectors.db"
+export LOCAL_EMBEDDING_MODEL_PATH="$PWD/data/models/Qwen3-Embedding-0.6B"
+export EVAL_PYTHON="$(command -v python)"
+python -u src/scripts/generate-embedding.py --device cpu --batch-size 4
+node src/eval/run-eval.js \
+  --dataset src/eval/datasets/public-react-rca-pilot-v1 --mode index
+node src/eval/run-eval.js \
+  --dataset src/eval/datasets/public-react-rca-pilot-v1 --mode all --device cpu
+```
+
+Clone the Git source once using the command above before enrichment. If the
+enriched output already exists, validate and reuse it instead of rerunning
+enrichment into that directory. Index generation commits each batch; rerun
+without `--force` or `--rebuild` to resume. Intel Mac uses CPU PyTorch and NumPy
+1.x; the separate CUDA requirements file is not compatible with this platform.
+Shell downloads may require explicitly configured `HTTPS_PROXY` / `HTTP_PROXY`
+even when macOS has a system proxy enabled. Keep proxy settings local.
+
 Build a separate vector index from that enriched corpus without replacing the current `data/vectors.db`:
 
 ```powershell

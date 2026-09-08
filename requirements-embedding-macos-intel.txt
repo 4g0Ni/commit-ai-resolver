@@ -1,0 +1,7 @@
+torch==2.2.2
+numpy==1.26.4
+transformers==4.51.3
+sentence-transformers==5.1.0
+modelscope==1.39.0
+fastapi>=0.115,<1
+uvicorn>=0.34,<1

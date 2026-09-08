@@ -410,9 +410,10 @@ def main() -> None:
         model = SentenceTransformer(
             str(model_path), device=device, model_kwargs=model_kwargs
         )
-        if model.get_embedding_dimension() != EMBEDDING_DIMENSIONS:
+        dimensions = model.get_sentence_embedding_dimension()
+        if dimensions != EMBEDDING_DIMENSIONS:
             raise RuntimeError(
-                f"Model outputs {model.get_embedding_dimension()} dimensions; "
+                f"Model outputs {dimensions} dimensions; "
                 f"expected {EMBEDDING_DIMENSIONS}."
             )
 
