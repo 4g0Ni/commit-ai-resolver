@@ -1,3 +1,7 @@
 {
-  "type": "module"
+  "type": "module",
+  "scripts": {
+    "setup:rca": "npm ci --prefix src --registry https://registry.npmjs.org/",
+    "test:rca": "npm run test:github-rca --prefix src && npm run test:eval --prefix src"
+  }
 }
